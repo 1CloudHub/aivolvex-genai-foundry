@@ -36,9 +36,8 @@ import json
 import random
 from pathlib import Path
 import string
-import time
 
-# region="us-west-2"
+region="us-west-2"
 def generate_random_alphanumeric(length=6):
     """
     Generates a random name that follows AWS naming requirements.
@@ -280,7 +279,7 @@ class LambdaLayerUploader(Construct):
                     "description": layer_description
                 }
 
-s3_name = "genai-foundry-test"
+
 class FinalCdkStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -409,8 +408,8 @@ class FinalCdkStack(Stack):
             auto_delete_objects=True,  # For development only
             website_index_document="index.html",
             website_error_document="index.html",
-            # public_read_access=True,  # Allow public read access
-            # block_public_access=s3.BlockPublicAccess.BLOCK_NONE  # Disable public access blocking
+            public_read_access=True,  # Allow public read access
+            block_public_access=s3.BlockPublicAccess.BLOCK_NONE  # Disable public access blocking
         )
         
         # Upload knowledge base folder contents to the main bucket
@@ -423,7 +422,7 @@ class FinalCdkStack(Stack):
         )
         
         # Upload frontend folder contents to the frontend bucket
-        frontend_deploy = s3deploy.BucketDeployment(
+        s3deploy.BucketDeployment(
             self,
             "DeployFrontendFolder",
             sources=[s3deploy.Source.asset("genaifoundry-front")],  # Path to your frontend folder
@@ -432,7 +431,7 @@ class FinalCdkStack(Stack):
         )
          # Reusable variables
         
-        model_arn = f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v2:0"
+        model_arn = f"arn:aws:bedrock:{region}::foundation-model/amazon.titan-embed-text-v2:0"
 
         # Reference existing S3 bucket
         self.data_bucket = s3.Bucket.from_bucket_name(
@@ -705,7 +704,7 @@ class FinalCdkStack(Stack):
                 "Description": f"Data access policy for {banking_collection_name}"
             }])
         )
-        
+
         insurance_data_access_policy = opensearch.CfnAccessPolicy(
             self, "InsuranceKBDataAccessPolicy",
             name=f"ins-{name_key}-access",
@@ -1031,39 +1030,9 @@ class FinalCdkStack(Stack):
             assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore"),
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3ReadOnlyAccess"),
-                iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess")
-            ],
-                inline_policies={
-        "TranscribePolicy": iam.PolicyDocument(
-            statements=[
-                iam.PolicyStatement(
-                    effect=iam.Effect.ALLOW,
-                    actions=[
-                        "transcribe:StartTranscriptionJob",
-                        "transcribe:GetTranscriptionJob", 
-                        "transcribe:DeleteTranscriptionJob"
-                    ],
-                    resources=["*"]
-                ),
-                iam.PolicyStatement(
-                    effect=iam.Effect.ALLOW,
-                    actions=[
-                        "s3:GetObject",
-                        "s3:PutObject",
-                        "s3:DeleteObject"
-                    ],
-                    resources=[f"arn:aws:s3:::{s3_bucket_name}/*"]
-                )
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3ReadOnlyAccess")
             ]
         )
-    }
-        )
-        instance_profile = iam.CfnInstanceProfile(
-    self, "EC2InstanceProfile",
-    roles=[ec2_role.role_name]
-)
-
         ec2_role.add_to_policy(iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
             actions=[
@@ -1073,7 +1042,7 @@ class FinalCdkStack(Stack):
             ],
             resources=["*"]
         ))
-
+ 
         ec2_role.add_to_policy(iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
             actions=[
@@ -1085,7 +1054,6 @@ class FinalCdkStack(Stack):
             ]
         ))
 
-        # AdministratorAccess provides wide permissions needed for provisioning and bootstrap tasks
         # IMPORTANT: Grant EC2 access to the RDS secret
         if db_instance.secret:
             db_instance.secret.grant_read(ec2_role)
@@ -1096,135 +1064,82 @@ class FinalCdkStack(Stack):
             role=ec2_role,
             instance_type=ec2.InstanceType.of(
                 ec2.InstanceClass.T3,
-                ec2.InstanceSize.MEDIUM
+                ec2.InstanceSize.MICRO
             ),
-            # machine_image=ec2.MachineImage.latest_amazon_linux2(),
-            machine_image=ec2.MachineImage.lookup(
-                name="Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.7 (Ubuntu 22.04)*",
-                owners=["amazon"]
-            ),
+            machine_image=ec2.MachineImage.latest_amazon_linux2(),
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(
                 subnet_type=ec2.SubnetType.PUBLIC
             ),
             security_group=ec2_security_group,
             key_pair=key_pair,
-            user_data=ec2.UserData.for_linux(),
-            block_devices=[
-                ec2.BlockDevice(
-                    device_name="/dev/sda1",  # Root volume device name for Ubuntu
-                    volume=ec2.BlockDeviceVolume.ebs(
-                        volume_size=300,  # Size in GB
-                        volume_type=ec2.EbsDeviceVolumeType.GP3,  # GP3 is cost-effective and performant
-                        delete_on_termination=True,  # Delete when instance terminates
-                        encrypted=True  # Optional: encrypt the volume
-                    )
-                )
-            ]
-        )
-        secret_name = f"rds-credentials-{rds_name_key}"
-        ec2_instance.add_user_data(
-     "sudo apt update -y",
-    "sudo apt install -y apache2 awscli jq postgresql-client-14",
-    "systemctl start apache2",
-    "systemctl enable apache2", 
-    "echo '<h1>Hello from AWSSSSSSSSSSSSSS!</h1>' > /var/www/html/index.html",
-    'cd home/ubuntu/',
-    'mkdir startingggggg',
-    'mkdir final'
-    # Create restoration script (note: using /home/ubuntu for Ubuntu AMI)
-    'cat << \'EOF\' > /home/ubuntu/restore_db.sh',
-    '#!/bin/bash',
-    'set -e',
-    '',
-
-    'EOF',    
-    'mkdir creating_voicebittttttttt',
-    'cat << \'EOF\' > /home/ubuntu/voice_bot.sh',
-    '#!/bin/bash',
-    'set -e',
-    '',
-    'export DEBIAN_FRONTEND=noninteractive',
-    'echo "Getting database credentials from Secrets Manager..."',
-    f'SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "{secret_name}" --query SecretString --output text --region {self.region})',
-    'echo "$SECRET_JSON"',
-    'DB_HOST=$(echo "$SECRET_JSON" | jq -r .host)',
-    'DB_PORT=$(echo "$SECRET_JSON" | jq -r .port)',
-    'DB_USERNAME=$(echo "$SECRET_JSON" | jq -r .username)',
-    'DB_PASSWORD=$(echo "$SECRET_JSON" | jq -r .password)',
-    'DB_NAME=$(echo "$SECRET_JSON" | jq -r .dbname)',
-    "export DB_HOST=$(echo \"$SECRET_JSON\" | jq -r .host)",
-    "export DB_PORT=$(echo \"$SECRET_JSON\" | jq -r .port)",
-    "export DB_USERNAME=$(echo \"$SECRET_JSON\" | jq -r .username)",
-    "export DB_PASSWORD=$(echo \"$SECRET_JSON\" | jq -r .password)",
-    "export DB_NAME=$(echo \"$SECRET_JSON\" | jq -r .dbname)",
-    "",
-    "echo 'Database connection details:'",
-    "echo \"Host: $DB_HOST\"",
-    "echo \"Port: $DB_PORT\"",
-    "echo \"Database: $DB_NAME\"",
-    "echo \"Username: $DB_USERNAME\"",
-    "",
-    '',
-    'echo "Database connection details:"',
-    'echo "Host: $DB_HOST"',
-    'echo "Port: $DB_PORT"',
-    'echo "Database: $DB_NAME"',
-    'echo "Username: $DB_USERNAME"',
-    '',
-    'export PGPASSWORD="$DB_PASSWORD"',
-    '',
-    '# Test connection',
-    'echo "Testing database connection..."',
-    'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -c "SELECT version();"',
-    '',
-    '# Download dump',
-    'echo "Downloading database dump file..."',
-    'aws s3 cp s3://sql-dumps-bucket/dump-postgres.sql /tmp/dump.sql',
-    '',
-    '# Restore database',
-    'echo "Restoring database from dump file..."',
-    'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -f /tmp/dump.sql',
-    '',
-    '# Verify restoration',
-    'echo "Verifying restoration..."',
-    'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -c "\\\\dn"',
-    'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -c "\\\\dt foundry_app.*"',
-    '',
-    'echo "Database restoration completed successfully!"',
-    "echo 'starting python code implementation'",
-    "export DEBIAN_FRONTEND=noninteractive",
-    "cd /home/ubuntu",
-    "aws s3 sync s3://sql-dumps-bucket/ec2_needs/ ./ec2_needs/",
-    "cd ec2_needs",
-    "sudo apt install python3.10-venv -y",
-    "python3 -m venv eagle",
-    "source eagle/bin/activate",
-    "pip install -r requirements.txt --no-input",
-    "pip install asgiref --no-input",
-    "# Set environment variable and run in screen session",
-    "screen -dmS run_app bash -c 'source eagle/bin/activate && export S3_PATH=" + s3_name + " && uvicorn sun:asgi_app --host 0.0.0.0 --port 8000'",
-    "echo 'DONE!!!!!!!!!!!!!!'",
-    'EOF',
-    'mkdir adding_permissionssssssss',
-    'sudo chmod +x /home/ubuntu/restore_db.sh',
-    'sudo chown ubuntu:ubuntu /home/ubuntu/restore_db.sh',
-
-    'sudo chmod +x /home/ubuntu/voice_bot.sh', 
-    'sudo chown ubuntu:ubuntu /home/ubuntu/voice_bot.sh',
-    'mkdir permissions_addeddddddd',
-    # Wait for RDS to be ready and run restoration
-    'sleep 20',
-    #'sudo su - ubuntu -c "/home/ubuntu/restore_db.sh" > /var/log/db_restore.log 2>&1',
-    "sleep 30",
-    'sudo su - ubuntu -c "/home/ubuntu/voice_bot.sh" > /var/log/voice_bot.log 2>&1'
+            user_data=ec2.UserData.for_linux()
         )
 
         # Get the secret name that will be created (this is available at synthesis time)
-
+        secret_name = f"rds-credentials-{rds_name_key}"
 
         # Add user data with database restoration script
-
+        ec2_instance.add_user_data(
+            "yum update -y",
+            "yum install -y httpd aws-cli jq",
+            "systemctl start httpd",
+            "systemctl enable httpd",
+            "echo '<h1>Hello from CDK EC2!</h1>' > /var/www/html/index.html",
+            "amazon-linux-extras install postgresql14 -y",
+            
+            # Create S3 bucket for your dump file (or use existing bucket)
+            # You'll need to upload your .sql file to S3 first
+            
+            # Create restoration script
+            'cat << \'EOF\' > /home/ec2-user/restore_db.sh',
+            '#!/bin/bash',
+            'set -e',
+            '',
+            'echo "Getting database credentials from Secrets Manager..."',
+            f'SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "{secret_name}" --query SecretString --output text --region ap-southeast-1)',
+            'echo "$SECRET_JSON"',
+            'DB_HOST=$(echo "$SECRET_JSON" | jq -r .host)',
+            'DB_PORT=$(echo "$SECRET_JSON" | jq -r .port)',
+            'DB_USERNAME=$(echo "$SECRET_JSON" | jq -r .username)',
+            'DB_PASSWORD=$(echo "$SECRET_JSON" | jq -r .password)',
+            'DB_NAME=$(echo "$SECRET_JSON" | jq -r .dbname)',
+            '',
+            'echo "Database connection details:"',
+            'echo "Host: $DB_HOST"',
+            'echo "Port: $DB_PORT"',
+            'echo "Database: $DB_NAME"',
+            'echo "Username: $DB_USERNAME"',
+            '',
+            'export PGPASSWORD="$DB_PASSWORD"',
+            '',
+            '# Test connection first',
+            'echo "Testing database connection..."',
+            'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -c "SELECT version();"',
+            '',
+            '# Download the dump file from S3',
+            'echo "Downloading database dump file..."',
+            'aws s3 cp s3://sql-dumps-bucket/dump-postgres.sql /tmp/dump.sql',
+            '',
+            '# Restore the database',
+            'echo "Restoring database from dump file..."',
+            'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -f /tmp/dump.sql',
+            '',
+            '# Verify restoration by checking if schemas exist',
+            'echo "Verifying restoration..."',
+            'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -c "\\dn"',  # List schemas
+            'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -c "\\dt foundry_app.*"',  # List tables in foundry_app schema
+            '',
+            'echo "Database restoration completed successfully!"',
+            'EOF',
+            
+            'chmod +x /home/ec2-user/restore_db.sh',
+            'chown ec2-user:ec2-user /home/ec2-user/restore_db.sh',
+            
+            # Wait for RDS to be ready and run restoration
+            'sleep 120',
+            'su - ec2-user -c "/home/ec2-user/restore_db.sh" > /var/log/db_restore.log 2>&1'
+        )
         
         print("📦 Creating Lambda layers from ZIP files...")
         layer_uploader = LambdaLayerUploader(self, "LambdaLayerUploader")
@@ -1345,7 +1260,7 @@ class FinalCdkStack(Stack):
         # Create API Gateway with specific configurations
         api = apigateway.RestApi(
             self, "GenAIFoundryAPI",
-            rest_api_name="genaifoundry-api"+name_key,
+            rest_api_name="genaifoundry-api",
             description="API Gateway for GenAI Foundry Lambda function",
             binary_media_types=["multipart/form-data"],
             default_cors_preflight_options=apigateway.CorsOptions(
@@ -1365,7 +1280,7 @@ class FinalCdkStack(Stack):
         # Create coaching_assist_voiceops API Gateway
         coaching_api = apigateway.RestApi(
             self, "CoachingAssistVoiceopsAPI",
-            rest_api_name="coaching_assist_voiceops"+name_key,
+            rest_api_name="coaching_assist_voiceops",
             description="API Gateway for Coaching Assist Voice Operations",
             default_cors_preflight_options=apigateway.CorsOptions(
                 allow_origins=["*"],
@@ -1389,7 +1304,7 @@ class FinalCdkStack(Stack):
             "bank_kb_id": banking_kb.attr_knowledge_base_id,  # Banking KB ID
             "banking_chat_history_table": "banking_chat_history",
             "chat_history_table": "chat_history",
-            "db_database": rds_name_key,
+            "db_database": "postgres",
             "db_host": db_instance.instance_endpoint.hostname,
             "db_port": "5432",
             "db_user": "postgres",
@@ -1401,12 +1316,12 @@ class FinalCdkStack(Stack):
             "region_used": self.region,
             "retail_chat_history_table": "retail_chat_history",
             "schema": "genaifoundry",
-            # "socket_endpoint": f"https://{api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/",
+            "socket_endpoint": f"https://{api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/",
             "rds_secret_name": f"rds-credentials-{rds_name_key}",
             "rds_secret_arn": db_instance.secret.secret_arn if db_instance.secret else "",
             "rds_endpoint": db_instance.instance_endpoint.hostname,
             "rds_port": str(db_instance.instance_endpoint.port),
-            "rds_database": rds_name_key,
+            "rds_database": "postgres",
             "rds_username": "postgres"
         }
 
@@ -1464,7 +1379,7 @@ class FinalCdkStack(Stack):
 
         # Create HTTP proxy integration for coaching API
         http_proxy_integration = apigateway.HttpIntegration(
-            url=f"http://{ec2_instance.instance_public_ip}:8000",
+            url="http://13.250.4.115:8000",
             proxy=True,
             options=apigateway.IntegrationOptions(
                 timeout=Duration.seconds(29),
@@ -1495,7 +1410,7 @@ class FinalCdkStack(Stack):
         ping_resource = coaching_api.root.add_resource("ping")
         ping_resource.add_method("GET", 
             apigateway.HttpIntegration(
-                url=f"http://{ec2_instance.instance_public_ip}:8000/ping",
+                url="http://13.250.4.115:8000/ping",
                 proxy=True,
                 options=apigateway.IntegrationOptions(
                     timeout=Duration.seconds(29)
@@ -1512,11 +1427,11 @@ class FinalCdkStack(Stack):
 
         # Add /transcribe resource
         transcribe_resource = coaching_api.root.add_resource("transcribe")
-       
+
         # Add POST method to /transcribe
         transcribe_resource.add_method("POST",
             apigateway.HttpIntegration(
-                url=f"http://{ec2_instance.instance_public_ip}:8000/transcribe",
+                url="http://13.250.4.115:8000/transcribe",
                 proxy=True,
                 options=apigateway.IntegrationOptions(
                     timeout=Duration.seconds(29),
@@ -1667,8 +1582,8 @@ class FinalCdkStack(Stack):
 
         # Create WebSocket API Gateway using API Gateway v2
         websocket_api = apigatewayv2.WebSocketApi(
-            self, "GenAIFoundryWebSocketAPI"+name_key,
-            api_name="GenAIFoundry_ws"+name_key
+            self, "GenAIFoundryWebSocketAPI",
+            api_name="GenAIFoundry_ws"
         )
 
         # Add routes to the WebSocket API
@@ -1729,257 +1644,11 @@ class FinalCdkStack(Stack):
         lambda_function.add_environment("db_host", db_instance.instance_endpoint.hostname)
         
         # Add dynamic socket endpoint to main Lambda function
-        lambda_function.add_environment("socket_endpoint",websocket_url)
+        lambda_function.add_environment("SOCKET_ENDPOINT", f"https://{api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/")
         
         # Note: AWS_DEFAULT_REGION and AWS_REGION are reserved by Lambda runtime
         # and cannot be set manually. They are automatically set by AWS.
 
-        #front end ec2 instance 
-        ec2_instance_front = ec2.Instance(
-            self, "MyEC2InstanceFront",
-            role=ec2_role,
-            instance_type=ec2.InstanceType.of(
-                ec2.InstanceClass.T3,
-                ec2.InstanceSize.SMALL
-            ),
-            machine_image=ec2.MachineImage.latest_amazon_linux2023(),
-            vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PUBLIC
-            ),
-            security_group=ec2_security_group,
-            key_pair=key_pair,
-            user_data=ec2.UserData.for_linux(),
-            block_devices=[
-                ec2.BlockDevice(
-                    device_name="/dev/sda1",  # Root volume device name for Ubuntu
-                    volume=ec2.BlockDeviceVolume.ebs(
-                        volume_size=300,  # Size in GB
-                        volume_type=ec2.EbsDeviceVolumeType.GP3,  # GP3 is cost-effective and performant
-                        delete_on_termination=True,  # Delete when instance terminates
-                        encrypted=True  # Optional: encrypt the volume
-                    )
-                )
-            ]
-        )
-        # Set the environment variables that will be passed to the EC2 instance
-        rest_api_name = f"genaifoundry-api{name_key}"
-        websocket_api_name = f"GenAIFoundry_ws{name_key}"
-        transcribe_api_name = f"coaching_assist_voiceops{name_key}"
-        bucket_name = frontend_bucket_name
-        region = self.region
-
-        # Alternative approach: Use hardcoded API IDs or skip API Gateway lookup
-        ec2_instance_front.add_user_data(
-      "#!/bin/bash",
-            "",
-            "set -e  # Exit on any error",
-            "",
-            "echo \"🚀 Starting React deployment from S3...\"",
-            "",
-            "# Set environment variables from CDK",
-            f"export REST_API_NAME=\"{rest_api_name}\"",
-            f"export WEBSOCKET_API_NAME=\"{websocket_api_name}\"",
-            f"export TRANSCRIBE_API_NAME=\"{transcribe_api_name}\"",
-            f"export BUCKET_NAME=\"{bucket_name}\"",
-            f"export REGION=\"{region}\"",
-            "",
-            "# Helper function to check if a command exists",
-            "command_exists() {",
-            "    command -v \"$1\" &> /dev/null",
-            "}",
-            "",
-            "# Check for required environment variables",
-            "check_required_env_vars() {",
-            "    local missing_vars=()",
-            "   ",
-            "    if [[ -z \"${REST_API_NAME:-}\" ]]; then",
-            "        missing_vars+=(\"REST_API_NAME\")",
-            "    fi",
-            "   ",
-            "    if [[ -z \"${WEBSOCKET_API_NAME:-}\" ]]; then",
-            "        missing_vars+=(\"WEBSOCKET_API_NAME\")",
-            "    fi",
-            "   ",
-            "    if [[ -z \"${TRANSCRIBE_API_NAME:-}\" ]]; then",
-            "        missing_vars+=(\"TRANSCRIBE_API_NAME\")",
-            "    fi",
-            "   ",
-            "    if [[ -z \"${BUCKET_NAME:-}\" ]]; then",
-            "        missing_vars+=(\"BUCKET_NAME\")",
-            "    fi",
-            "   ",
-            "    if [[ -z \"${REGION:-}\" ]]; then",
-            "        missing_vars+=(\"REGION\")",
-            "    fi",
-            "   ",
-            "    if [[ ${#missing_vars[@]} -gt 0 ]]; then",
-            "        echo \"❌ Error: The following required environment variables are not set:\"",
-            "        printf '   - %s\\n' \"${missing_vars[@]}\"",
-            "        echo \"\"",
-            "        echo \"Please export these variables before running the script:\"",
-            "        echo \"  export REST_API_NAME=\\\"your-rest-api-name\\\"\"",
-            "        echo \"  export WEBSOCKET_API_NAME=\\\"your-websocket-api-name\\\"\"",
-            "        echo \"  export TRANSCRIBE_API_NAME=\\\"your-transcribe-api-name\\\"\"",
-            "        echo \"  export BUCKET_NAME=\\\"your-s3-bucket-name\\\"\"",
-            "        echo \"  export REGION=\\\"your-aws-region\\\"\"",
-            "        exit 1",
-            "    fi",
-            "}",
-            "",
-            "# Check required environment variables",
-            "echo \"🔍 Checking required environment variables...\"",
-            "check_required_env_vars",
-            "",
-            "echo \"✅ All required environment variables are set:\"",
-            "echo \"  REST_API_NAME:        ${REST_API_NAME}\"",
-            "echo \"  WEBSOCKET_API_NAME:   ${WEBSOCKET_API_NAME}\"",
-            "echo \"  TRANSCRIBE_API_NAME:  ${TRANSCRIBE_API_NAME}\"",
-            "echo \"  BUCKET_NAME:          ${BUCKET_NAME}\"",
-            "echo \"  REGION:               ${REGION}\"",
-            "",
-            "echo \"🔧 Checking and installing prerequisites...\"",
-            "",
-            "# Install unzip if not present",
-            "if ! command_exists unzip; then",
-            "    echo \"📦 Installing unzip...\"",
-            "    sudo yum install -y unzip --allowerasing",
-            "else",
-            "    echo \"✅ unzip already installed\"",
-            "fi",
-            "",
-            "# Install curl if not present",
-            "if ! command_exists curl; then",
-            "    echo \"📦 Installing curl...\"",
-            "    sudo yum install -y curl --allowerasing",
-            "else",
-            "    echo \"✅ curl already installed\"",
-            "fi",
-            "",
-            "# Install Node.js and npm if not present",
-            "if ! command_exists node || ! command_exists npm; then",
-            "    echo \"📦 Installing Node.js and npm...\"",
-            "    curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -",
-            "    sudo yum install -y nodejs --allowerasing",
-            "else",
-            "    echo \"✅ Node.js and npm already installed\"",
-            "fi",
-            "",
-            "# Install AWS CLI v2 if not present",
-            "if ! command_exists aws; then",
-            "    echo \"📦 Installing AWS CLI v2...\"",
-            "    curl \"https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip\" -o \"awscliv2.zip\"",
-            "    unzip awscliv2.zip",
-            "    sudo ./aws/install",
-            "    rm -rf aws awscliv2.zip",
-            "else",
-            "    echo \"✅ AWS CLI already installed\"",
-            "fi",
-            "",
-            "# Set variables",
-            "WORK_DIR=~/react-app",
-            "ZIP_FILE=\"src.zip\"",
-            "S3_SOURCE_PATH=\"s3://${BUCKET_NAME}/${ZIP_FILE}\"",
-            "",
-            "echo \"📁 Creating work directory: $WORK_DIR\"",
-            "mkdir -p \"$WORK_DIR\"",
-            "cd \"$WORK_DIR\"",
-            "",
-            "echo \"📥 Downloading $ZIP_FILE from S3...\"",
-            "aws s3 cp \"$S3_SOURCE_PATH\" . --region \"$REGION\"",
-            "",
-            "echo \"📂 Unzipping $ZIP_FILE...\"",
-            "unzip -o \"$ZIP_FILE\"",
-            "rm \"$ZIP_FILE\"",
-            "",
-            "# 📦 Install dependencies",
-            "echo \"📦 Running npm install...\"",
-            "npm install",
-            "",
-            "# 🌐 Extract API Gateway IDs",
-            "echo \"🔍 Fetching API Gateway IDs...\"",
-            "",
-            "# REST APIs (API Gateway v1)",
-            "get_rest_api_id_by_name() {",
-            "    aws apigateway get-rest-apis \\",
-            "      --region \"$REGION\" \\",
-            "      --query \"items[?name=='$1'].id\" \\",
-            "      --output text",
-            "}",
-            "",
-            "# WebSocket APIs (API Gateway v2)",
-            "get_ws_api_id_by_name() {",
-            "    aws apigatewayv2 get-apis \\",
-            "      --region \"$REGION\" \\",
-            "      --query \"Items[?Name=='$1'].ApiId\" \\",
-            "      --output text",
-            "}",
-            "",
-            "API_ID_REST=$(get_rest_api_id_by_name \"$REST_API_NAME\")",
-            "API_ID_WS=$(get_ws_api_id_by_name \"$WEBSOCKET_API_NAME\")",
-            "API_ID_TRANSCRIBE=$(get_rest_api_id_by_name \"$TRANSCRIBE_API_NAME\")",
-            "",
-            "# Validate that API IDs were found",
-            "if [[ -z \"$API_ID_REST\" ]]; then",
-            "    echo \"❌ Error: Could not find REST API with name '$REST_API_NAME'\"",
-            "    exit 1",
-            "fi",
-            "",
-            "if [[ -z \"$API_ID_WS\" ]]; then",
-            "    echo \"❌ Error: Could not find WebSocket API with name '$WEBSOCKET_API_NAME'\"",
-            "    exit 1",
-            "fi",
-            "",
-            "if [[ -z \"$API_ID_TRANSCRIBE\" ]]; then",
-            "    echo \"❌ Error: Could not find Transcribe API with name '$TRANSCRIBE_API_NAME'\"",
-            "    exit 1",
-            "fi",
-            "",
-            "# Debug logging",
-            "echo \"✅ Retrieved API IDs:\"",
-            "echo \"  REST API (chat):      $API_ID_REST (from $REST_API_NAME)\"",
-            "echo \"  WebSocket API:        $API_ID_WS (from $WEBSOCKET_API_NAME)\"",
-            "echo \"  Transcribe API:       $API_ID_TRANSCRIBE (from $TRANSCRIBE_API_NAME)\"",
-            "",
-            "# Construct URLs",
-            "VITE_API_BASE_URL=\"https://${API_ID_REST}.execute-api.${REGION}.amazonaws.com/dev/chat_api\"",
-            "VITE_WEBSOCKET_URL=\"wss://${API_ID_WS}.execute-api.${REGION}.amazonaws.com/production/\"",
-            "VITE_TRANSCRIBE_API_URL=\"https://${API_ID_TRANSCRIBE}.execute-api.${REGION}.amazonaws.com/dev/transcribe\"",
-            "",
-            "# 📄 Update .env file",
-            "ENV_FILE=\".env\"",
-            "echo \"🛠 Updating environment variables in $ENV_FILE...\"",
-            "",
-            "update_env_var() {",
-            "    local key=\"$1\"",
-            "    local value=\"$2\"",
-            "    if grep -q \"^$key=\" \"$ENV_FILE\"; then",
-            "        sed -i \"s|^$key=.*|$key=$value|\" \"$ENV_FILE\"",
-            "    else",
-            "        echo \"$key=$value\" >> \"$ENV_FILE\"",
-            "    fi",
-            "}",
-            "",
-            "update_env_var \"VITE_API_BASE_URL\" \"$VITE_API_BASE_URL\"",
-            "update_env_var \"VITE_WEBSOCKET_URL\" \"$VITE_WEBSOCKET_URL\"",
-            "update_env_var \"VITE_TRANSCRIBE_API_URL\" \"$VITE_TRANSCRIBE_API_URL\"",
-            "",
-            "echo \"✅ .env updated. Current values:\"",
-            "grep -E \"VITE_API_BASE_URL|VITE_WEBSOCKET_URL|VITE_TRANSCRIBE_API_URL\" \"$ENV_FILE\"",
-            "",
-            "# 🚧 Build the app",
-            "echo \"⚙️ Running npm run build...\"",
-            "npm run build",
-            "",
-            "# ☁️ Clean and upload to S3 bucket root",
-            "echo \"🧹 Clearing existing files in s3://${BUCKET_NAME}/ ...\"",
-            "aws s3 rm \"s3://${BUCKET_NAME}/\" --recursive --region \"$REGION\"",
-            "",
-            "echo \"☁️ Uploading dist/ contents to s3://${BUCKET_NAME}/ ...\"",
-            "aws s3 cp dist/ \"s3://${BUCKET_NAME}/\" --recursive --region \"$REGION\"",
-            "",
-            "echo \"✅ Done! React app built and uploaded to s3://${BUCKET_NAME}/\""
-        )
 
         # Outputs
         CfnOutput(
@@ -1992,11 +1661,6 @@ class FinalCdkStack(Stack):
             self, "InstanceId",
             value=ec2_instance.instance_id,
             description="EC2 Instance ID"
-        )
-        CfnOutput(
-            self, "InstanceIdFront",
-            value=ec2_instance_front.instance_id,
-            description="EC2 Instance ID Front"
         )
         CfnOutput(
             self, "LambdaFunctionARN",
@@ -2168,11 +1832,6 @@ class FinalCdkStack(Stack):
             value=ec2_instance.instance_public_ip,
             description="EC2 Instance Public IP"
         )
-        CfnOutput(
-            self, "InstancePublicIPFront",
-            value=ec2_instance_front.instance_public_ip,
-            description="EC2 Instance Public IP Front"
-        )
 
         CfnOutput(
             self, "DatabaseEndpoint",
@@ -2218,12 +1877,6 @@ class FinalCdkStack(Stack):
             value=ec2_instance.instance_id,
             description="EC2 Instance ID for Database Initialization"
         )
-        CfnOutput(
-            self, "EC2InstanceIdFront",
-            value=ec2_instance_front.instance_id,
-            description="EC2 Instance ID Front for Database Initialization"
-        )
-
 
         CfnOutput(
             self, "EC2SecurityGroupId",
@@ -2286,115 +1939,6 @@ class FinalCdkStack(Stack):
                     ttl=Duration.seconds(10)
                 )
             ]
-        )
-
-        # Switch to Origin Access Control (OAC) so S3 policy can use CloudFront service principal + AWS:SourceArn
-        oac = cloudfront.CfnOriginAccessControl(
-            self,
-            "FrontendOAC",
-            origin_access_control_config=cloudfront.CfnOriginAccessControl.OriginAccessControlConfigProperty(
-                name=f"{name_key}-frontend-oac",
-                description="OAC for frontend S3 origin",
-                origin_access_control_origin_type="s3",
-                signing_behavior="always",
-                signing_protocol="sigv4",
-            ),
-        )
-        cfn_dist = distribution.node.default_child  # type: ignore
-        # Attach OAC to first origin and remove OAI reference
-        cfn_dist.add_property_override(
-            "DistributionConfig.Origins.0.OriginAccessControlId", oac.attr_id
-        )
-        cfn_dist.add_property_deletion_override(
-            "DistributionConfig.Origins.0.S3OriginConfig.OriginAccessIdentity"
-        )
-        cfn_dist.add_dependency(oac)
-
-        # Explicit CloudFront invalidation via AWS SDK (since L1 Invalidations are not available in this CDK version)
-        invalidation = cr.AwsCustomResource(
-            self,
-            "GenAIFoundryInvalidation",
-            on_update=cr.AwsSdkCall(
-                service="CloudFront",
-                action="createInvalidation",
-                parameters={
-                    "DistributionId": distribution.distribution_id,
-                    "InvalidationBatch": {
-                        "CallerReference": str(int(time.time())),
-                        "Paths": {"Quantity": 1, "Items": ["/*"]},
-                    },
-                },
-                physical_resource_id=cr.PhysicalResourceId.of(
-                    f"InvalidateFrontend-{int(time.time())}"
-                ),
-            ),
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(
-                    actions=[
-                        "cloudfront:CreateInvalidation",
-                        "cloudfront:GetInvalidation",
-                        "cloudfront:ListInvalidations",
-                    ],
-                    resources=["*"],
-                )
-            ]),
-        )
-        # Ensure invalidation runs after upload and distribution exist
-        invalidation.node.add_dependency(frontend_deploy)
-        invalidation.node.add_dependency(distribution)
-        # Replace frontend bucket policy with the previously working policy
-        # 1) Grant required S3 actions to account root
-        frontend_bucket.add_to_resource_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                principals=[
-                    # Allow the entire account (root) to perform required actions
-                    iam.ArnPrincipal(f"arn:aws:iam::{self.account}:root"),
-                ],
-                actions=[
-                    "s3:DeleteObject*",
-                    "s3:GetBucket*",
-                    "s3:GetObject",
-                    "s3:List*",
-                    "s3:PutBucketPolicy"
-                ],
-                resources=[
-                    frontend_bucket.bucket_arn,
-                    f"{frontend_bucket.bucket_arn}/*"
-                ]
-            )
-        )
-
-        # 2) Allow CloudFront access to objects in the frontend bucket
-        frontend_bucket.add_to_resource_policy(
-            iam.PolicyStatement(
-                sid="AllowCloudFrontAccess",
-                effect=iam.Effect.ALLOW,
-                principals=[iam.ServicePrincipal("cloudfront.amazonaws.com")],
-                actions=["s3:GetObject"],
-                resources=[f"{frontend_bucket.bucket_arn}/*"],
-                conditions={
-                    "StringEquals": {
-                        "AWS:SourceArn": distribution.distribution_arn
-                    }
-                }
-            )
-        )
-
-        # Add bucket policy to main bucket to allow CloudFront access only
-        bucket.add_to_resource_policy(
-            iam.PolicyStatement(
-                sid="AllowCloudFrontAccessOnly",
-                effect=iam.Effect.ALLOW,
-                principals=[iam.ServicePrincipal("cloudfront.amazonaws.com")],
-                actions=["s3:GetObject"],
-                resources=[f"{bucket.bucket_arn}/*"],
-                conditions={
-                    "StringEquals": {
-                        "AWS:SourceArn": distribution.distribution_arn
-                    }
-                }
-            )
         )
  
         # Outputs for easy access to distribution information

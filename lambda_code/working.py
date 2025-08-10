@@ -199,7 +199,7 @@ def process_query(query, values):
         # Create connection when function is called
         connection = psycopg2.connect(
             user=os.environ['db_user'],
-            password=os.environ['db_password'],
+            password=db_password,
             host=os.environ['db_host'],
             port=os.environ['db_port'],
             database=os.environ['db_database']
