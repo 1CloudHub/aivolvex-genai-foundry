@@ -3400,7 +3400,13 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
             "box_type": event['box_type'],
             "prompt_template":prompt_template,
             "bucket_name":voiceops_bucket_name,  # Use the new voice operations bucket
-            "region_name":region_name  # Use the new region name environment variable
+            "region_name":region_name,
+            "db_cred":{
+            "db_user": db_user,
+            "db_host":db_host,
+            "db_port":db_port,
+            "db_database":db_database,
+            "db_password":db_password}
             })
             headers = {
             'Content-Type': 'application/json'
