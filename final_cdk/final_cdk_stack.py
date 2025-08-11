@@ -1996,13 +1996,10 @@ class FinalCdkStack(Stack):
             "# ☁️ Clean and upload to S3 bucket root",
             "echo \"🧹 Clearing existing files in s3://${BUCKET_NAME}/ ...\"",
             "aws s3 rm \"s3://${BUCKET_NAME}/\" --recursive --region \"$REGION\"",
-            "",
             "echo \"☁️ Uploading dist/ contents to s3://${BUCKET_NAME}/ ...\"",
             "aws s3 cp dist/ \"s3://${BUCKET_NAME}/\" --recursive --region \"$REGION\"",
             "echo \"✅ Done! React app built and uploaded to s3://${BUCKET_NAME}/\"",
-            "TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\")",
-            "INSTANCE_ID=$(curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" http://169.254.169.254/latest/meta-data/instance-id)",
-            "aws ec2 terminate-instances --instance-ids \"$INSTANCE_ID\" --region \"$REGION\""
+           
         )
 
         # Outputs
