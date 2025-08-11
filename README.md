@@ -69,8 +69,10 @@ Launch the AWS CloudShell service from the AWS Console.
  
 ```bash
 git clone https://github.com/1CloudHub/aivolvex-genai-foundry.git
+```
+
+```bash
 cd aivolvex-genai-foundry/
- 
 ```
  
 > Clones the specific branch of the GenAI Foundry CDK repository to your CloudShell environment.
@@ -81,6 +83,8 @@ cd aivolvex-genai-foundry/
  
 ```bash
 python -m venv .env
+```
+```bash
 source .env/bin/activate
 ```
  
@@ -125,8 +129,10 @@ cdk deploy FinalCdkStack
 ```
  
 > Deploys the defined CDK infrastructure into your AWS account. This may take several minutes. Wait until the deployment completes successfully.
+
  
 ---
+
  
  
  
