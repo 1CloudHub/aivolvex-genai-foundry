@@ -93,14 +93,14 @@ Navigate to the **CloudFront** service.
 ![CloudFront Search](./assets/search_cloudfront.png)
 ![Cloudfront URL Retrival](./assets/domain_name.png)
 ---
-## Accessing the Application
+### Accessing the Application
 Once the CloudFront distribution is active and model access is approved, open the copied domain name in your browser to start using **GenAI Foundry**.
 Enjoy the application experience.
 ---
-## About GenAI Foundry
+### About GenAI Foundry
 GenAIFoundry enables banking and insurance teams to explore AI-powered solutions through an intelligent assistant that understands context, retrieves precise insights, and delivers accurate responses. From post-call analysis to underwriting decision support and multi-channel customer engagement, it transforms complex processes into clear, actionable outcomes—enhancing efficiency, accuracy, and customer satisfaction.
 ---
-## Legal Notice
+### Notice
 © 1CloudHub. All rights reserved.
 The materials and components herein are provided for demonstration purposes only. No portion of this project may be implemented in a live or production environment without prior technical assessment, security clearance, and explicit approval from 1CloudHub
 ---
