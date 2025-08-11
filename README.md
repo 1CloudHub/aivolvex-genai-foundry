@@ -2,105 +2,156 @@
 
 ## Overview
 
-GenAI Foundry is an advanced AWS CDK stack that provisions infrastructure for a multi-knowledge base generative AI platform.  
-It integrates Amazon Bedrock with OpenSearch Serverless, Amazon RDS, AWS Lambda, and API Gateway to enable intelligent data ingestion, search, and conversational AI capabilities.
+**GenAI Foundry** is an AI-powered sandbox platform for banking and insurance. Powered by Generative AI with RAG-enabled conversational capabilities, it delivers intelligent virtual assistants, voice-enabled chatbots, automated document processing, and advanced risk assessment. It enables post-call analysis, underwriting decision support, and multi-channel customer engagement—driving faster decisions, greater efficiency, and exceptional customer experiences.
 
-Two AI models are central to this deployment:
-
-```
-- amazon.titan-embed-text-v2 (for text embeddings)
-- anthropic.claude-3-7-sonnet-20250219-v1:0 (for generative reasoning)
-```
-
-> **Important:** Both models are only available in `us-east-1` and `us-west-2`. This stack is designed and tested for deployment in `us-west-2`. Deploying in other regions may result in failures.
+> **Disclaimer**: This CDK setup is strictly designed and tested for the `us-west-2` region (Oregon). Please ensure that all resources are deployed only within this region to avoid compatibility issues.
 
 ---
 
 ## Prerequisites
 
-Before deploying GenAI Foundry, ensure the following:
+Before beginning the deployment process:
 
-* AWS account access with administrator permissions.
-* Target region can be set to **US West (Oregon) – `us-west-2`** or  **US East (Virginia) – `us-east-1`**.
-* AWS CDK installed locally or use AWS CloudShell.
-* Python 3.9+ installed with required dependencies.
+* Ensure you have access to the correct AWS account.
+* You must be using the **`us-west-2`** AWS region.
 
 ---
 
 ## Deployment Steps
 
-Run the following commands in order:
+### 1. Login to the AWS Console
+
+Log in to the provided AWS account using the IAM credentials or SSO as per the shared instructions.
+
+### 2. Set Region to `us-west-2`
+
+Navigate to the region selector in the AWS Console and ensure that **`US West (Oregon) - us-west-2`** is selected.
+
+> This is critical, as all the CDK resources are scoped and supported only in this region.
+
+![Region Navigation](./assets/region.jpg)
+
+---
+
+### 3. Open AWS CloudShell
+
+Launch the AWS CloudShell service from the AWS Console.
+
+> CloudShell provides a pre-configured environment with AWS CLI and CDK support, making it ideal for deployments.
+
+![Cloudshell Navigation](./assets/cloudshell.jpg)
+
+---
+
+### 4. Clone the Repository
+
+Replace `{branch_name}` and `{pat_token}` with the appropriate values.
 
 ```bash
-# 1. Clone the repository
-git clone <repository-url>
-cd aivolvex-genai-foundry/
+git clone --branch main https://github.com/1CloudHub/aivolvex-genai-foundry.git GENAI
+```
 
-# 2. Create and activate a Python virtual environment
-python -m venv .env
-source .env/bin/activate
+> Clones the specific branch of the GenAI Foundry CDK repository to your CloudShell environment.
 
-# 3. Install Python dependencies
-pip install -r requirements.txt
+---
 
-# 4. Install AWS CDK globally
+### 5. Install AWS CDK CLI
+
+```bash
 sudo npm install -g aws-cdk
+```
 
-# 5. Bootstrap the CDK environment (only required for first-time setup)
+> Installs the AWS CDK Command Line Interface globally in CloudShell.
+
+---
+
+### 6. Install Python Dependencies
+
+```bash
+cd GENAI
+pip install --user -r requirements.txt
+```
+
+> Installs the required Python packages for the CDK app to function properly.
+
+---
+
+### 7. Bootstrap CDK
+
+```bash
 cdk bootstrap
-
-# 6. Deploy the FinalCdkStack
-cdk deploy FinalCdkStack
 ```
 
+> Prepares your AWS environment for deploying CDK applications by provisioning necessary resources like the CDK toolkit stack.
+
 ---
 
-## Post Deployment
+### 8. Deploy the Stack
 
-### Request Bedrock Model Access
-
-Go to **Amazon Bedrock → Model Access** and request access to:
-
-```
-- amazon.titan-embed-text-v2
-- anthropic.claude-3-7-sonnet-20250219-v1:0
+```bash
+cdk deploy
 ```
 
----
-
-### Retrieve API and Frontend URLs
-
-After deployment, check the CloudFormation stack outputs for the **CloudFront Distribution Domain**.
+> Deploys the defined CDK infrastructure into your AWS account. This may take several minutes. Wait until the deployment completes successfully.
 
 ---
 
-## Key Components Deployed
+## Post Deployment Steps
 
-* **Amazon VPC** with public/private subnets.
-* **Amazon EC2** instance for application hosting and database initialization.
-* **Amazon RDS (PostgreSQL)** for data persistence.
-* **Amazon OpenSearch Serverless** collections for vector search.
-* **Amazon S3** for knowledge base storage and frontend hosting.
-* **AWS Lambda** functions for ingestion, search, and APIs.
-* **Amazon API Gateway** (REST and WebSocket) for client interaction.
-* **Amazon CloudFront** for frontend content delivery.
-* **IAM Roles and Policies** for secure service integration.
+### 9. Request Model Access in Bedrock
+
+Navigate to the **Amazon Bedrock** service in the AWS Console.
+
+* Open the **Model access** tab.
+* Request access to the following models:
+
+  ```
+  - Claude 3.7 Sonnet
+  - Amazon Titan Embedding V2
+  ```
+
+> It may take a few minutes for the model access to be approved.
+
+![Model Access Navigation](./assets/model_access_1.jpg)
+![Model Access](./assets/enable-model.png)
+![Model Access](./assets/request-for-access.png)
+![Bedrock Confirmation](./assets/bedrock-confirmation-page.png)
+---
+
+### 11. Get the Application URL
+
+Navigate to the **CloudFront** service.
+
+* Select the newly created distribution.
+* Copy the **Domain Name** listed under **General settings**.
+
+> This is your application's public URL. Note that it may take **5–6 minutes** post-deployment for the CloudFront distribution to become active.
+
+![CloudFront Search](./assets/search_cloudfront.png)
+![Cloudfront URL Retrival](./assets/domain_name.png)
 
 ---
 
-## About
+## Accessing the Application
 
-GenAI Foundry combines retrieval-augmented generation (RAG) with multi-knowledge base support, enabling domain-specific AI-powered search and reasoning.
+Once the CloudFront distribution is active and model access is approved, open the copied domain name in your browser to start using **GenAI Foundry**.
+
+Enjoy the application experience.
+
+---
+
+## About GenAI Foundry
+
+GenAIFoundry enables banking and insurance teams to explore AI-powered solutions through an intelligent assistant that understands context, retrieves precise insights, and delivers accurate responses. From post-call analysis to underwriting decision support and multi-channel customer engagement, it transforms complex processes into clear, actionable outcomes—enhancing efficiency, accuracy, and customer satisfaction.
+
+---
+
 ## Legal Notice
 
 © 1CloudHub. All rights reserved.
 
-This project is developed for internal demo or POC purposes and is not production-ready without proper security, scalability, and compliance review.
+The materials and components herein are provided for demonstration purposes only. No portion of this project may be implemented in a live or production environment without prior technical assessment, security clearance, and explicit approval from 1CloudHub
 
 ---
 
-## Important Notes
-
-- After the CDK deployment is over, make sure to visit the CloudFront URL to see the latest domain. Kindly use it to view the fully deployed current stack in terms of UI.
-- Do not terminate or temporarily stop the EC2 instance at any cost.
-- Whatever the region you are supposed to deploy in, make sure to have access to `amazon.titan-embed-text-v2` and `anthropic.claude-3-7-sonnet` (Claude 3.7) in Amazon Bedrock.
+ 
