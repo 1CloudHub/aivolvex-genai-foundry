@@ -17,7 +17,7 @@ Before beginning the deployment process:
  
 ---
  
-## Post Deployment Steps
+## Pre Deployment Steps
  
 ### Request Model Access in Bedrock
  
@@ -68,7 +68,7 @@ Launch the AWS CloudShell service from the AWS Console.
 ### 4. Clone the Repository
  
 ```bash
-git clone <repository-url>
+git clone https://github.com/1CloudHub/aivolvex-genai-foundry.git
 cd aivolvex-genai-foundry/
  
 ```
