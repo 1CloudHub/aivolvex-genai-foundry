@@ -26,6 +26,11 @@ db_port = os.environ['db_port']
 db_database = os.environ['db_database']
 region_used = os.environ["region_used"]
 
+# Get new environment variables for voice operations
+region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
+voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
+ec2_instance_ip = os.environ.get("ec2_instance_ip", "")  # Elastic IP of the T3 medium instance
+
 # Function to get database password from Secrets Manager
 def get_db_password():
     try:
@@ -3328,7 +3333,92 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
         values = ('',None,'','','',session_id,'','','','','')            
         res = insert_db(insert_query,values)   
         return tool_response
+    if event_type == 'voiceops':
+        try:
+            url =f"http://{ec2_instance_ip}:8000/transcribe"
+            kb_id=''
+            prompt_template = ''
+            print("yes")
+            if event['box_type'] == 'insurance':
+                kb_id = KB_ID
+                print("kb_id",kb_id)
+                prompt_template='''You are a Virtual Insurance Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
 
+                        RESPONSE RULES:
+                        - Maximum 2 sentences per response
+                        - Use simple, conversational language
+                        - No bullet points, brackets, or special formatting
+                        - No technical jargon or complex terms
+                        - Answer only what the customer asked
+                        - Skip greetings and confirmations
+
+                        SPEAKING STYLE:
+                        - Talk like you're having a friendly conversation
+                        - Use short, clear sentences
+                        - Avoid reading lists or multiple options
+                        - Give one direct answer, not explanations
+
+                        Search Results: $search_results$
+
+                        Customer Question: $query$
+
+                        Provide a brief, conversational response that directly answers their question. '''
+
+
+            else: 
+                kb_id = bank_kb_id
+                print("bank_kb_id",bank_kb_id)
+                prompt_template=''' 
+                You are a Virtual Banking Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
+    
+                RESPONSE RULES:
+                - Maximum 2 sentences per response
+                - Use simple, conversational language
+                - No bullet points, brackets, or special formatting
+                - No technical jargon or complex terms
+                - Answer only what the customer asked
+                - Skip greetings and confirmations
+                
+                SPEAKING STYLE:
+                - Talk like you're having a friendly conversation
+                - Use short, clear sentences
+                - Avoid reading lists or multiple options
+                - Give one direct answer, not explanations
+                
+                Search Results: $search_results$
+                
+                Customer Question: $query$
+                
+                Provide a brief, conversational response that directly answers their question.
+                '''
+            payload = json.dumps({
+            "kb_id": kb_id,
+            "session_id": event['session_id'],
+            "audio": event['audio'],
+            "connection_id":event['connectionId'],
+            "connection_url":event['connection_url'],
+            "box_type": event['box_type'],
+            "prompt_template":prompt_template,
+            "bucket_name":voiceops_bucket_name,  # Use the new voice operations bucket
+            "region_name":region_name  # Use the new region name environment variable
+            })
+            headers = {
+            'Content-Type': 'application/json'
+            }
+            print(payload)
+            response = requests.request("POST", url, headers=headers, data=payload)
+
+            return response.text
+
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'body': json.dumps({
+                    'message': 'Error processing transcription',
+                    'error': str(e)
+                })
+            }
+        
     if event_type == 'test_dummy':
         # Dummy event type for testing the Lambda function
         print("Testing dummy event type...")

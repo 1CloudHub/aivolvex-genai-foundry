@@ -29,6 +29,8 @@ from aws_cdk import (
     Size
     
 )
+from aws_cdk import Tags
+
 import boto3
 import os
 from constructs import Construct
@@ -198,7 +200,7 @@ class LambdaLayerUploader(Construct):
     
     def __init__(self, scope: Construct, construct_id: str, **kwargs):
         super().__init__(scope, construct_id, **kwargs)
-        
+        Tags.of(self).add("Project", "GenAI-Foundry")  
         # Map ZIP files to layer names with path information
         self.layer_mapping = {
             "layers/boto3-9e4ca0fc-be18-4b62-8bb2-40b541fc7de6.zip": {
@@ -385,15 +387,26 @@ class FinalCdkStack(Stack):
                 subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
             )
         )
-        # Create two S3 buckets with different purposes
+        # Create three S3 buckets with different purposes
         s3_bucket_name = "genaifoundry"+name_key
         frontend_bucket_name = "genaifoundry-front"+name_key
+        voiceops_bucket_name = "voiceop"+name_key
         
         # Main bucket for knowledge base data
         bucket = s3.Bucket(
             self, 
             "KnowledgeBaseBucket",
             bucket_name=s3_bucket_name,
+            versioned=True,
+            removal_policy=RemovalPolicy.DESTROY,  # For development only
+            auto_delete_objects=True  # For development only
+        )
+        
+        # Voice operations bucket for audio processing
+        voiceops_bucket = s3.Bucket(
+            self, 
+            "VoiceOpsBucket",
+            bucket_name=voiceops_bucket_name,
             versioned=True,
             removal_policy=RemovalPolicy.DESTROY,  # For development only
             auto_delete_objects=True  # For development only
@@ -1158,6 +1171,7 @@ class FinalCdkStack(Stack):
     "export DB_USERNAME=$(echo \"$SECRET_JSON\" | jq -r .username)",
     "export DB_PASSWORD=$(echo \"$SECRET_JSON\" | jq -r .password)",
     "export DB_NAME=$(echo \"$SECRET_JSON\" | jq -r .dbname)",
+    f"export REGION={self.region}",
     "",
     "echo 'Database connection details:'",
     "echo \"Host: $DB_HOST\"",
@@ -1341,6 +1355,9 @@ class FinalCdkStack(Stack):
         # Grant Lambda access to the RDS secret
         if db_instance.secret:
             db_instance.secret.grant_read(lambda_role)
+            
+        # Grant Lambda access to the voice operations S3 bucket
+        voiceops_bucket.grant_read_write(lambda_role)
 
         # Create API Gateway with specific configurations
         api = apigateway.RestApi(
@@ -1399,8 +1416,11 @@ class FinalCdkStack(Stack):
             "product_kb_id": "BLGSVQOACP",
             "prompt_metadata_table": "prompt_metadata",
             "region_used": self.region,
+            "region_name": self.region,  # New environment variable for region name
             "retail_chat_history_table": "retail_chat_history",
             "schema": "genaifoundry",
+            "voiceops_bucket_name": voiceops_bucket_name,  # New environment variable for voice operations bucket
+            "ec2_instance_ip": ec2_instance.instance_public_ip,  # Public IP of the T3 medium instance
             # "socket_endpoint": f"https://{api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/",
             "rds_secret_name": f"rds-credentials-{rds_name_key}",
             "rds_secret_arn": db_instance.secret.secret_arn if db_instance.secret else "",
@@ -1944,6 +1964,7 @@ class FinalCdkStack(Stack):
             "# Construct URLs",
             "VITE_API_BASE_URL=\"https://${API_ID_REST}.execute-api.${REGION}.amazonaws.com/dev/chat_api\"",
             "VITE_WEBSOCKET_URL=\"wss://${API_ID_WS}.execute-api.${REGION}.amazonaws.com/production/\"",
+            "VITE_WEBSOCKET_URL_VOICEOPS=\"https://${API_ID_WS}.execute-api.${REGION}.amazonaws.com/production/\"",
             "VITE_TRANSCRIBE_API_URL=\"https://${API_ID_TRANSCRIBE}.execute-api.${REGION}.amazonaws.com/dev/transcribe\"",
             "",
             "# 📄 Update .env file",
@@ -1962,10 +1983,11 @@ class FinalCdkStack(Stack):
             "",
             "update_env_var \"VITE_API_BASE_URL\" \"$VITE_API_BASE_URL\"",
             "update_env_var \"VITE_WEBSOCKET_URL\" \"$VITE_WEBSOCKET_URL\"",
+            "update_env_var \"VITE_WEBSOCKET_URL_VOICEOPS\" \"$VITE_WEBSOCKET_URL_VOICEOPS\"",
             "update_env_var \"VITE_TRANSCRIBE_API_URL\" \"$VITE_TRANSCRIBE_API_URL\"",
             "",
             "echo \"✅ .env updated. Current values:\"",
-            "grep -E \"VITE_API_BASE_URL|VITE_WEBSOCKET_URL|VITE_TRANSCRIBE_API_URL\" \"$ENV_FILE\"",
+            "grep -E \"VITE_API_BASE_URL|VITE_WEBSOCKET_URL|VITE_WEBSOCKET_URL_VOICEOPS|VITE_TRANSCRIBE_API_URL\" \"$ENV_FILE\"",
             "",
             "# 🚧 Build the app",
             "echo \"⚙️ Running npm run build...\"",
@@ -1977,8 +1999,10 @@ class FinalCdkStack(Stack):
             "",
             "echo \"☁️ Uploading dist/ contents to s3://${BUCKET_NAME}/ ...\"",
             "aws s3 cp dist/ \"s3://${BUCKET_NAME}/\" --recursive --region \"$REGION\"",
-            "",
-            "echo \"✅ Done! React app built and uploaded to s3://${BUCKET_NAME}/\""
+            "echo \"✅ Done! React app built and uploaded to s3://${BUCKET_NAME}/\"",
+            "TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\")",
+            "INSTANCE_ID=$(curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" http://169.254.169.254/latest/meta-data/instance-id)",
+            "aws ec2 terminate-instances --instance-ids \"$INSTANCE_ID\" --region \"$REGION\""
         )
 
         # Outputs
