@@ -27,6 +27,7 @@ Navigate to the **Amazon Bedrock** service in the AWS Console.
 ![Bedrock Confirmation](./assets/bedrock-confirmation-page.png)
 ---
 ## Deployment Steps
+
 ### 1. Set Region to `us-west-2`
 Navigate to the region selector in the AWS Console and ensure that **`US West (Oregon) - us-west-2`** is selected.
 > This is critical, as all the CDK resources are scoped and supported only in this region.
@@ -41,6 +42,7 @@ Launch the AWS CloudShell service from the AWS Console.
 ```bash
 git clone https://github.com/1CloudHub/aivolvex-genai-foundry.git
 ```
+
 ```bash
 cd aivolvex-genai-foundry/
 ```
@@ -60,6 +62,7 @@ pip cache purge
 sudo rm -rf /tmp/*
 ```
 > If you encounter an "insufficient space" or memory-related error during installation (common in AWS CloudShell due to limited storage)
+
 ---
 ### .5 Install AWS CDK CLI
 ```bash
@@ -78,10 +81,14 @@ cdk bootstrap
 cdk deploy FinalCdkStack
 ```
 ![confirmation](./assets/confirmation_img.png)
+
 Press 'y' to confirm the deployment.
+
 > Deploys the defined CDK infrastructure into your AWS account. This may take several minutes. Wait until the deployment completes successfully.
 
+
 ---
+
 
 ### 8. Get the Application URL
 Navigate to the **CloudFront** service.
@@ -94,6 +101,7 @@ Navigate to the **CloudFront** service.
 ## Accessing the Application
 Once the CloudFront distribution is active and model access is approved, open the copied domain name in your browser to start using **GenAI Foundry**.
 Enjoy the application experience.
+
 * Deployment typically takes 20–30 minutes. After a successful deployment, please wait an additional 10 minutes before using the application.
 ---
 ## About GenAI Foundry
@@ -103,6 +111,3 @@ GenAIFoundry enables banking and insurance teams to explore AI-powered solutions
 © 1CloudHub. All rights reserved.
 The materials and components herein are provided for demonstration purposes only. No portion of this project may be implemented in a live or production environment without prior technical assessment, security clearance, and explicit approval from 1CloudHub
 ---
-GitHub - 1CloudHub/aivolvex-genai-foundry
-Contribute to 1CloudHub/aivolvex-genai-foundry development by creating an account on GitHub.
- 
