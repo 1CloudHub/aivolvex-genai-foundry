@@ -193,23 +193,23 @@ def insert_db(query,values, db_cred):
     connection.commit()
     cursor.close()
     connection.close()
-llm =  ChatBedrock(
-    # credentials_profile_name="bedrock-admin",  
-    # model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0",
-    model_id = "anthropic.claude-3-haiku-20240307-v1:0",
+# llm =  ChatBedrock(
+#     # credentials_profile_name="bedrock-admin",  
+#     # model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0",
+#     model_id = "anthropic.claude-3-haiku-20240307-v1:0",
 
-    region_name = region,
-    model_kwargs={
-        "max_tokens": 1000,  
-        "temperature": 0.7,
-        "anthropic_version": "bedrock-2023-05-31"
-    }
-)
-translate = boto3.client(
-    'translate',
-    region_name=region
+#     region_name = region,
+#     model_kwargs={
+#         "max_tokens": 1000,  
+#         "temperature": 0.7,
+#         "anthropic_version": "bedrock-2023-05-31"
+#     }
+# )
+# translate = boto3.client(
+#     'translate',
+#     region_name=region
 
-)
+# )
 
 transcrippp = {}
 
@@ -340,11 +340,7 @@ bedrock_client = boto3.client(
 
 )
 
-retrieve_client = boto3.client(
-    'bedrock-agent-runtime',
-    region_name=region,
 
-)
 def get_clean_audio(path):
     flagg = None
     wav = read_audio(path, sampling_rate=SAMPLING_RATE)
@@ -405,8 +401,13 @@ def generate_presigned_url(bucket_name, object_name, region, expiration=604800):
         print(f"Error generating presigned URL: {e}")
         return None
 
-def translate_text(text, source_lang='auto', target_lang='en'):
+def translate_text(text, region, source_lang='auto', target_lang='en'):
     print(f"AWS Translate: from {source_lang} to {target_lang}, text: {text[:30]}...")
+    translate = boto3.client(
+    'translate',
+    region_name=region
+
+)
     try:
         response = translate.translate_text(
             Text=text,
@@ -550,16 +551,16 @@ Note:
 -Strictly follow the instructions
 """
 
-prompt_senti_template = PromptTemplate(
-    input_variables=["user_response"],
-    template=prompt_senti
-)
+# prompt_senti_template = PromptTemplate(
+#     input_variables=["user_response"],
+#     template=prompt_senti
+# )
 
-senti_llm = LLMChain(
-    llm=llm,
-    prompt=prompt_senti_template,
-    verbose=True
-)
+# senti_llm = LLMChain(
+#     llm=llm,
+#     prompt=prompt_senti_template,
+#     verbose=True
+# )
 
 prompt_summary="""
 You are going to summarise the transcript provided, consider the below input :
@@ -584,11 +585,11 @@ prompt_summary_template = PromptTemplate(
     template=prompt_summary
 )
 
-summary_llm = LLMChain(
-    llm=llm,
-    prompt=prompt_summary_template,
-    verbose=True
-)
+# summary_llm = LLMChain(
+#     llm=llm,
+#     prompt=prompt_summary_template,
+#     verbose=True
+# )
 
 
 
@@ -651,6 +652,7 @@ def transcribe_audio():
         prompt_template_front = data_aud.get("prompt_template")
         db_cred = data_aud.get("db_cred")
         open_ai_key = base64_to_text("c2stcHJvai04ZjZmc2o5R19heklHa1BaLVgyb1FxR200aU8zNkRrc3BTOC1IeExJT0tWMGtlczUxWm5MY01FdEpFWDFNZjJrNnZSdTFIalFQT1QzQmxia0ZKWlltMGxmTC0tYUF2bUMxQ3ZMaTBGS2licUlFTms4YTA2U1NsQUlEMDc4UEdSUmEwVjZkTHhmXzJMR3FxN2E3ZjhTbEtXUzBZWUE=")
+        print("KEYYYYYYYYYY", open_ai_key)
         # region = data_aud.get("region")
         # status_flag = request.form.get('status_flag')
         # t_language = request.form.get('language')
@@ -697,7 +699,7 @@ def transcribe_audio():
         chat = result
         connectionId = request.form.get('connectionId', 'default-conn-id')
         print("Calling knowledge_base_retrieve_and_generate with transcription...")
-        answer = knowledge_base_retrieve_and_generate(chat, session_id, kb_id, box_type, prompt_template_front, db_cred)
+        answer = knowledge_base_retrieve_and_generate(chat, session_id, kb_id, box_type, prompt_template_front, db_cred, total_region)
         print("Knowledge base answer:", answer)
         
         # Clean up uploaded file immediately after processing
@@ -849,8 +851,13 @@ def upload_file_to_s3(file_path, bucket_name, object_key=None):
         print(f"Error uploading file: {e}")
         return False
 
-def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prompt_template, db_cred):
+def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prompt_template, db_cred, region):
     print("aaaaaaaaaaaaaaaa", db_host, db_database, db_password)
+    retrieve_client = boto3.client(
+    'bedrock-agent-runtime',
+    region_name=region,
+
+)
     try:
         print("IN KNOWLEDGE BASE RETRIEVE AND GENERATE:", query)
         
@@ -976,9 +983,6 @@ def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prom
         else:
             return "I don't have specific information about that in our current knowledge base. Please contact our customer service team for assistance."
             
-
-
-
     except Exception as e:
         print("An exception occurred while using retrieve and generate:", e)
         return "I'm having trouble accessing that information right now. Please try again in a moment, or contact our customer service team for assistance."
@@ -1029,58 +1033,7 @@ def tts_mms(text, pathh, pitch_factor=1.0):
     # Save with original sampling rate (the pitch effect comes from resampling)
     sf.write(pathh, resampled_audio, samplerate=original_sr)
 
-def get_response(user_input, session_id, tr_lang, trans_type="llm"):
-    print("HIIIII< RESPONSEEE")
-    
-    # If using AWS Translate
-    print("ttt",trans_type)
-    if trans_type == "translate":
-        print(f"Using AWS Translate with tr_lang={tr_lang}")
-        if tr_lang == "english":
-            # FROM Tagalog TO English
-            print("Translating FROM Tagalog TO English")
-            response = translate_text(user_input, source_lang='tl', target_lang='en')
-        elif tr_lang == "tagalog":
-            # FROM English TO Tagalog
-            print("Translating FROM English TO Tagalog")
-            response = translate_text(user_input, source_lang='en', target_lang='tl')
-        
-        # Store in memory for continuity
-        memory = get_or_create_memory(session_id)
-        memory.chat_memory.add_user_message(user_input)
-        memory.chat_memory.add_ai_message(response)
-        return response
-    
-    # Otherwise use LLM (Haiku)
-    else:
-        memory = get_or_create_memory(session_id)
-        print(f"Using LLM with tr_lang={tr_lang}")
-        if tr_lang == "tagalog":
-            conversation = LLMChain(
-                llm=llm,
-                prompt=prompt_t,
-                memory=memory,
-                verbose=True
-            )
-        elif tr_lang == "english":
-            conversation = LLMChain(
-                llm=llm,
-                prompt=prompt_e,
-                memory=memory,
-                verbose=True
-            )
-            
-        response = conversation.predict(input=user_input)
-        memory.chat_memory.add_user_message(user_input)
-        memory.chat_memory.add_ai_message(response)
-        return response
-def get_sentiment(user_input):
-    response = senti_llm.predict(user_response=user_input)
-    return response
 
-def get_summary(trasn):
-    response = summary_llm.predict(transcript=trasn)
-    return response
 
 @app.route("/ping", methods = ["GET"])
 def ping():
