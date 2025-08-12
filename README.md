@@ -107,8 +107,8 @@ Navigate to the **CloudFront** service.
 Once the CloudFront distribution is active and model access is approved, open the copied domain name in your browser to start using **GenAI Foundry**.
 Enjoy the application experience.
 
-* Deployment typically takes 20–30 minutes. After a successful deployment, please wait an additional 10 minutes before using the application.
-* If the underlying EC2 instance is stopped and started again, the application will not run automatically and run into issues.
+>* ⚠️ **Deployment time**: Deployment typically takes 20–30 minutes. After a successful deployment, please wait an additional 10 minutes before using the application.
+>* ❗ **EC2 restart note**: If the underlying EC2 instance is stopped and started again, the application will not run automatically and may run into issues.
 ---
 ## About GenAI Foundry
 
