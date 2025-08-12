@@ -69,7 +69,7 @@ sudo rm -rf /tmp/*
 > ⚠️ **Important**: These commands above should ONLY be executed if you encounter an "insufficient space" or memory-related error during installation (common in AWS CloudShell due to limited storage). Do not run these commands as part of the normal installation process.
 
 ---
-### .5 Install AWS CDK CLI
+### 5. Install AWS CDK CLI
 ```bash
 sudo npm install -g aws-cdk
 ```
@@ -108,6 +108,7 @@ Once the CloudFront distribution is active and model access is approved, open th
 Enjoy the application experience.
 
 * Deployment typically takes 20–30 minutes. After a successful deployment, please wait an additional 10 minutes before using the application.
+* If the underlying EC2 instance is stopped and started again, the application will not run automatically and run into issues.
 ---
 ## About GenAI Foundry
 
