@@ -3502,8 +3502,128 @@ def lambda_handler(event, context):
             history += "\n"+history1+"\n"+history2+"\n"
         print("HISTORY : ",history)
         prompt_query = f"SELECT analytics_prompt from {schema}.{prompt_metadata_table} where id = 1;"
-        prompt_response = select_db(prompt_query)
-        prompt_template = prompt_response[0][0]
+        prompt_template = f'''
+        <Instruction>
+        Based on the conversation above, please provide the output in the following format:
+        Topic:
+		- Identify the main topic of the conversation, it should be a single word topic
+        Conversation Type:
+        - Identify if the conversation is an Enquiry or a Complaint. If both are present, classify it as (Enquiry/Complaint).
+        - Consider the emotional tone and context to determine the type.
+        
+        Conversation Summary Explanation:
+        - Explain why you labelled the conversation as Enquiry, Complaint, or both.
+        - Highlight the key questions, concerns, or issues raised by the customer.
+	-IMPORTANT: keep the summary in 2-3 lines
+        
+        Detailed Summary:
+        - Provide a clear summary of the conversation, capturing the customer’s needs, questions, and any recurring themes.
+	- IMPORTANT: keep the summary in 2-3 lines keep it short
+
+        
+	
+        Conversation Sentiment:
+        - Analyse overall sentiment of conversation carried out by the user with the agent.
+		- Analyse the tone and feelings associated within the conversation.
+		- possible values are (Positive/Neutral/Negative)
+     	- Only provide the final sentiment here in this key. 
+        Conversation Sentiment Generated Details:
+        - Explain why you labelled the Lead as Positive/Neutral/Negative.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        
+        Lead Sentiment:
+        - Indicate if potential leads are generated from the conversation (Yes/No).
+        
+        Leads Generated Details:
+        - Explain why you labelled the Lead as Yes/No.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        Action to be Taken:
+        - Outline next steps for the sales representative to follow up on the opportunities identified.
+        - Include any necessary follow-up actions, information to provide, or solutions to offer.
+        
+        WhatsApp Followup Creation:
+		- Craft a highly personalized follow-up WhatsApp message to engage the customer effectively as a customer sales representative.
+		- Ensure to provide a concise response and make it as brief as possible. Maximum 2-3 lines as it should be shown in the whatsapp mobile screen, so make the response brief.
+        - Incorporate key details from the conversation script to show understanding and attentiveness(Do not hallucinate or add any details that are ecplicitely there in the conversation).
+        - Tailor the WhatsApp message to address specific concerns, provide solutions, and include a compelling call-to-action.
+        - Infuse a sense of urgency or exclusivity to prompt customer response.
+		- Format the WhatsApp message with real line breaks for each paragraph (not the string n). Use actual newlines to separate the greeting, body, call-to-action, and closing. 
+	
+	Follow the structure of the sample WhatsApp message below:
+	<format_for_whatsapp_message>
+
+Hi, Thanks for reaching out to AnyBank! 
+
+You had a query about [Inquiry Topic]. Here’s what you can do next:
+
+1. [Step 1]  
+2. [Step 2]
+
+If you’d like, I can personally help you with [Offer/Action]. Just share your [Details Needed].
+
+Looking forward to hearing from you soon.
+
+</format_for_whatsapp_message>
+	- Before providing the whatsapp response, it is very critical that you double check if its in the provided format
+
+
+<language_constraints>
+
+If the conversation history (user questions and bot answers) is primarily in Tagalog, then provide the values for all JSON keys in Tagalog. Otherwise, provide the values strictly in English.
+If the conversation history is dominantly in Tagalog, provide the value for "Topic" in Tagalog; otherwise, provide it in English.
+Always keep the JSON keys in English exactly as specified below:
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+
+Only the **values** for each key should switch between English or Tagalog based on the dominant language in the conversation. Never translate or modify the keys. 
+
+</language_constraints>
+
+
+	
+        
+</Instruction> 
+return output in JSON in a consistent manner
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+these are the keys to be always used while returning response. Strictly do not add key values of your own.
+
+## WHATSAPP MESSAGE FORMATTING:
+- Write WhatsApp messages as natural, conversational text
+- Use proper paragraph spacing instead of \n characters
+- Avoid any escape sequences or formatting codes
+- Keep messages clean and readable without technical formatting
+- Use natural line breaks and spacing for readability
+- **NEVER** include literal \n characters in WhatsApp messages
+- Use actual line breaks and proper spacing for message formatting
+- Ensure WhatsApp messages are formatted naturally without escape sequences
+- **CRITICAL**: When generating WhatsApp messages, use actual line breaks and spacing, NOT escape sequences
+- Format messages with natural paragraph breaks and proper spacing
+- Write messages exactly as they should appear to the user, without any technical formatting codes
+        '''
+        # prompt_template = prompt_response[0][0]
         print("PROMPT : ",prompt_template)
         template = f'''
         <Conversation>
@@ -3808,7 +3928,7 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
             if event['box_type'] == 'insurance':
                 kb_id = KB_ID
                 print("kb_id",kb_id)
-                prompt_template='''You are a Virtual Insurance Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
+                prompt_template=f'''You are a Virtual Insurance Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
 
                         RESPONSE RULES:
                         - Maximum 2 sentences per response
@@ -3834,7 +3954,7 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
             else: 
                 kb_id = bank_kb_id
                 print("bank_kb_id",bank_kb_id)
-                prompt_template=''' 
+                prompt_template=f''' 
                 You are a Virtual Banking Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
     
                 RESPONSE RULES:
@@ -3934,8 +4054,114 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
             history += "\n"+history1+"\n"+history2+"\n"
         print("BANKING HISTORY : ",history)
         prompt_query = f"SELECT analytics_prompt from {schema}.{prompt_metadata_table} where id = 3;"
-        prompt_response = select_db(prompt_query)
-        prompt_template = prompt_response[0][0]
+        prompt_template = f'''<Instruction>
+        Based on the conversation above, please provide the output in the following format:
+        Topic:
+		- Identify the main topic of the conversation, it should be a single word topic
+        Conversation Type:
+        - Identify if the conversation is an Enquiry or a Complaint. If both are present, classify it as (Enquiry/Complaint).
+        - Consider the emotional tone and context to determine the type.
+        
+        Conversation Summary Explanation:
+        - Explain why you labelled the conversation as Enquiry, Complaint, or both.
+        - Highlight the key questions, concerns, or issues raised by the customer.
+	-IMPORTANT: keep the summary in 2-3 lines
+        
+        Detailed Summary:
+        - Provide a clear summary of the conversation, capturing the customer’s needs, questions, and any recurring themes.
+	- IMPORTANT: keep the summary in 2-3 lines keep it short
+
+        
+	
+        Conversation Sentiment:
+        - Analyse overall sentiment of conversation carried out by the user with the agent.
+		- Analyse the tone and feelings associated within the conversation.
+		- possible values are (Positive/Neutral/Negative)
+     	- Only provide the final sentiment here in this key. 
+        Conversation Sentiment Generated Details:
+        - Explain why you labelled the Lead as Positive/Neutral/Negative.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        
+        Lead Sentiment:
+        - Indicate if potential leads are generated from the conversation (Yes/No).
+        
+        Leads Generated Details:
+        - Explain why you labelled the Lead as Yes/No.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        Action to be Taken:
+        - Outline next steps for the sales representative to follow up on the opportunities identified.
+        - Include any necessary follow-up actions, information to provide, or solutions to offer.
+        
+        WhatsApp Followup Creation:
+		- Craft a highly personalized follow-up WhatsApp message to engage the customer effectively as a customer sales representative.
+		- Ensure to provide a concise response and make it as brief as possible. Maximum 2-3 lines as it should be shown in the whatsapp mobile screen, so make the response brief.
+        - Incorporate key details from the conversation script to show understanding and attentiveness (VERY IMPORTANT: ONLY INCLUDE DETAILS FROM THE CONVERSATION DO NOT HALLUCINATE ANY DETAILS).
+        - Tailor the WhatsApp message to address specific concerns, provide solutions, and include a compelling call-to-action.
+        - Infuse a sense of urgency or exclusivity to prompt customer response.
+		- Format the WhatsApp message with real line breaks for each paragraph (not the string n). Use actual newlines to separate the greeting, body, call-to-action, and closing. 
+	
+	Follow the structure of the sample WhatsApp message below:
+	<format_for_whatsapp_message>
+
+Hi, Thanks for reaching out to AnyBank! 
+
+You had a query about [Inquiry Topic]. Here’s what you can do next:
+
+1. [Step 1]  
+2. [Step 2]
+
+If you’d like, I can personally help you with [Offer/Action]. Just share your [Details Needed].
+
+Looking forward to hearing from you soon.
+
+</format_for_whatsapp_message>
+	- Before providing the whatsapp response, it is very critical that you double check if its in the provided format
+
+
+<language_constraints>
+
+If the conversation history (user questions and bot answers) is primarily in Tagalog, then provide the values for all JSON keys in Tagalog. Otherwise, provide the values strictly in English.
+If the conversation history is dominantly in Tagalog, provide the value for "Topic" in Tagalog; otherwise, provide it in English.
+Always keep the JSON keys in English exactly as specified below:
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+
+Only the **values** for each key should switch between English or Tagalog based on the dominant language in the conversation. Never translate or modify the keys. 
+
+</language_constraints>
+
+
+	
+        
+</Instruction> 
+return output in JSON in a consistent manner
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+these are the keys to be always used while returning response. Strictly do not add key values of your own.
+        '''
+        #prompt_template = prompt_response[0][0]
         print("BANKING PROMPT : ",prompt_template)
         template = f'''
         <Conversation>
