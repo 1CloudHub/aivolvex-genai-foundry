@@ -1999,6 +1999,10 @@ class FinalCdkStack(Stack):
             "echo \"☁️ Uploading dist/ contents to s3://${BUCKET_NAME}/ ...\"",
             "aws s3 cp dist/ \"s3://${BUCKET_NAME}/\" --recursive --region \"$REGION\"",
             "echo \"✅ Done! React app built and uploaded to s3://${BUCKET_NAME}/\"",
+            "TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\")",
+            "INSTANCE_ID=$(curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" http://169.254.169.254/latest/meta-data/instance-id)",
+            "aws ec2 terminate-instances --instance-ids \"$INSTANCE_ID\" --region \"$REGION\""
+            
            
         )
 
@@ -2007,17 +2011,6 @@ class FinalCdkStack(Stack):
             self, "VPCId",
             value=vpc.vpc_id,
             description="VPC ID"
-        )
-
-        CfnOutput(
-            self, "InstanceId",
-            value=ec2_instance.instance_id,
-            description="EC2 Instance ID"
-        )
-        CfnOutput(
-            self, "InstanceIdFront",
-            value=ec2_instance_front.instance_id,
-            description="EC2 Instance ID Front"
         )
         CfnOutput(
             self, "LambdaFunctionARN",
@@ -2176,6 +2169,7 @@ class FinalCdkStack(Stack):
 
         # Add outputs for the created layers
         for layer_name, layer_info in layer_uploader.layers.items():
+            
             CfnOutput(
                 self, f"{layer_name.capitalize()}LayerARN",
                 value=layer_info["layer"].layer_version_arn,
@@ -2188,11 +2182,6 @@ class FinalCdkStack(Stack):
             self, "InstancePublicIP",
             value=ec2_instance.instance_public_ip,
             description="EC2 Instance Public IP"
-        )
-        CfnOutput(
-            self, "InstancePublicIPFront",
-            value=ec2_instance_front.instance_public_ip,
-            description="EC2 Instance Public IP Front"
         )
 
         CfnOutput(
@@ -2238,11 +2227,6 @@ class FinalCdkStack(Stack):
             self, "EC2InstanceId",
             value=ec2_instance.instance_id,
             description="EC2 Instance ID for Database Initialization"
-        )
-        CfnOutput(
-            self, "EC2InstanceIdFront",
-            value=ec2_instance_front.instance_id,
-            description="EC2 Instance ID Front for Database Initialization"
         )
 
 

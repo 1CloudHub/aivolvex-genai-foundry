@@ -55,17 +55,15 @@ pip install --user -r requirements.txt
 > Installs the AWS CDK Command Line Interface globally in CloudShell.
 
 > ⚠️ **ERROR HANDLING ONLY - DO NOT RUN UNLESS YOU ENCOUNTER SPACE/MEMORY ERRORS:**
+![delete shell](./assets/delete_terminal.png)
 
-```bash
-# ⚠️ ONLY run this if you get "insufficient space" errors
-# Clear pip cache
-pip cache purge
-```
-```bash
-# ⚠️ ONLY run this if you get memory-related errors  
-# Remove unnecessary temporary files
-sudo rm -rf /tmp/*
-```
+If you encounter memory or disk space issues in CloudShell:
+
+- Click the **Actions** menu at the top-right of the CloudShell terminal
+- Choose **Delete** to remove the terminal environment
+- Open a new CloudShell terminal
+- Start again from **Step 1** of this guide
+
 > ⚠️ **Important**: These commands above should ONLY be executed if you encounter an "insufficient space" or memory-related error during installation (common in AWS CloudShell due to limited storage). Do not run these commands as part of the normal installation process.
 
 ---
