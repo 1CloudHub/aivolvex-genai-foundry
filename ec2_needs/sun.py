@@ -743,7 +743,7 @@ def transcribe_audio():
         # response.headers['X-Session-Id'] = session_id
         
         # Clean up TTS file and request folder immediately after sending response
-        client_apigateway = boto3.client('apigatewaymanagementapi', region_name=region,
+        client_apigateway = boto3.client('apigatewaymanagementapi', region_name=total_region,
                             endpoint_url=connection_url)
         
         send_private_message(connection_id, response, client_apigateway)
