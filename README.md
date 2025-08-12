@@ -53,15 +53,19 @@ cd aivolvex-genai-foundry/
 pip install --user -r requirements.txt
 ```
 > Installs the AWS CDK Command Line Interface globally in CloudShell.
+⚠️ **ERROR HANDLING ONLY - DO NOT RUN UNLESS YOU ENCOUNTER SPACE/MEMORY ERRORS:**
+
 ```bash
+# ⚠️ ONLY run this if you get "insufficient space" errors
 # Clear pip cache
 pip cache purge
 ```
 ```bash
+# ⚠️ ONLY run this if you get memory-related errors  
 # Remove unnecessary temporary files
 sudo rm -rf /tmp/*
 ```
-> If you encounter an "insufficient space" or memory-related error during installation (common in AWS CloudShell due to limited storage)
+> ⚠️ **Important**: These commands above should ONLY be executed if you encounter an "insufficient space" or memory-related error during installation (common in AWS CloudShell due to limited storage). Do not run these commands as part of the normal installation process.
 
 ---
 ### .5 Install AWS CDK CLI
@@ -78,7 +82,7 @@ cdk bootstrap
 ---
 ### 7. Deploy the Stack
 ```bash
-cdk deploy FinalCdkStack
+cdk deploy GenAiFoundryStack
 ```
 ![confirmation](./assets/confirmation_img.png)
 
@@ -105,9 +109,14 @@ Enjoy the application experience.
 * Deployment typically takes 20–30 minutes. After a successful deployment, please wait an additional 10 minutes before using the application.
 ---
 ## About GenAI Foundry
+
 GenAIFoundry enables banking and insurance teams to explore AI-powered solutions through an intelligent assistant that understands context, retrieves precise insights, and delivers accurate responses. From post-call analysis to underwriting decision support and multi-channel customer engagement, it transforms complex processes into clear, actionable outcomes—enhancing efficiency, accuracy, and customer satisfaction.
+
 ---
+
 ## Legal Notice
+
 © 1CloudHub. All rights reserved.
+
 The materials and components herein are provided for demonstration purposes only. No portion of this project may be implemented in a live or production environment without prior technical assessment, security clearance, and explicit approval from 1CloudHub
 ---
