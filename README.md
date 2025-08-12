@@ -53,7 +53,8 @@ cd aivolvex-genai-foundry/
 pip install --user -r requirements.txt
 ```
 > Installs the AWS CDK Command Line Interface globally in CloudShell.
-⚠️ **ERROR HANDLING ONLY - DO NOT RUN UNLESS YOU ENCOUNTER SPACE/MEMORY ERRORS:**
+
+> ⚠️ **ERROR HANDLING ONLY - DO NOT RUN UNLESS YOU ENCOUNTER SPACE/MEMORY ERRORS:**
 
 ```bash
 # ⚠️ ONLY run this if you get "insufficient space" errors
@@ -117,6 +118,5 @@ GenAIFoundry enables banking and insurance teams to explore AI-powered solutions
 ## Legal Notice
 
 © 1CloudHub. All rights reserved.
-
 The materials and components herein are provided for demonstration purposes only. No portion of this project may be implemented in a live or production environment without prior technical assessment, security clearance, and explicit approval from 1CloudHub
 ---
