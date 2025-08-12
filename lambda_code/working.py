@@ -3444,6 +3444,9 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
                 }
             }
         }
+    if event_type == 'risk_sandbox':
+        
+        return generate_risk_sandbox(event)
 
     if event_type == "generate_banking_summary":     
         
