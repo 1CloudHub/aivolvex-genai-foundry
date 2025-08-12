@@ -1200,7 +1200,7 @@ class FinalCdkStack(Stack):
     '',
     '# Restore database',
     'echo "Restoring database from dump file..."',
-    'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -f /aivolvex-genai-foundry/dump.sql',
+    'psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME" -f /aivolvex-genai-foundry/dump-postgres.sql',
     '',
     '# Verify restoration',
     'echo "Verifying restoration..."',
