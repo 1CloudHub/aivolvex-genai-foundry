@@ -117,7 +117,8 @@ GenAIFoundry enables banking and insurance teams to explore AI-powered solutions
 
 ## Legal Notice
 
-**Copyright:** © 1CloudHub. All rights reserved.
+© 1CloudHub. All rights reserved.
 
-**Disclaimer:** The materials and components herein are provided for demonstration purposes only. No portion of this project may be implemented in a live or production environment without prior technical assessment, security clearance, and explicit approval from 1CloudHub.
+The materials and components herein are provided for demonstration purposes only. No portion of this project may be implemented in a live or production environment without prior technical assessment, security clearance, and explicit approval from 1CloudHub.
+
 ---
