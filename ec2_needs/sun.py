@@ -650,8 +650,8 @@ def transcribe_audio():
         kb_id = data_aud.get("kb_id")
         prompt_template_front = data_aud.get("prompt_template")
         db_cred = data_aud.get("db_cred")
-        open_ai_key = base64_to_text("c2stcHJvai0xS18tUXdxVWNUM2wtZFVjTTlhdHNBdjk0OGpZejJBTDhIVWlPaTR4SWxyYTZIZU9sT0tzaE5uV1E4WmVBUGZhdUNMMkJXd2NpVVQzQmxia0ZKVWxqLXdmS2NpSnpCYi14X1pmV3pSSlVuTnVJWlAzb0pYazNrc1VLNllCaG43QTlmUDNIQy1DandPX1NzZ21maGp5ZUZSVVdGVUE=")
-        print("KEYYYYYYYYYY", open_ai_key)
+        testing_ai_key = base64_to_text("c2stcHJvai0xS18tUXdxVWNUM2wtZFVjTTlhdHNBdjk0OGpZejJBTDhIVWlPaTR4SWxyYTZIZU9sT0tzaE5uV1E4WmVBUGZhdUNMMkJXd2NpVVQzQmxia0ZKVWxqLXdmS2NpSnpCYi14X1pmV3pSSlVuTnVJWlAzb0pYazNrc1VLNllCaG43QTlmUDNIQy1DandPX1NzZ21maGp5ZUZSVVdGVUE=")
+        print("KEYYYYYYYYYY", testing_ai_key)
         # region = data_aud.get("region")
         # status_flag = request.form.get('status_flag')
         # t_language = request.form.get('language')
@@ -718,7 +718,7 @@ def transcribe_audio():
         temp_speech_path = os.path.join(request_folder, ww)
         print(f"🎵 Creating TTS response file at: {temp_speech_path}")
         print(f"🎵 Synthesizing TTS to {temp_speech_path} ...")
-        tts_openAi(answer, temp_speech_path, open_ai_key)
+        tts_openAi(answer, temp_speech_path, testing_ai_key)
         print(f"✅ Successfully created TTS response file: {temp_speech_path}")
 
         upload_to_s3(temp_speech_path, bucket_name, f"audio/{ww}", total_region)
@@ -980,12 +980,12 @@ def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prom
     except Exception as e:
         print("An exception occurred while using retrieve and generate:", e)
         return "I'm having trouble accessing that information right now. Please try again in a moment, or contact our customer service team for assistance."
-def tts_openAi(text, pathh, open_ai_key):
+def tts_openAi(text, pathh, testing_ai_key):
 
     temp_file_path = Path(pathh)
         
     with open(temp_file_path, "wb") as file:
-        client_openai = OpenAI(api_key=open_ai_key)
+        client_openai = OpenAI(api_key=testing_ai_key)
 
         response = client_openai.audio.speech.create(
             model="tts-1",
