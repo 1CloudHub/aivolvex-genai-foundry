@@ -650,8 +650,7 @@ def transcribe_audio():
         kb_id = data_aud.get("kb_id")
         prompt_template_front = data_aud.get("prompt_template")
         db_cred = data_aud.get("db_cred")
-        open_ai_key = base64_to_text("c2stcHJvai0xS18tUXdxVWNUM2wtZFVjTTlhdHNBdjk0OGpZejJBTDhIVWlPaTR4SWxyYTZIZU9sT0tzaE5uV1E4WmVBUGZhdUNMMkJXd2NpVVQzQmxia0ZKVWxqLXdmS2NpSnpCYi14X1pmV3pSSlVuTnVJWlAzb0pYazNrc1VLNllCaG43QTlmUDNIQy1DandPX1NzZ21maGp5ZUZSVVdGVUE=")
-        print("KEYYYYYYYYYY", open_ai_key)
+        open_ai_key = base64_to_text("c2stcHJvai04ZjZmc2o5R19heklHa1BaLVgyb1FxR200aU8zNkRrc3BTOC1IeExJT0tWMGtlczUxWm5MY01FdEpFWDFNZjJrNnZSdTFIalFQT1QzQmxia0ZKWlltMGxmTC0tYUF2bUMxQ3ZMaTBGS2licUlFTms4YTA2U1NsQUlEMDc4UEdSUmEwVjZkTHhmXzJMR3FxN2E3ZjhTbEtXUzBZWUE=")
         # region = data_aud.get("region")
         # status_flag = request.form.get('status_flag')
         # t_language = request.form.get('language')
@@ -979,7 +978,7 @@ def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prom
             
 
 
-            
+
     except Exception as e:
         print("An exception occurred while using retrieve and generate:", e)
         return "I'm having trouble accessing that information right now. Please try again in a moment, or contact our customer service team for assistance."
