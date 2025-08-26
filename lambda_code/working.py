@@ -2659,8 +2659,6 @@ You have access to comprehensive information about AnyBank SG products including
         }
 def generate_risk_sandbox(event):
 
-    print("RISKKKKKKKKKKKK")
-
     applicant_profile = event.get("applicant_profile", {})
     financials = event.get("financials", {})
     loan_details = event.get("loan_details", {})

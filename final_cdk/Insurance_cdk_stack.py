@@ -283,7 +283,7 @@ class LambdaLayerUploader(Construct):
                 }
 
 s3_name = "genai-foundry-test"
-class FinalCdkStack(Stack):
+class InsuranceCdkStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -455,46 +455,12 @@ class FinalCdkStack(Stack):
         )
 
         # Create separate OpenSearch Serverless Collections for each KB
-        banking_collection_name = f"bank-{name_key}-col"
         insurance_collection_name = f"ins-{name_key}-col"
-        banking_collection = opensearch.CfnCollection(
-            self, "BankingKBCollection",
-            name=banking_collection_name,
-            type="VECTORSEARCH"
-        )
-
         # Create Insurance Collection
         insurance_collection = opensearch.CfnCollection(
             self, "InsuranceKBCollection",
             name=insurance_collection_name,
             type="VECTORSEARCH"
-        )
-
-        # Create security policies for banking collection
-        banking_encryption_policy = opensearch.CfnSecurityPolicy(
-            self, "BankingKBSecurityPolicy",
-            name=f"bank-{name_key}-encrypt",
-            type="encryption",
-            policy=json.dumps({
-                "Rules": [{
-                    "ResourceType": "collection",
-                    "Resource": [f"collection/{banking_collection_name}"]
-                }],
-                "AWSOwnedKey": True
-            })
-        )
-
-        banking_network_policy = opensearch.CfnSecurityPolicy(
-            self, "BankingKBNetworkPolicy",
-            name=f"bank-{name_key}-network",
-            type="network",
-            policy=json.dumps([{
-                "Rules": [{
-                    "ResourceType": "collection",
-                    "Resource": [f"collection/{banking_collection_name}"]
-                }],
-                "AllowFromPublic": True
-            }])
         )
 
         # Create security policies for insurance collection
@@ -524,9 +490,6 @@ class FinalCdkStack(Stack):
             }])
         )
 
-        # Add dependencies for encryption and network policies
-        banking_collection.add_dependency(banking_encryption_policy)
-        banking_collection.add_dependency(banking_network_policy)
         insurance_collection.add_dependency(insurance_encryption_policy)
         insurance_collection.add_dependency(insurance_network_policy)
 
@@ -614,8 +577,6 @@ class FinalCdkStack(Stack):
                             resources=[
                                 f"arn:aws:aoss:{self.region}:{self.account}:collection/*",
                                 f"arn:aws:aoss:{self.region}:{self.account}:index/*",
-                                f"arn:aws:aoss:{self.region}:{self.account}:collection/{banking_collection_name}",
-                                f"arn:aws:aoss:{self.region}:{self.account}:index/{banking_collection_name}/*",
                                 f"arn:aws:aoss:{self.region}:{self.account}:collection/{insurance_collection_name}",
                                 f"arn:aws:aoss:{self.region}:{self.account}:index/{insurance_collection_name}/*"
                             ]
@@ -684,40 +645,6 @@ class FinalCdkStack(Stack):
         )
 
         # Create data access policy AFTER roles are created
-        banking_data_access_policy = opensearch.CfnAccessPolicy(
-            self, "BankingKBDataAccessPolicy",
-            name=f"bank-{name_key}-access",
-            type="data",
-            policy=json.dumps([{
-                "Rules": [{
-                    "ResourceType": "collection",
-                    "Resource": [f"collection/{banking_collection_name}"],
-                    "Permission": [
-                        "aoss:CreateCollectionItems",
-                        "aoss:DeleteCollectionItems",
-                        "aoss:UpdateCollectionItems",
-                        "aoss:DescribeCollectionItems"
-                    ]
-                }, {
-                    "ResourceType": "index",
-                    "Resource": [f"index/{banking_collection_name}/*"],
-                    "Permission": [
-                        "aoss:CreateIndex",
-                        "aoss:DeleteIndex",
-                        "aoss:UpdateIndex",
-                        "aoss:DescribeIndex",
-                        "aoss:ReadDocument",
-                        "aoss:WriteDocument"
-                    ]
-                }],
-                "Principal": [
-                    f"arn:aws:iam::{self.account}:role/{bedrock_kb_role.role_name}",
-                    f"arn:aws:iam::{self.account}:role/{lambda_role.role_name}",
-                    f"arn:aws:iam::{self.account}:role/{auto_sync_lambda_role.role_name}"
-                ],
-                "Description": f"Data access policy for {banking_collection_name}"
-            }])
-        )
         
         insurance_data_access_policy = opensearch.CfnAccessPolicy(
             self, "InsuranceKBDataAccessPolicy",
@@ -755,7 +682,6 @@ class FinalCdkStack(Stack):
         )
 
         # Add dependencies for data access policy
-        banking_collection.add_dependency(banking_data_access_policy)
         insurance_collection.add_dependency(insurance_data_access_policy)
 
         # Create Lambda function to create OpenSearch indices
@@ -766,36 +692,7 @@ class FinalCdkStack(Stack):
         lambda_dir = current_dir.parent / "lambda"
         
         # Generate separate index names for each KB
-        banking_index_name = f"bank-{name_key}-idx"
         insurance_index_name = f"ins-{name_key}-idx"
-        
-        banking_index_creator_function = lambda_.Function(
-            self, "BankingIndexCreatorFunction",
-            runtime=lambda_.Runtime.PYTHON_3_9,
-            handler="lambda_function.lambda_handler",
-            role=lambda_role,
-            timeout=Duration.minutes(10),
-            environment={
-                "OPENSEARCH_ENDPOINT": banking_collection.attr_collection_endpoint,
-                "COLLECTION_NAME": banking_collection_name,
-                "INDEX_NAME": banking_index_name
-            },
-            layers=[
-                lambda_.LayerVersion(
-                    self, "BankingOpenSearchPyLayer",
-                    code=lambda_.Code.from_asset(str(layers_dir / "opensearchpy.zip")),
-                    compatible_runtimes=[lambda_.Runtime.PYTHON_3_9],
-                    description="OpenSearch Python client layer for Banking"
-                ),
-                lambda_.LayerVersion(
-                    self, "BankingAWS4AuthLayer",
-                    code=lambda_.Code.from_asset(str(layers_dir / "aws4auth.zip")),
-                    compatible_runtimes=[lambda_.Runtime.PYTHON_3_9],
-                    description="AWS4Auth layer for Banking"
-                )
-            ],
-            code=lambda_.Code.from_asset(str(lambda_dir))
-        )
 
         insurance_index_creator_function = lambda_.Function(
             self, "InsuranceIndexCreatorFunction",
@@ -826,34 +723,15 @@ class FinalCdkStack(Stack):
         )
 
         # Add dependency to ensure collection and name generation is complete before Lambda runs
-        banking_index_creator_function.node.add_dependency(banking_collection)
         insurance_index_creator_function.node.add_dependency(insurance_collection)
         # Add dependency to ensure data access policy is applied before Lambda runs
-        banking_index_creator_function.node.add_dependency(banking_data_access_policy)
         insurance_index_creator_function.node.add_dependency(insurance_data_access_policy)
 
-        # Create separate providers for each collection
-        banking_provider = cr.Provider(
-            self, "BankingInitProvider",
-            on_event_handler=banking_index_creator_function
-        )
+        # Create  providers for each collection
 
         insurance_provider = cr.Provider(
             self, "InsuranceInitProvider",
             on_event_handler=insurance_index_creator_function
-        )
-
-        # Create custom resource to create banking index
-        banking_index_creator = CustomResource(
-            self, "BankingIndexCreator",
-            service_token=banking_provider.service_token,
-            properties={
-                "index_name": banking_index_name,
-                "dimension": 1024,
-                "method": "hnsw",
-                "engine": "faiss",
-                "space_type": "l2"
-            }
         )
 
         # Create custom resource to create insurance index
@@ -870,26 +748,11 @@ class FinalCdkStack(Stack):
         )
 
         # Add dependency for index creators
-        banking_index_creator.node.add_dependency(banking_collection)
         insurance_index_creator.node.add_dependency(insurance_collection)
         # Add dependency to ensure Lambda function is ready before index creation
-        banking_index_creator.node.add_dependency(banking_index_creator_function)
         insurance_index_creator.node.add_dependency(insurance_index_creator_function)
 
         # Create both knowledge bases - POSITIONED LAST IN THE FLOW
-        banking_kb = self.create_kb(
-            "genaifoundrybank-1",
-            f"s3://{s3_bucket_name}/kb/bank/",
-            model_arn,
-            bedrock_kb_role.role_arn,
-            "kb/bank",
-            banking_index_name,
-            banking_index_creator_function,
-            banking_index_creator,
-            banking_provider,
-            banking_collection.attr_arn,
-            banking_data_access_policy
-        )
 
         insurance_kb = self.create_kb(
             "genaifoundryinsurance-1",
@@ -906,15 +769,10 @@ class FinalCdkStack(Stack):
         )
 
         # Add dependencies to ensure index is created before Knowledge Bases
-        banking_kb.node.add_dependency(banking_data_access_policy)
         insurance_kb.node.add_dependency(insurance_data_access_policy)
-        banking_kb.node.add_dependency(banking_index_creator)
-        banking_kb.node.add_dependency(banking_index_creator_function)
-        banking_kb.node.add_dependency(banking_provider)
         insurance_kb.node.add_dependency(insurance_index_creator)
         insurance_kb.node.add_dependency(insurance_index_creator_function)
         insurance_kb.node.add_dependency(insurance_provider)
-        banking_kb.node.add_dependency(bedrock_kb_role)
         insurance_kb.node.add_dependency(bedrock_kb_role)
 
         # Create Auto-Sync Lambda function AFTER knowledge bases are created
@@ -925,16 +783,13 @@ class FinalCdkStack(Stack):
             role=auto_sync_lambda_role,
             timeout=Duration.minutes(15),
             environment={
-                "BANKING_KB_ID": banking_kb.attr_knowledge_base_id,
                 "INSURANCE_KB_ID": insurance_kb.attr_knowledge_base_id,
-                "BANKING_DS_ID": banking_kb.data_source_id,
                 "INSURANCE_DS_ID": insurance_kb.data_source_id
             },
             code=lambda_.Code.from_asset(str(lambda_dir))
         )
 
         # Add dependencies to ensure Knowledge Bases are created before Lambda
-        auto_sync_function.node.add_dependency(banking_kb)
         auto_sync_function.node.add_dependency(insurance_kb)
 
         # Create a custom resource to trigger initial sync after Knowledge Base creation
@@ -945,16 +800,13 @@ class FinalCdkStack(Stack):
             role=auto_sync_lambda_role,
             timeout=Duration.minutes(15),
             environment={
-                "BANKING_KB_ID": banking_kb.attr_knowledge_base_id,
                 "INSURANCE_KB_ID": insurance_kb.attr_knowledge_base_id,
-                "BANKING_DS_ID": banking_kb.data_source_id,
                 "INSURANCE_DS_ID": insurance_kb.data_source_id
             },
             code=lambda_.Code.from_asset(str(lambda_dir))
         )
 
         # Add dependencies to ensure Knowledge Bases are created before initial sync
-        initial_sync_function.node.add_dependency(banking_kb)
         initial_sync_function.node.add_dependency(insurance_kb)
 
         # Create provider for initial sync
@@ -968,15 +820,12 @@ class FinalCdkStack(Stack):
             self, "InitialSync",
             service_token=initial_sync_provider.service_token,
             properties={
-                "banking_kb_id": banking_kb.attr_knowledge_base_id,
                 "insurance_kb_id": insurance_kb.attr_knowledge_base_id,
-                "banking_ds_id": banking_kb.data_source_id,
                 "insurance_ds_id": insurance_kb.data_source_id
             }
         )
 
         # Add dependencies for initial sync
-        initial_sync.node.add_dependency(banking_kb)
         initial_sync.node.add_dependency(insurance_kb)
         initial_sync.node.add_dependency(initial_sync_function)
 
@@ -989,11 +838,7 @@ class FinalCdkStack(Stack):
                 s3_client.head_bucket(Bucket=s3_bucket_name)
                 print(f"Bucket {s3_bucket_name} exists, adding event notifications...")
                 
-                self.data_bucket.add_event_notification(
-                    s3.EventType.OBJECT_CREATED,
-                    s3n.LambdaDestination(auto_sync_function),
-                    s3.NotificationKeyFilter(prefix="kb/bank/")
-                )
+                self.data_bucket
                 
                 self.data_bucket.add_event_notification(
                     s3.EventType.OBJECT_CREATED,
@@ -1158,13 +1003,7 @@ class FinalCdkStack(Stack):
     'set -e',
     '',
     'export DEBIAN_FRONTEND=noninteractive',
-    'echo "Getting database credentials from Secrets Manager..."',    
-    'sudo apt-get update -y',
-    'sudo apt-get install -y postgresql postgresql-contrib',
-    '# Start and enable PostgreSQL',
-    'sudo systemctl enable postgresql',
-    'sudo systemctl start postgresql',
-    "sudo systemctl restart postgresql || echo 'PostgreSQL restart failed'",
+    'echo "Getting database credentials from Secrets Manager..."',
     f'SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "{secret_name}" --query SecretString --output text --region {self.region})',
     'echo "$SECRET_JSON"',
     'DB_HOST=$(echo "$SECRET_JSON" | jq -r .host)',
@@ -1411,8 +1250,6 @@ class FinalCdkStack(Stack):
             "CHAT_LOG_TABLE": "ce_cexp_logs",
             "KB_ID": insurance_kb.attr_knowledge_base_id,  # Insurance KB ID
             "RETAIL_KB_ID": "EPCDJQTW5Q",
-            "bank_kb_id": banking_kb.attr_knowledge_base_id,  # Banking KB ID
-            "banking_chat_history_table": "banking_chat_history",
             "chat_history_table": "chat_history",
             "db_database": rds_name_key,
             "db_host": db_instance.instance_endpoint.hostname,
@@ -2086,20 +1923,6 @@ class FinalCdkStack(Stack):
 
         CfnOutput(
             self,
-            "BankingOpenSearchCollectionArn",
-            value=banking_collection.attr_arn,
-            description="ARN of the Banking OpenSearch Serverless collection"
-        )
-
-        CfnOutput(
-            self,
-            "BankingOpenSearchCollectionEndpoint",
-            value=banking_collection.attr_collection_endpoint,
-            description="Endpoint of the Banking OpenSearch Serverless collection"
-        )
-
-        CfnOutput(
-            self,
             "InsuranceOpenSearchCollectionArn",
             value=insurance_collection.attr_arn,
             description="ARN of the Insurance OpenSearch Serverless collection"
@@ -2114,23 +1937,9 @@ class FinalCdkStack(Stack):
 
         CfnOutput(
             self,
-            "BankingKnowledgeBaseId",
-            value=banking_kb.attr_knowledge_base_id,
-            description="ID of the Banking Knowledge Base"
-        )
-
-        CfnOutput(
-            self,
             "InsuranceKnowledgeBaseId",
             value=insurance_kb.attr_knowledge_base_id,
             description="ID of the Insurance Knowledge Base"
-        )
-
-        CfnOutput(
-            self,
-            "BankingDataSourceId",
-            value=banking_kb.data_source_id,
-            description="ID of the Banking Data Source"
         )
 
         CfnOutput(
@@ -2147,12 +1956,12 @@ class FinalCdkStack(Stack):
             description="ARN of the Auto-Sync Lambda function"
         )
 
-        CfnOutput(
-            self,
-            "ManualSyncInstructions",
-            value=f"To manually trigger sync: aws lambda invoke --function-name {auto_sync_function.function_name} --payload '{{\"Records\":[{{\"eventSource\":\"aws:s3\",\"s3\":{{\"bucket\":{{\"name\":\"{s3_bucket_name}\"}},\"object\":{{\"key\":\"bank/test.pdf\"}}}}}}]}}' response.json",
-            description="Command to manually trigger knowledge base sync if S3 events don't work"
-        )
+        # CfnOutput(
+        #     self,
+        #     "ManualSyncInstructions",
+        #     value=f"To manually trigger sync: aws lambda invoke --function-name {auto_sync_function.function_name} --payload '{{\"Records\":[{{\"eventSource\":\"aws:s3\",\"s3\":{{\"bucket\":{{\"name\":\"{s3_bucket_name}\"}},\"object\":{{\"key\":\"bank/test.pdf\"}}}}}}]}}' response.json",
+        #     description="Command to manually trigger knowledge base sync if S3 events don't work"
+        # )
 
         CfnOutput(
             self,
