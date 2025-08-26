@@ -392,7 +392,7 @@ class BankingCdkStack(Stack):
         frontend_bucket_name = "genaifoundry-front"+name_key
         voiceops_bucket_name = "voiceop"+name_key
         
-        # Main bucket for knowledge base data
+        # Main bucket for knowledge base data   
         bucket = s3.Bucket(
             self, 
             "KnowledgeBaseBucket",
@@ -753,7 +753,7 @@ class BankingCdkStack(Stack):
 
         # Create both knowledge bases - POSITIONED LAST IN THE FLOW
         banking_kb = self.create_kb(
-            "genaifoundrybank-1",
+            f"genaifoundrybank-{name_key}",
             f"s3://{s3_bucket_name}/kb/bank/",
             model_arn,
             bedrock_kb_role.role_arn,

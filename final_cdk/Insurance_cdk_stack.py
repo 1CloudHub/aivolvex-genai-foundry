@@ -755,7 +755,7 @@ class InsuranceCdkStack(Stack):
         # Create both knowledge bases - POSITIONED LAST IN THE FLOW
 
         insurance_kb = self.create_kb(
-            "genaifoundryinsurance-1",
+            f"genaifoundryinsurance-{name_key}",
             f"s3://{s3_bucket_name}/kb/insurance/",
             model_arn,
             bedrock_kb_role.role_arn,
