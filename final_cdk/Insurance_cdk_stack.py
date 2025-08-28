@@ -1004,6 +1004,12 @@ class InsuranceCdkStack(Stack):
     '',
     'export DEBIAN_FRONTEND=noninteractive',
     'echo "Getting database credentials from Secrets Manager..."',
+    'sudo apt-get update -y',
+    'sudo apt-get install -y postgresql postgresql-contrib',
+    '# Start and enable PostgreSQL',
+    'sudo systemctl enable postgresql',
+    'sudo systemctl start postgresql',
+    "sudo systemctl restart postgresql || echo 'PostgreSQL restart failed'",
     f'SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "{secret_name}" --query SecretString --output text --region {self.region})',
     'echo "$SECRET_JSON"',
     'DB_HOST=$(echo "$SECRET_JSON" | jq -r .host)',
@@ -1262,7 +1268,6 @@ class InsuranceCdkStack(Stack):
             "prompt_metadata_table": "prompt_metadata",
             "region_used": self.region,
             "region_name": self.region,  # New environment variable for region name
-            "retail_chat_history_table": "retail_chat_history",
             "schema": "genaifoundry",
             "voiceops_bucket_name": voiceops_bucket_name,  # New environment variable for voice operations bucket
             "ec2_instance_ip": ec2_instance.instance_public_ip,  # Public IP of the T3 medium instance
@@ -1279,7 +1284,7 @@ class InsuranceCdkStack(Stack):
         lambda_function = lambda_.Function(
             self, "MyLambdaFunction",
             runtime=lambda_.Runtime.PYTHON_3_9,
-            handler="working.lambda_handler",
+            handler="insurance.lambda_handler",
             code=lambda_.Code.from_asset("lambda_code"),
             function_name=lambda_name_key,
             memory_size=128,

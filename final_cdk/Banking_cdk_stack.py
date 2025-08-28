@@ -1255,7 +1255,6 @@ class BankingCdkStack(Stack):
         # Now define environment variables after API Gateway is created
         env_vars = {
             "CHAT_LOG_TABLE": "ce_cexp_logs",
-            "RETAIL_KB_ID": "EPCDJQTW5Q",
             "bank_kb_id": banking_kb.attr_knowledge_base_id,  # Banking KB ID
             "banking_chat_history_table": "banking_chat_history",
             "chat_history_table": "chat_history",
@@ -1263,10 +1262,10 @@ class BankingCdkStack(Stack):
             "db_host": db_instance.instance_endpoint.hostname,
             "db_port": "5432",
             "db_user": "postgres",
-            "hr_kb_id": "5VLRLLOZWO",
+            #"hr_kb_id": "5VLRLLOZWO",
             "model_id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
             "perplexity_api_key": "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",
-            "product_kb_id": "BLGSVQOACP",
+            #"product_kb_id": "BLGSVQOACP",
             "prompt_metadata_table": "prompt_metadata",
             "region_used": self.region,
             "region_name": self.region,  # New environment variable for region name
@@ -1287,7 +1286,7 @@ class BankingCdkStack(Stack):
         lambda_function = lambda_.Function(
             self, "MyLambdaFunction",
             runtime=lambda_.Runtime.PYTHON_3_9,
-            handler="working.lambda_handler",
+            handler="banking.lambda_handler",
             code=lambda_.Code.from_asset("lambda_code"),
             function_name=lambda_name_key,
             memory_size=128,
