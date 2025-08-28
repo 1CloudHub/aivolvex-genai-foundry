@@ -19,24 +19,16 @@ def create_cdk_app():
     # Create CDK app instance
     app = cdk.App()
     
-    # Common environment configuration
-    env = cdk.Environment(
-        account=os.getenv('CDK_DEFAULT_ACCOUNT'), 
-        region=os.getenv('CDK_DEFAULT_REGION')
-    )
-    
     # Create Banking Stack
     BankingCdkStack(
-        app, 
-        "GenAiFoundryBankingStack",
-        env=env
+        app,
+        "BankingCdkStack"
     )
     
     # Create Insurance Stack
     InsuranceCdkStack(
-        app, 
-        "GenAiFoundryInsuranceStack",
-        env=env
+        app,
+        "InsuranceCdkStack"
     )
     
     return app
@@ -48,9 +40,6 @@ def main():
     """
     # Create the CDK app
     app = create_cdk_app()
-    
-    # Synthesize the app (generate CloudFormation templates)
-    app.synth()
 
 if __name__ == "__main__":
     main()
