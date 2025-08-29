@@ -20,5 +20,12 @@
     "ap-southeast-1b",
     "ap-southeast-1c"
   ],
-  "ami:account=455389024925:filters.image-type.0=machine:filters.name.0=Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.7 (Ubuntu 22.04)*:filters.state.0=available:owners.0=amazon:region=ap-southeast-1": "ami-010b05bb17caf09e7"
+  "ami:account=455389024925:filters.image-type.0=machine:filters.name.0=Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.7 (Ubuntu 22.04)*:filters.state.0=available:owners.0=amazon:region=ap-southeast-1": "ami-010b05bb17caf09e7",
+  "availability-zones:account=675379425271:region=us-west-2": [
+    "us-west-2a",
+    "us-west-2b",
+    "us-west-2c",
+    "us-west-2d"
+  ],
+  "ami:account=675379425271:filters.image-type.0=machine:filters.name.0=Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.7 (Ubuntu 22.04)*:filters.state.0=available:owners.0=amazon:region=us-west-2": "ami-0f8a884a3f69a1992"
 }

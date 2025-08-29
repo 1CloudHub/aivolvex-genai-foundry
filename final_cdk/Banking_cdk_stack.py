@@ -1256,8 +1256,8 @@ class BankingCdkStack(Stack):
         env_vars = {
             "CHAT_LOG_TABLE": "ce_cexp_logs",
             "bank_kb_id": banking_kb.attr_knowledge_base_id,  # Banking KB ID
-            "banking_chat_history_table": "banking_chat_history",
-            "chat_history_table": "chat_history",
+            "banking_chat_history": "banking_chat_history",
+            "chat_history": "chat_history",
             "db_database": rds_name_key,
             "db_host": db_instance.instance_endpoint.hostname,
             "db_port": "5432",

@@ -38,16 +38,11 @@ def deploy_stack(stack_name: str) -> None:
     print("⏳ This may take several minutes...")
     
     try:
-        # First synthesize the app
-        print("📝 Synthesizing CloudFormation template...")
-        subprocess.run(["cdk", "synth", stack_name], check=True)
         
         # Then deploy
         print("🌐 Deploying to AWS...")
-        subprocess.run(
-            ["cdk", "deploy", stack_name, "--require-approval", "never"], 
-            check=True
-        )
+        subprocess.run(f"cdk deploy {stack_name} --require-approval never", shell=True, check=True)
+
         
         print(f"✅ Stack '{stack_name}' deployed successfully!")
         
@@ -95,4 +90,5 @@ def main() -> None:
     deploy_stack(STACKS[choice]["stack_name"])
 
 if __name__ == "__main__":
+
     main()

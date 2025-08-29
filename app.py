@@ -23,7 +23,10 @@ def create_cdk_app():
     BankingCdkStack(
         app,
         "GenAiFoundryBankingStack",
-         env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION'))
+         env=cdk.Environment(
+            account=os.getenv('CDK_DEFAULT_ACCOUNT'),
+            region=os.getenv('CDK_DEFAULT_REGION')
+             )
     )
     
     # Create Insurance Stack
@@ -42,6 +45,8 @@ def main():
     """
     # Create the CDK app
     app = create_cdk_app()
+
+    app.synth()
 
 if __name__ == "__main__":
     main()

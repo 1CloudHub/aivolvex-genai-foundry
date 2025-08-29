@@ -1003,7 +1003,7 @@ class InsuranceCdkStack(Stack):
     'set -e',
     '',
     'export DEBIAN_FRONTEND=noninteractive',
-    'echo "Getting database credentials from Secrets Manager..."',
+    'echo "Getting database credentials from Secrets Manager..."',    
     'sudo apt-get update -y',
     'sudo apt-get install -y postgresql postgresql-contrib',
     '# Start and enable PostgreSQL',
@@ -1085,7 +1085,7 @@ class InsuranceCdkStack(Stack):
     #'sudo su - ubuntu -c "/home/ubuntu/restore_db.sh" > /var/log/db_restore.log 2>&1',
     "sleep 30",
     'sudo su - ubuntu -c "/home/ubuntu/voice_bot.sh" > /var/log/voice_bot.log 2>&1'
-        )
+    )
 
         # Get the secret name that will be created (this is available at synthesis time)
 
