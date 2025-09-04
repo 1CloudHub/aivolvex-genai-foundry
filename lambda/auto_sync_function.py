@@ -15,11 +15,13 @@ def handler(event, context):
     # Get environment variables
     banking_kb_id = os.environ.get('BANKING_KB_ID')
     insurance_kb_id = os.environ.get('INSURANCE_KB_ID')
+    retail_kb_id = os.environ.get('RETAIL_KB_ID')
     banking_ds_id = os.environ.get('BANKING_DS_ID')
     insurance_ds_id = os.environ.get('INSURANCE_DS_ID')
+    retail_ds_id = os.environ.get('RETAIL_DS_ID')
     
-    print(f"Environment variables - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}")
-    print(f"Environment variables - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}")
+    print(f"Environment variables - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}")
+    print(f"Environment variables - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}")
     print(f"Event: {json.dumps(event)}")
     
     try:
@@ -50,8 +52,12 @@ def handler(event, context):
                     kb_id = insurance_kb_id
                     ds_id = insurance_ds_id
                     kb_type = "Insurance"
+                elif object_key.startswith('kb/retail/') or object_key.startswith('retail/'):
+                    kb_id = retail_kb_id
+                    ds_id = retail_ds_id
+                    kb_type = "Retail"
                 else:
-                    print(f"Object {object_key} doesn't match any knowledge base prefix (bank/ or insurance/)")
+                    print(f"Object {object_key} doesn't match any knowledge base prefix (bank/, insurance/, kb/retail/)")
                     continue
                 
                 if not kb_id or not ds_id:

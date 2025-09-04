@@ -1,0 +1,40 @@
+{
+  "id": "digital-camera-001",
+  "title": "Digital Camera",
+  "description": "This is a black Nikon COOLPIX digital camera featuring a large zoom lens with a distinctive yellow-green anti-reflective coating visible on the front element. The camera has a compact bridge-style design with Nikon branding prominently displayed on the top and COOLPIX on the front grip area, textured handgrip for secure handling, and appears to be designed for versatile photography with its substantial telephoto zoom capability.",
+  "category": "Electronics",
+  "subcategory": "Cameras",
+  "product_type": "Digital Camera",
+  "brand": "Digital Snap",
+  "price_range": "$200-$600",
+  "features": [
+    "High-Resolution Sensor",
+    "Optical Zoom",
+    "Image Stabilization",
+    "Auto Scene Detection",
+    "HD Video Recording",
+    "Compact Design"
+  ],
+  "image_url": "https://m.media-amazon.com/images/I/71s89wc2L5L._AC_SX679_.jpg",
+  "tags": [
+    "digital camera",
+    "compact",
+    "photography",
+    "travel",
+    "point-and-shoot",
+    "optical zoom",
+    "image stabilization"
+  ],
+  "specifications": {
+    "sensor_type": "1/2.3 inch CMOS",
+    "megapixels": "16-24MP",
+    "optical_zoom": "10-30x",
+    "lcd_screen": "3 inch",
+    "weight": "200-400g"
+  },
+  "rating": 4.5,
+  "review_count": 1200,
+  "availability": "In Stock",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+} 

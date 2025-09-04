@@ -1,0 +1,40 @@
+{
+  "id": "running-shoes-001",
+  "title": "Running Shoes",
+  "description": "This is a navy blue athletic sneaker with a knit mesh upper featuring ribbed texture details and a slip-on design with elastic lacing system. The shoe has a white chunky sole with a textured grip pattern and appears designed for comfort and casual athletic wear",
+  "category": "Sports & Fitness",
+  "subcategory": "Athletic Footwear",
+  "product_type": "Running Shoes",
+  "brand": "Run Fast",
+  "price_range": "$80-$150",
+  "features": [
+    "Advanced Cushioning",
+    "Breathable Mesh Upper",
+    "Responsive Sole",
+    "Lightweight Design",
+    "Arch Support",
+    "Durable Outsole"
+  ],
+  "image_url": "https://m.media-amazon.com/images/I/717hkMu0x2L._AC_SX675_.jpg",
+  "tags": [
+    "running",
+    "shoes",
+    "athletic",
+    "performance",
+    "cushioning",
+    "breathable",
+    "lightweight"
+  ],
+  "specifications": {
+    "material": "Mesh and Synthetic",
+    "sole_material": "Rubber",
+    "drop_height": "8-12mm",
+    "weight": "200-300g per shoe",
+    "terrain": "Road/Track"
+  },
+  "rating": 4.6,
+  "review_count": 2800,
+  "availability": "In Stock",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+} 

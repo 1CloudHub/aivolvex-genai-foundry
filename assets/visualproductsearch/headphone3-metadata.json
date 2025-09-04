@@ -1,0 +1,41 @@
+{
+  "id": "razer-gaming-headset-001",
+  "title": "Razer Gaming Headset",
+  "description": "This is a bright green gaming headset with black ear cup padding and headband cushioning, featuring an adjustable boom microphone and what appears to be Razer branding on the headband. The headset has a wired design with a black cable and combines the vibrant green exterior with black accents for a gaming-focused aesthetic.",
+  "category": "Electronics",
+  "subcategory": "Gaming Accessories",
+  "product_type": "Gaming Headset",
+  "brand": "Razer",
+  "price_range": "$80-$150",
+  "features": [
+    "Detachable Microphone",
+    "Bright Green Design",
+    "Padded Ear Cups",
+    "Adjustable Headband",
+    "Razer Branding",
+    "Gaming Optimized"
+  ],
+  "image_url": "https://m.media-amazon.com/images/I/61GywIq-pwL._SX679_.jpg",
+  "tags": [
+    "razer",
+    "gaming",
+    "headset",
+    "green",
+    "microphone",
+    "gaming accessories",
+    "esports"
+  ],
+  "specifications": {
+    "connectivity": "Wired/USB",
+    "microphone": "Detachable",
+    "brand": "Razer",
+    "color": "Bright Green/Black",
+    "compatibility": "PC, PS4, PS5, Xbox, Mobile",
+    "weight": "300-400g"
+  },
+  "rating": 4.5,
+  "review_count": 1250,
+  "availability": "In Stock",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+} 

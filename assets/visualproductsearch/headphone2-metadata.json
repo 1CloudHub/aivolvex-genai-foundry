@@ -1,0 +1,40 @@
+{
+  "id": "premium-headphones-001",
+  "title": "Premium Headphones",
+  "description": "This is a black Sennheiser HD 559 over-ear headphone with an open-back design, featuring large padded ear cups with silver accent rings and an adjustable black headband with SENNHEISER branding. The headphones have a detachable black cable and are designed for audiophile listening with their distinctive open-back acoustic design for natural sound reproduction",
+  "category": "Electronics",
+  "subcategory": "Audio Equipment",
+  "product_type": "Headphones",
+  "brand": "Audio Pro",
+  "price_range": "$200-$500",
+  "features": [
+    "Studio Quality Audio",
+    "Premium Materials",
+    "Comfortable Over-Ear Design",
+    "Detachable Cable",
+    "Foldable Design",
+    "Carrying Case Included"
+  ],
+  "image_url": "https://m.media-amazon.com/images/I/41nCPANcDKL._SX300_SY300_QL70_FMwebp_.jpg",
+  "tags": [
+    "premium",
+    "headphones",
+    "audio",
+    "studio",
+    "professional",
+    "audiophile",
+    "music"
+  ],
+  "specifications": {
+    "connectivity": "Wired/Bluetooth",
+    "driver_size": "40-50mm",
+    "impedance": "32-64 ohms",
+    "frequency_response": "20Hz-20kHz",
+    "weight": "250-350g"
+  },
+  "rating": 4.8,
+  "review_count": 890,
+  "availability": "In Stock",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+} 

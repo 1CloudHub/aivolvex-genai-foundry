@@ -1,0 +1,40 @@
+{
+  "id": "comfort-sneakers-001",
+  "title": "Comfort Sneakers",
+  "description": "This is a black Skechers athletic sneaker featuring a mesh and synthetic upper with the brand's signature S logo on the side. It has a traditional lace-up closure, pull tab at the heel, and a black cushioned sole designed for comfort and casual wear.",
+  "category": "Fashion",
+  "subcategory": "Footwear",
+  "product_type": "Sneakers",
+  "brand": "Comfort Walk",
+  "price_range": "$60-$120",
+  "features": [
+    "Cushioned Sole",
+    "Breathable Mesh Upper",
+    "Lightweight Design",
+    "Slip-on Style",
+    "Memory Foam Insole",
+    "Durable Construction"
+  ],
+  "image_url": "https://m.media-amazon.com/images/I/61MCamA1sjL._AC_SY675_.jpg",
+  "tags": [
+    "sneakers",
+    "comfort",
+    "casual",
+    "walking",
+    "lightweight",
+    "breathable",
+    "slip-on"
+  ],
+  "specifications": {
+    "material": "Mesh and Synthetic",
+    "sole_material": "Rubber",
+    "closure": "Slip-on",
+    "heel_height": "1 inch",
+    "weight": "250-350g per shoe"
+  },
+  "rating": 4.6,
+  "review_count": 2100,
+  "availability": "In Stock",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+} 

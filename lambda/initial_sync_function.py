@@ -28,11 +28,13 @@ def handler(event, context):
         # Get knowledge base and data source IDs
         banking_kb_id = properties.get('banking_kb_id') or os.environ.get('BANKING_KB_ID')
         insurance_kb_id = properties.get('insurance_kb_id') or os.environ.get('INSURANCE_KB_ID')
+        retail_kb_id = properties.get('retail_kb_id') or os.environ.get('RETAIL_KB_ID')
         banking_ds_id = properties.get('banking_ds_id') or os.environ.get('BANKING_DS_ID')
         insurance_ds_id = properties.get('insurance_ds_id') or os.environ.get('INSURANCE_DS_ID')
+        retail_ds_id = properties.get('retail_ds_id') or os.environ.get('RETAIL_DS_ID')
         
-        print(f"Initial sync - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}")
-        print(f"Initial sync - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}")
+        print(f"Initial sync - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}")
+        print(f"Initial sync - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}")
         
         # Sync both knowledge bases
         sync_results = {}
@@ -58,6 +60,17 @@ def handler(event, context):
             except Exception as e:
                 print(f"Error syncing Insurance Knowledge Base: {str(e)}")
                 sync_results['insurance'] = {'error': str(e)}
+
+        # Sync Retail Knowledge Base
+        if retail_kb_id and retail_ds_id:
+            try:
+                print(f"Starting initial sync for Retail Knowledge Base...")
+                sync_results['retail'] = sync_knowledge_base(
+                    bedrock_agent, retail_kb_id, retail_ds_id, "Retail"
+                )
+            except Exception as e:
+                print(f"Error syncing Retail Knowledge Base: {str(e)}")
+                sync_results['retail'] = {'error': str(e)}
         
         print(f"Initial sync completed: {json.dumps(sync_results)}")
         

@@ -1,0 +1,40 @@
+{
+  "id": "slip-on-shoes-001",
+  "title": "Slip-on Shoes",
+  "description": "This is a beige/tan colored slip-on shoe with a canvas or fabric upper featuring a textured weave pattern and leather accents around the collar and side panels. The shoe has a white flexible sole with a dotted pattern around the edge and segmented tread design for comfort and traction.",
+  "category": "Fashion",
+  "subcategory": "Footwear",
+  "product_type": "Slip-on Shoes",
+  "brand": "Classic Style",
+  "price_range": "$40-$80",
+  "features": [
+    "Elastic Side Panels",
+    "Easy Slip-on Design",
+    "Comfortable Fit",
+    "Versatile Style",
+    "Durable Construction",
+    "Classic Design"
+  ],
+  "image_url": "https://m.media-amazon.com/images/I/51pLHsAXyhL._AC_SY675_.jpg",
+  "tags": [
+    "slip-on",
+    "shoes",
+    "casual",
+    "versatile",
+    "comfortable",
+    "classic",
+    "easy-wear"
+  ],
+  "specifications": {
+    "material": "Canvas/Leather",
+    "sole_material": "Rubber",
+    "closure": "Slip-on",
+    "heel_height": "0.5 inch",
+    "weight": "200-300g per shoe"
+  },
+  "rating": 4.4,
+  "review_count": 1800,
+  "availability": "In Stock",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+} 

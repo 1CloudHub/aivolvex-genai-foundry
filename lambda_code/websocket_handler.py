@@ -55,7 +55,6 @@ def send_private_message(connectionId, body):
 
 def lambda_handler(event, context):
 
-    print("LLLLLLLLLLL", event)
     connection_id = event['requestContext']['connectionId']
     route_key = event['requestContext']['routeKey']
     

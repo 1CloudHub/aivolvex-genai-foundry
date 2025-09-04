@@ -1,0 +1,40 @@
+{
+  "id": "gaming-headset-001",
+  "title": "Gaming Headset",
+  "description": "This is a white gaming headset with black padding, featuring over-ear design with adjustable headband and a detachable boom microphone. The headset has blue accent lighting/trim, displays what appears to be a HyperX logo on the ear cup, and includes a white cable for connectivity.",
+  "category": "Electronics",
+  "subcategory": "Gaming Accessories",
+  "product_type": "Headset",
+  "brand": "Gaming Audio",
+  "price_range": "$50-$150",
+  "features": [
+    "Surround Sound",
+    "Noise Canceling Microphone",
+    "Comfortable Ear Cushions",
+    "Adjustable Headband",
+    "RGB Lighting",
+    "Compatible with PC, PS4, PS5, Xbox"
+  ],
+  "image_url": "https://m.media-amazon.com/images/I/61GywIq-pwL._SX679_.jpg",
+  "tags": [
+    "gaming",
+    "headset",
+    "audio",
+    "microphone",
+    "surround sound",
+    "gaming accessories",
+    "esports"
+  ],
+  "specifications": {
+    "connectivity": "Wired/USB",
+    "microphone": "Yes",
+    "noise_canceling": "Yes",
+    "compatibility": "PC, PS4, PS5, Xbox, Mobile",
+    "weight": "300-400g"
+  },
+  "rating": 4.5,
+  "review_count": 1250,
+  "availability": "In Stock",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+} 

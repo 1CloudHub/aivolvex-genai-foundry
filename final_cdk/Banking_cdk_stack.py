@@ -696,7 +696,7 @@ class BankingCdkStack(Stack):
         banking_index_creator_function = lambda_.Function(
             self, "BankingIndexCreatorFunction",
             runtime=lambda_.Runtime.PYTHON_3_9,
-            handler="lambda_function.lambda_handler",
+            handler="index_creator.lambda_handler",
             role=lambda_role,
             timeout=Duration.minutes(10),
             environment={

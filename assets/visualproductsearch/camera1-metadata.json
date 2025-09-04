@@ -1,0 +1,40 @@
+{
+  "id": "dslr-camera-001",
+  "title": "DSLR Camera",
+  "description": "This is a black Canon EOS Rebel T7 DSLR camera with the Canon EF-S 18-55mm f/3.5-5.6 IS II kit lens attached, featuring the classic DSLR body design with mode dial, control buttons, and LCD screen on the back. The camera displays Canon's signature branding on the front pentaprism housing, has a textured grip for secure handling, and the lens shows the characteristic blue-tinted front element with zoom and focus rings visible around the barrel",
+  "category": "Electronics",
+  "subcategory": "Cameras",
+  "product_type": "DSLR Camera",
+  "brand": "Photo Pro",
+  "price_range": "$500-$1500",
+  "features": [
+    "High-Resolution Sensor",
+    "Interchangeable Lenses",
+    "Advanced Auto Focus",
+    "Manual Controls",
+    "HD Video Recording",
+    "Built-in Flash"
+  ],
+  "image_url": "https://m.media-amazon.com/images/I/61BKYlNqH6L._AC_SX679_.jpg",
+  "tags": [
+    "dslr",
+    "camera",
+    "photography",
+    "professional",
+    "interchangeable lenses",
+    "high-resolution",
+    "manual controls"
+  ],
+  "specifications": {
+    "sensor_type": "APS-C or Full Frame",
+    "megapixels": "20-30MP",
+    "iso_range": "100-25600",
+    "lens_mount": "EF/EF-S or F-mount",
+    "weight": "500-800g (body only)"
+  },
+  "rating": 4.7,
+  "review_count": 950,
+  "availability": "In Stock",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+} 
