@@ -726,11 +726,11 @@ class RetailCdkStack(Stack):
         retail_collection.add_dependency(retail_data_access_policy)
 
 
-         # 4) Combined data access policy for collection, index, and model permissions
-        visual_search_data_access_policy = aoss.CfnAccessPolicy(
+         # 4) Data access policy for collection and index permissions (Rule 1)
+        visual_search_collection_index_policy = aoss.CfnAccessPolicy(
             self,
-            "VisualSearchDataAccessPolicy",
-            name=f"vs-data-policy-{name_key}",
+            "VisualSearchCollectionIndexPolicy",
+            name=f"vs-col-idx-policy-{name_key}",
             type="data",
             policy=json.dumps([{
                 "Rules": [
@@ -746,7 +746,7 @@ class RetailCdkStack(Stack):
                     },
                     {
                         "ResourceType": "index",
-                        "Resource": [f"index/visualproductsearch-{name_key}/*"],
+                        "Resource": [f"index/visualproductsearch-{name_key}/visualproductsearchmod-{name_key}"],
                         "Permission": [
                             "aoss:CreateIndex",
                             "aoss:DeleteIndex",
@@ -754,17 +754,6 @@ class RetailCdkStack(Stack):
                             "aoss:DescribeIndex",
                             "aoss:ReadDocument",
                             "aoss:WriteDocument"
-                        ]
-                    },
-                    {
-                        "ResourceType": "model",
-                        "Resource": [f"model/visualproductsearch-{name_key}/*"],
-                        "Permission": [
-                            "aoss:DescribeMLResource",
-                            "aoss:CreateMLResource",
-                            "aoss:UpdateMLResource",
-                            "aoss:DeleteMLResource",
-                            "aoss:ExecuteMLResource"
                         ]
                     }
                 ],
@@ -777,7 +766,38 @@ class RetailCdkStack(Stack):
             }])
         )
 
-        visual_search_collection.add_dependency(visual_search_data_access_policy)
+        # 5) Data access policy for model permissions (Rule 2)
+        visual_search_model_policy = aoss.CfnAccessPolicy(
+            self,
+            "VisualSearchModelPolicy",
+            name=f"vs-model-policy-{name_key}",
+            type="data",
+            policy=json.dumps([{
+                "Rules": [
+                    {
+                        "ResourceType": "model",
+                        "Resource": [f"model/visualproductsearch-{name_key}/*"],
+                        "Permission": [
+                            "aoss:CreateMLResource",
+                            "aoss:DeleteMLResource",
+                            "aoss:UpdateMLResource",
+                            "aoss:DescribeMLResource",
+                            "aoss:ExecuteMLResource"
+                        ]
+                    }
+                ],
+                "Principal": [
+                    f"arn:aws:iam::{self.account}:role/{lambda_role.role_name}",
+                    current_user_arn,
+                    f"arn:aws:iam::{self.account}:role/{auto_sync_lambda_role.role_name}",
+                    f"arn:aws:iam::{self.account}:role/{bedrock_kb_role.role_name}"
+                ]
+            }])
+        )
+
+        # Add dependencies for both policies
+        visual_search_collection.add_dependency(visual_search_collection_index_policy)
+        visual_search_collection.add_dependency(visual_search_model_policy)
 
         # Create Lambda function to create OpenSearch indices
         # Get the current directory where this file is located

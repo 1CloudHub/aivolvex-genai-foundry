@@ -97,6 +97,35 @@ ub_user_name = "none"
 ub_number = "none"
 str_intent = "false"
 
+
+def extract_sections(llm_response):
+    # Define the regular expression pattern for each section
+    patterns = {
+    "Topic": r'"Topic":\s*"([^"]+)"',  
+    "Conversation Type": r'"Conversation Type":\s*"([^"]+)"',
+    "Conversation Summary Explanation": r'"Conversation Summary Explanation":\s*"([^"]+)"',
+    "Detailed Summary": r'"Detailed Summary":\s*"([^"]+)"',
+    "Conversation Sentiment": r'"Conversation Sentiment":\s*"([^"]+)"',
+    "Conversation Sentiment Generated Details" :r'"Conversation Sentiment Generated Details":\s*"([^"]+)"',
+    "Lead Sentiment": r'"Lead Sentiment":\s*"([^"]+)"',
+    "Leads Generated Details": r'"Leads Generated Details":\s*"([^"]+)"',
+    "Action to be Taken": r'"Action to be Taken":\s*"([^"]+)"',
+    "Whatsapp Creation": r'"Whatsapp Creation":\s*"([^"]+)"'    
+    }
+
+    extracted_data = {}
+    for key, pattern in patterns.items():
+        match = re.search(pattern, llm_response, re.DOTALL)
+        if match:
+            extracted_data[key] = match.group(1)
+
+    if len(extracted_data) > 0:
+        print("EXTRACTED Data:", extracted_data)  
+        return extracted_data
+    else:
+        return None
+
+
 def describe_image(event):
     print("PRODUCT IMAGE ANALYSIS STARTED")
 
@@ -2575,7 +2604,7 @@ these are the keys to be always used while returning response. Strictly do not a
 
             LLAMA_REGION = region_used
             
-            def enhance_prompt_function(simple_prompt):
+            def enhance_prompt_function(simple_prompt, model_id):
                 import boto3
                 client = boto3.client("bedrock-runtime", region_name=LLAMA_REGION)
 
@@ -2599,7 +2628,7 @@ User prompt: "{simple_prompt}"
                 
                 try:
                     response = client.invoke_model(
-                        modelId=LLAMA3_MODEL_ID,
+                        modelId=model_id,
                         body=json.dumps(request_body)
                     )
                     model_output = json.loads(response["body"].read())
@@ -2623,19 +2652,28 @@ User prompt: "{simple_prompt}"
                     negative_prompt = result.get("negativeText", "")
                     return text_prompt, negative_prompt
 
-                except json.JSONDecodeError:
-                    print("LLM response was not valid JSON.")
-                    print("Raw output: %s", generation)
+                except json.JSONDecodeError as e:
+                    print(f"LLM response was not valid JSON. Error: {e}")
+                    print(f"Raw output: {generation}")
+                    return None, None
                 except (ClientError, Exception) as e:
                     print(f"ERROR: Could not invoke Llama 3 model. Reason: {e}")
-                return None, None
+                    return None, None
             
-            text_prompt, negative_prompt = enhance_prompt_function(simple_prompt)
+            print(f"Enhancing prompt: '{simple_prompt}'")
+            print(f"Using model: {LLAMA3_MODEL_ID}")
+            print(f"Using region: {LLAMA_REGION}")
+            
+            text_prompt, negative_prompt = enhance_prompt_function(simple_prompt, LLAMA3_MODEL_ID)
+            
+            print(f"Enhanced text prompt: {text_prompt}")
+            print(f"Enhanced negative prompt: {negative_prompt}")
             
             if not text_prompt or not negative_prompt:
+                print("ERROR: Failed to get valid prompts from LLM")
                 return {
                     "statusCode": 500,
-                    "message": "Failed to enhance prompt"
+                    "message": "Failed to enhance prompt - LLM did not return valid prompts"
                 }
             
             return {
@@ -2648,6 +2686,8 @@ User prompt: "{simple_prompt}"
             
         except Exception as e:
             print(f"Error in enhance_prompt: {e}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
             return {
                 "statusCode": 500,
                 "message": f"Internal server error: {str(e)}"
@@ -2678,8 +2718,6 @@ User prompt: "{simple_prompt}"
                 from botocore.config import Config
                 from botocore.exceptions import ClientError
                 
-                # Configuration
-                LLAMA3_MODEL_ID = "us.meta.llama3-3-70b-instruct-v1:0"
                 LLAMA_REGION = "us-east-1"
                 
                 def extract_text_and_negative(direct_text):
