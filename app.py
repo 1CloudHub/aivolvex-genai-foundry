@@ -11,6 +11,7 @@ import aws_cdk as cdk
 from final_cdk.Banking_cdk_stack import BankingCdkStack
 from final_cdk.Insurance_cdk_stack import InsuranceCdkStack
 from final_cdk.Retail_cdk_stack import RetailCdkStack
+from final_cdk.Healthcare_cdk_stack import HealthcareCdkStack
 
 def create_cdk_app():
     """
@@ -46,7 +47,13 @@ def create_cdk_app():
             region=os.getenv('CDK_DEFAULT_REGION')
         )
     )
-    
+
+    # Create Healthcare Stack
+    HealthcareCdkStack(
+        app,
+        "GenAiFoundryHealthcareStack",
+        env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION'))
+    )
     return app
 
 def main():

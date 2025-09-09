@@ -1713,6 +1713,8 @@ class RetailCdkStack(Stack):
         rest_api_name = f"genaifoundry-api{name_key}"
         websocket_api_name = f"GenAIFoundry_ws{name_key}"
         bucket_name = frontend_bucket_name
+        kb_bucket_name = s3_bucket_name  # Knowledge base bucket name for S3_BUCKET_NAME
+        
         region = self.region
 
         ec2_instance_front.add_user_data(
@@ -1726,6 +1728,7 @@ class RetailCdkStack(Stack):
             f"export REST_API_NAME=\"{rest_api_name}\"",
             f"export WEBSOCKET_API_NAME=\"{websocket_api_name}\"",
             f"export BUCKET_NAME=\"{bucket_name}\"",
+            f"export S3_BUCKET_NAME=\"{kb_bucket_name}\"",
             f"export REGION=\"{region}\"",
             "",
             "# Helper function to check if a command exists",
@@ -1750,6 +1753,10 @@ class RetailCdkStack(Stack):
             "        missing_vars+=(\"BUCKET_NAME\")",
             "    fi",
             "   ",
+            "    if [[ -z \"${S3_BUCKET_NAME:-}\" ]]; then",
+            "        missing_vars+=(\"S3_BUCKET_NAME\")",
+            "    fi",
+            "   ",
             "    if [[ -z \"${REGION:-}\" ]]; then",
             "        missing_vars+=(\"REGION\")",
             "    fi",
@@ -1761,8 +1768,8 @@ class RetailCdkStack(Stack):
             "        echo \"Please export these variables before running the script:\"",
             "        echo \"  export REST_API_NAME=\\\"your-rest-api-name\\\"\"",
             "        echo \"  export WEBSOCKET_API_NAME=\\\"your-websocket-api-name\\\"\"",
-
-            "        echo \"  export BUCKET_NAME=\\\"your-s3-bucket-name\\\"\"",
+            "        echo \"  export BUCKET_NAME=\\\"your-frontend-s3-bucket-name\\\"\"",
+            "        echo \"  export S3_BUCKET_NAME=\\\"your-knowledge-base-s3-bucket-name\\\"\"",
             "        echo \"  export REGION=\\\"your-aws-region\\\"\"",
             "        exit 1",
             "    fi",
@@ -1776,6 +1783,7 @@ class RetailCdkStack(Stack):
             "echo \"  REST_API_NAME:        ${REST_API_NAME}\"",
             "echo \"  WEBSOCKET_API_NAME:   ${WEBSOCKET_API_NAME}\"",
             "echo \"  BUCKET_NAME:          ${BUCKET_NAME}\"",
+            "echo \"  S3_BUCKET_NAME:       ${S3_BUCKET_NAME}\"",
             "echo \"  REGION:               ${REGION}\"",
             "",
             "echo \"🔧 Checking and installing prerequisites...\"",
@@ -1899,11 +1907,12 @@ class RetailCdkStack(Stack):
             "",
             "update_env_var \"VITE_API_BASE_URL\" \"$VITE_API_BASE_URL\"",
             "update_env_var \"VITE_WEBSOCKET_URL\" \"$VITE_WEBSOCKET_URL\"",
+            "update_env_var \"S3_BUCKET_NAME\" \"$S3_BUCKET_NAME\"",
     
     
             "",
             "echo \"✅ .env updated. Current values:\"",
-            "grep -E \"VITE_API_BASE_URL|VITE_WEBSOCKET_URL\" \"$ENV_FILE\"",
+            "grep -E \"VITE_API_BASE_URL|VITE_WEBSOCKET_URL|S3_BUCKET_NAME\" \"$ENV_FILE\"",
             "",
             "# 🚧 Build the app",
             "echo \"⚙️ Running npm run build...\"",

@@ -16,12 +16,14 @@ def handler(event, context):
     banking_kb_id = os.environ.get('BANKING_KB_ID')
     insurance_kb_id = os.environ.get('INSURANCE_KB_ID')
     retail_kb_id = os.environ.get('RETAIL_KB_ID')
+    healthcare_kb_id = os.environ.get('HEALTHCARE_KB_ID')
     banking_ds_id = os.environ.get('BANKING_DS_ID')
     insurance_ds_id = os.environ.get('INSURANCE_DS_ID')
     retail_ds_id = os.environ.get('RETAIL_DS_ID')
+    healthcare_ds_id = os.environ.get('HEALTHCARE_DS_ID')
     
-    print(f"Environment variables - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}")
-    print(f"Environment variables - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}")
+    print(f"Environment variables - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}, Healthcare KB: {healthcare_kb_id}")
+    print(f"Environment variables - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}, Healthcare DS: {healthcare_ds_id}")
     print(f"Event: {json.dumps(event)}")
     
     try:
@@ -56,8 +58,12 @@ def handler(event, context):
                     kb_id = retail_kb_id
                     ds_id = retail_ds_id
                     kb_type = "Retail"
+                elif object_key.startswith('kb/healthcare/') or object_key.startswith('healthcare/'):
+                    kb_id = healthcare_kb_id
+                    ds_id = healthcare_ds_id
+                    kb_type = "Healthcare"
                 else:
-                    print(f"Object {object_key} doesn't match any knowledge base prefix (bank/, insurance/, kb/retail/)")
+                    print(f"Object {object_key} doesn't match any knowledge base prefix (bank/, insurance/, kb/retail/, kb/healthcare/)")
                     continue
                 
                 if not kb_id or not ds_id:

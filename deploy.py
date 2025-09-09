@@ -31,6 +31,10 @@ STACKS = {
     "🛍️ Retail Stack": {
         "stack_name": "GenAiFoundryRetailStack",
         "description": "Deploy retail-related infrastructure and services"
+    },
+    "🏥 Healthcare Stack": {
+        "stack_name": "GenAiFoundryHealthcareStack",
+        "description": "Deploy healthcare-related infrastructure and services"
     }
 }
 

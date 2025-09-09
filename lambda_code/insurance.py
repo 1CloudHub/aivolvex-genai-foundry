@@ -1878,6 +1878,305 @@ Return only the following JSON format (no markdown, no extra commentary):
 
     return json.loads(json_str)
 
+def kyc_extraction_api(event):
+
+    """
+
+    KYC Data Extraction API for extracting information from images/documents
+
+    """
+
+    try:
+
+        # Extract the single variable (document data only)
+
+        document_data = event.get('document_data', '')
+
+        session_id = event.get('session_id', str(uuid.uuid4()))
+
+       
+
+        if not document_data:
+
+            return {
+
+                "statusCode": 400,
+
+                "error": "document_data is required",
+
+                "session_id": session_id
+
+            }
+
+       
+
+        # Use the existing Bedrock client to process the KYC extraction
+
+        prompt_template = f"""You are a document data viewer, your task is to view the information provided to you. Before providing your answer, provide your reasoning or approach as if you have viewed the document and extracted that information in a  neat and clear manner.
+
+        below is the document data
+
+        {document_data}
+
+<reasoning>
+
+This is the obtained document that contains the information to be processed. My reasoning approach is to systematically scan through the document content and identify all relevant data fields, structured information, and key details present in the provided document.
+
+</reasoning>
+
+
+
+Please extract the information from the provided data like the sample data provided below
+
+<sample1>:
+
+<Reasoning>
+
+The document data have been provided and it seems like an identification card and iam going to extract the important fields from the provided document
+
+</Reasoning>
+
+<information>
+
+Identity Card Number: 123456789
+
+Name: MARIE JUMIO
+
+Race: CHINESE
+
+Sex: F
+
+Date of Birth: 1975-01-01
+
+Country of Birth: SINGAPORE
+
+</information>
+
+</sample1>
+
+<sample2>:
+
+<Reasoning>
+
+The provided document seems like to be set of three documents and there are discrepencies and matches present and they are
+
+</Reasoning>
+
+<information>
+
+
+
+## Matching Items
+
+- **Document Numbers**: PO-2025072401, INV-2025072401, and GRN-2025072401 match across all three documents
+
+- **Vendor**: FastSupply Co. is consistent across all documents
+
+- **Wireless Speaker Quantity**: 10 units consistently across all documents
+
+- **Wireless Speaker Price**: S$1,250.00 consistently across all documents
+
+
+
+## Discrepancies Found
+
+1. **USB Cable Quantity**:
+
+   - Purchase Order: 50 units
+
+   - Sales Invoice: 50 units
+
+   - Delivery Receipt: 48 units (2 units short)
+
+
+
+2. **USB Cable Price**:
+
+   - Purchase Order: S$45.00 per unit
+
+   - Sales Invoice: S$47.00 per unit (S$2.00 higher)
+
+   - Delivery Receipt: S$45.00 per unit
+
+
+
+3. **USB Cable Total**:
+
+   - Purchase Order: S$2,250.00
+
+   - Sales Invoice: S$2,350.00
+
+   - Delivery Receipt: S$2,160.00
+
+
+
+4. **Grand Total**:
+
+   - Purchase Order: S$14,750.00
+
+   - Sales Invoice: S$14,850.00
+
+   - Delivery Receipt: S$14,660.00
+
+
+
+</information>
+
+<sample2>
+
+<Note>
+
+1.Make sure to keep it soft and crisp and act like you are thinking and providing the information in  a neat and clean manner.
+
+2.Do not provide tags while responding and provide the response in mark down format
+
+3.Never show the information in table instead show it as list
+
+"""
+
+       
+
+        try:
+
+            # Prepare the request body for Bedrock
+
+            body = json.dumps({
+
+                "anthropic_version": "bedrock-2023-05-31",
+
+                "max_tokens": 4000,
+
+                "messages": [
+
+                    {
+
+                        "role": "user",
+
+                        "content": prompt_template
+
+                    }
+
+                ]
+
+            })
+
+           
+
+            # Call Bedrock using the same pattern as other functions
+
+            response = bedrock_client.invoke_model(
+
+                contentType='application/json',
+
+                body=body,
+
+                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+
+            )
+
+           
+
+            response_body = json.loads(response['body'].read())
+
+            extracted_data = response_body.get('content', [{}])[0].get('text', '')
+
+           
+
+            # Create response data
+
+            response_data = {
+
+                "extracted_kyc_data": extracted_data,
+
+                "timestamp": datetime.now().isoformat(),
+
+                "session_id": session_id
+
+            }
+
+           
+
+            # Log the KYC extraction
+
+            try:
+
+                log_query = """
+
+                    INSERT INTO {}.{} (session_id, query, response, timestamp, api_type)
+
+                    VALUES (%s, %s, %s, %s, %s)
+
+                """.format(schema, CHAT_LOG_TABLE)
+
+               
+
+                log_values = (
+
+                    session_id,
+
+                    json.dumps({"document_data": bool(document_data)}),
+
+                    json.dumps(response_data),
+
+                    datetime.now(),
+
+                    'kyc_extraction'
+
+                )
+
+               
+
+                insert_db(log_query, log_values)
+
+            except Exception as e:
+
+                print(f"Error logging KYC extraction: {e}")
+
+           
+
+            return {
+
+                "statusCode": 200,
+
+                "session_id": session_id,
+
+                "response_data": response_data
+
+            }
+
+           
+
+        except Exception as e:
+
+            print(f"Error calling Bedrock for KYC extraction: {e}")
+
+            return {
+
+                "statusCode": 500,
+
+                "error": "Error processing KYC extraction",
+
+                "session_id": session_id
+
+            }
+
+       
+
+    except Exception as e:
+
+        print(f"Error in KYC extraction API: {e}")
+
+        return {
+
+            "statusCode": 500,
+
+            "error": "Internal server error during KYC extraction",
+
+            "session_id": session_id if 'session_id' in locals() else str(uuid.uuid4())
+
+        }
+    
+
 
 
 
@@ -1947,7 +2246,8 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
         values = ('',None,'','','',session_id,'','','','','')            
         res = insert_db(insert_query,values)   
         return tool_response    
-    
+    elif event_type == 'kyc_extraction':
+        return kyc_extraction_api(event)
     if event_type == 'voiceops':
         try:
             url =f"http://{ec2_instance_ip}:8000/transcribe"
