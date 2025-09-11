@@ -38,6 +38,10 @@ region_name = os.environ.get("region_name", region_used)  # Use region_used as f
 voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
 ec2_instance_ip = os.environ.get("ec2_instance_ip", "")  # Elastic IP of the T3 medium instance
 
+# OpenSearch configuration for visual product search
+OPENSEARCH_HOST = os.environ.get("OPENSEARCH_HOST", "of7eg8ly1gkaw3uv9527.us-west-2.aoss.amazonaws.com")
+OPENSEARCH_INDEX = os.environ.get("OPENSEARCH_INDEX", "visualproductsearchmod")
+
 # Function to get database password from Secrets Manager
 def get_db_password():
     try:
@@ -3051,9 +3055,15 @@ def lambda_handler(event, context):
     # OpenSearch Visual Product Search Functions (defined inside lambda_handler)
     def create_opensearch_client():
         """Create and return OpenSearch client with AWS authentication"""
-        region = "us-west-2"
-        HOST = "of7eg8ly1gkaw3uv9527.us-west-2.aoss.amazonaws.com"
-        INDEX_NAME = "visualproductsearchmod"
+        # Use environment variables instead of hardcoded values
+        region = region_used  # Use the same region as other services
+        HOST = OPENSEARCH_HOST.replace("https://", "").replace("http://", "")
+        INDEX_NAME = OPENSEARCH_INDEX
+        
+        print(f"🔍 OpenSearch Configuration:")
+        print(f"   Host: {HOST}")
+        print(f"   Index: {INDEX_NAME}")
+        print(f"   Region: {region}")
         
         # Use IAM role authentication for Lambda
         import boto3
@@ -3093,13 +3103,13 @@ def lambda_handler(event, context):
             client = create_opensearch_client()
             
             # Check if index exists
-            if not client.indices.exists(index="visualproductsearchmod"):
-                print("❌ OpenSearch index 'visualproductsearchmod' does not exist")
-                return False, "OpenSearch index does not exist"
+            if not client.indices.exists(index=OPENSEARCH_INDEX):
+                print(f"❌ OpenSearch index '{OPENSEARCH_INDEX}' does not exist")
+                return False, f"OpenSearch index '{OPENSEARCH_INDEX}' does not exist"
             
             # Check document count
-            index_stats = client.indices.stats(index="visualproductsearchmod")
-            doc_count = index_stats['indices']['visualproductsearchmod']['total']['docs']['count']
+            index_stats = client.indices.stats(index=OPENSEARCH_INDEX)
+            doc_count = index_stats['indices'][OPENSEARCH_INDEX]['total']['docs']['count']
             print(f"📊 OpenSearch index has {doc_count} documents")
             
             if doc_count == 0:
@@ -3116,7 +3126,7 @@ def lambda_handler(event, context):
                         }
                     }
                 }
-                sample_response = client.search(index="visualproductsearchmod", body=sample_query)
+                sample_response = client.search(index=OPENSEARCH_INDEX, body=sample_query)
                 image_count = sample_response['hits']['total']['value']
                 print(f"📊 Found {image_count} image embeddings in index")
                 
@@ -3301,7 +3311,7 @@ def lambda_handler(event, context):
             }
             
             print("Searching OpenSearch for text query...")
-            response = client.search(index="visualproductsearchmod", body=body)
+            response = client.search(index=OPENSEARCH_INDEX, body=body)
             
             results = []
             for hit in response['hits']['hits']:
@@ -3379,7 +3389,7 @@ def lambda_handler(event, context):
             }
             
             print("🔍 Searching OpenSearch for image query...")
-            response = client.search(index="visualproductsearchmod", body=body)
+            response = client.search(index=OPENSEARCH_INDEX, body=body)
             
             total_hits = response['hits']['total']['value']
             print(f"📊 OpenSearch returned {total_hits} total hits")
