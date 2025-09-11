@@ -51,9 +51,6 @@ bedrock = boto3.client('bedrock-runtime', region_name=region, config=config)
 def get_text_embedding_bedrock(text):
     """Create text embedding using Bedrock Titan"""
     try:
-        # Truncate text if too long
-        if len(text) > 8000:
-            text = text[:8000]
             
         body = {"inputText": text}
         response = bedrock.invoke_model(
@@ -85,7 +82,7 @@ def create_image_embedding(image_base64):
         image_input = {"inputImage": image_base64}
         response = bedrock.invoke_model(
             body=json.dumps(image_input),
-            modelId="amazon.titan-embed-image-v1",
+            modelId="amazon.titan-embed-text-v1",
             accept="application/json",
             contentType="application/json"
         )
@@ -172,57 +169,36 @@ def check_and_create_index():
         else:
             print(f"❌ Index '{index_name}' does not exist. Creating it...")
             
-            # Create index with proper mapping
+            # Create index with proper mapping - matching metadata_ingest_final structure
             index_body = {
-                "settings": {
-                    "index": {
-                        "knn": True,
-                        "knn.algo_param.ef_search": 512
-                    }
-                },
-                "mappings": {
-                    "dynamic": True,
-                    "properties": {
-                        "vsp": {
-                            "type": "knn_vector",
-                            "dimension": 1024,
-                            "method": {
-                                "name": "hnsw",
-                                "space_type": "l2",
-                                "engine": "faiss",
-                                "parameters": {
-                                    "ef_construction": 512,
-                                    "m": 16
+                    "settings": {
+                        "index": {
+                            "knn": True
+                        }
+                    },
+                    "mappings": {
+                        "properties": {
+                            "vspmod": {
+                                "type": "knn_vector",
+                                "dimension": 1024,
+                                "method": {
+                                    "name": "hnsw",
+                                    "space_type": "l2",
+                                    "engine": "faiss"
                                 }
+                            },
+                            "product_description": {
+                                "type": "text"
+                            },
+                            "s3_uri": {
+                                "type": "text"
+                            },
+                            "type": {
+                                "type": "keyword"
                             }
-                        },
-                        "product_description": {
-                            "type": "text",
-                            "index": True,
-                            "analyzer": "standard"
-                        },
-                        "s3_uri": {
-                            "type": "text",
-                            "index": True,
-                            "analyzer": "standard"
-                        },
-                        "type": {
-                            "type": "keyword",
-                            "index": True
-                        },
-                        "text": {
-                            "type": "text",
-                            "index": True,
-                            "analyzer": "standard"
-                        },
-                        "metadata": {
-                            "type": "text",
-                            "index": True,
-                            "analyzer": "standard"
                         }
                     }
                 }
-            }
             
             client.indices.create(index=index_name, body=index_body)
             print(f"✅ Index '{index_name}' created successfully")
@@ -289,7 +265,7 @@ def process_metadata_files(metadata_files):
             
             # Prepare document for OpenSearch
             document = {
-                "vsp": text_embedding,  # Vector field
+                "vspmod": text_embedding,  # Vector field
                 "product_description": product_description,
                 "s3_uri": s3_uri,
                 "type": "text"
@@ -334,7 +310,7 @@ def process_image_files(image_files):
             
             # Prepare document for OpenSearch
             document = {
-                "vsp": image_embedding,  # Vector field
+                "vspmod": image_embedding,  # Vector field
                 "product_description": product_description,
                 "s3_uri": f"s3://{bucket_name}/{image_file}",
                 "type": "image"

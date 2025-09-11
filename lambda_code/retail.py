@@ -5,6 +5,7 @@ import boto3
 import time
 import secrets
 import string
+import logging
 from datetime import *
 import uuid
 import re   
@@ -12,11 +13,15 @@ import threading
 import sys
 import requests
 import base64
+import concurrent.futures
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from requests_aws4auth import AWS4Auth
 from botocore.config import Config
 from time import sleep
 from botocore.exceptions import ClientError, BotoCoreError
+from typing import List, Dict, Any, Optional
+from urllib.parse import urlparse
+
 # gateway_url = os.environ['gateway_url']
 
 # Get database credentials
@@ -25,25 +30,13 @@ db_host = os.environ['db_host']
 db_port = os.environ['db_port']
 db_database = os.environ['db_database']
 region_used = os.environ["region_used"]
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 # Get new environment variables for voice operations
 region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
+voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
 ec2_instance_ip = os.environ.get("ec2_instance_ip", "")  # Elastic IP of the T3 medium instance
-
-# OpenSearch configuration
-OPENSEARCH_REGION = os.environ.get("OPENSEARCH_REGION", "us-west-2")
-OPENSEARCH_HOST = os.environ.get("OPENSEARCH_HOST", "of7eg8ly1gkaw3uv9527.us-west-2.aoss.amazonaws.com").replace("https://", "").replace("http://", "")
-OPENSEARCH_INDEX = os.environ.get("OPENSEARCH_INDEX", "visualproductsearchmod")
-
-# Bedrock model configuration
-LLAMA3_MODEL_ID = os.environ.get("LLAMA3_MODEL_ID", "us.meta.llama3-3-70b-instruct-v1:0")
-NOVA_MODEL_ID = os.environ.get("NOVA_MODEL_ID", "amazon.nova-canvas-v1:0")
-NOVA_REEL_MODEL_ID = os.environ.get("NOVA_REEL_MODEL_ID", "amazon.nova-reel-v1:1")
-CLAUDE_MODEL_ID = os.environ.get("CLAUDE_MODEL_ID", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
-
-# S3 configuration
-S3_BUCKET = os.environ.get("S3_BUCKET", "genaifoundryc-y2t1oh")
-S3_REGION = os.environ.get("S3_REGION", "us-west-2")
 
 # Function to get database password from Secrets Manager
 def get_db_password():
@@ -67,9 +60,12 @@ model_id = os.environ['model_id']
 KB_ID = os.environ['KB_ID']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
+S3_BUCKET_NAME=os.environ['S3_BUCKET']
+
 RETAIL_KB_ID=os.environ["RETAIL_KB_ID"]
 
-retail_chat_history_table=os.environ['retail_chat_history_table']
+retail_chat_history_table=os.environ['chat_history_table']
+
 # Use environment region instead of hardcoded regions
 retrieve_client = boto3.client('bedrock-agent-runtime', region_name=region_used)
 bedrock_client = boto3.client('bedrock-runtime', region_name=region_used)
@@ -96,35 +92,6 @@ pop = ""
 ub_user_name = "none"
 ub_number = "none"
 str_intent = "false"
-
-
-def extract_sections(llm_response):
-    # Define the regular expression pattern for each section
-    patterns = {
-    "Topic": r'"Topic":\s*"([^"]+)"',  
-    "Conversation Type": r'"Conversation Type":\s*"([^"]+)"',
-    "Conversation Summary Explanation": r'"Conversation Summary Explanation":\s*"([^"]+)"',
-    "Detailed Summary": r'"Detailed Summary":\s*"([^"]+)"',
-    "Conversation Sentiment": r'"Conversation Sentiment":\s*"([^"]+)"',
-    "Conversation Sentiment Generated Details" :r'"Conversation Sentiment Generated Details":\s*"([^"]+)"',
-    "Lead Sentiment": r'"Lead Sentiment":\s*"([^"]+)"',
-    "Leads Generated Details": r'"Leads Generated Details":\s*"([^"]+)"',
-    "Action to be Taken": r'"Action to be Taken":\s*"([^"]+)"',
-    "Whatsapp Creation": r'"Whatsapp Creation":\s*"([^"]+)"'    
-    }
-
-    extracted_data = {}
-    for key, pattern in patterns.items():
-        match = re.search(pattern, llm_response, re.DOTALL)
-        if match:
-            extracted_data[key] = match.group(1)
-
-    if len(extracted_data) > 0:
-        print("EXTRACTED Data:", extracted_data)  
-        return extracted_data
-    else:
-        return None
-
 
 def describe_image(event):
     print("PRODUCT IMAGE ANALYSIS STARTED")
@@ -1286,7 +1253,7 @@ High-risk occupations not disclosed at application
 
 Return only the following JSON format (no markdown, no extra commentary):
 
-{{  
+{{
   "eligibility_status": "",                      
   "eligibility_summary": "",                     
 
@@ -1335,303 +1302,1744 @@ Return only the following JSON format (no markdown, no extra commentary):
     return json.loads(json_str)
 
 
-def kyc_extraction_api(event):
 
-    """
+def agent_invoke_tool(chat_history, session_id, chat, connectionId):
+    try:
+        # Start keepalive thread
+        keepalive_thread = send_keepalive(connectionId, 30)
+        import uuid
+        import random
+        # Fetch base_prompt from the database as before
+        select_query = f'''select base_prompt from {schema}.{prompt_metadata_table} where id =1;'''
+        base_prompt = f'''You are a Virtual Insurance Assistant, a helpful and accurate chatbot for insurance customers. You help customers with their insurance policies, claims, and related services.
 
-    KYC Data Extraction API for extracting information from images/documents
+## CRITICAL INSTRUCTIONS:
+- **NEVER** reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
+- **NEVER** say "To answer your question about [topic], let me check our knowledge base" or similar phrases.
+- After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
+- If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
+- For general insurance questions, IMMEDIATELY use the faq_tool_schema tool WITHOUT any preliminary message.
 
-    """
+## CRN HANDLING RULES:
+- **NEVER** ask for CRN if it has already been provided in the conversation history
+- If CRN is available in the conversation, use it automatically for all tool calls
+- If user says "I gave you before" or similar, acknowledge and proceed with the stored CRN
+- Only ask for CRN if it's completely missing from the conversation history
+- When CRN is provided, validate it matches the pattern CUST#### (e.g., CUST1001)
+
+## MANDATORY QUESTION COLLECTION RULES:
+- **ALWAYS** collect ALL required information for any tool before using it
+- **NEVER** skip any required questions, even if the user provides some information
+- **NEVER** assume or guess missing information
+- **NEVER** proceed with incomplete information
+- Ask questions ONE AT A TIME in this exact order:
+
+### For get_user_policies tool:
+1. CRN (Customer Reference Number) - if not already provided
+
+### For track_claim_status tool:
+1. CRN (Customer Reference Number) - if not already provided
+
+### For file_claim tool (ask in this exact order):
+1. CRN (Customer Reference Number) - if not already provided
+2. Policy ID (from user's active policies)
+3. Claim Type 
+4. Date of Incident (accept any reasonable format)
+5. Claim Amount (e.g., 6500SGD, SGD 6500, 6500)
+6. Description (brief description of what happened)
+
+### For schedule_agent_callback tool (ask in this exact order):
+1. CRN (Customer Reference Number) - if not already provided
+2. Reason for callback request
+3. Preferred time slot (e.g., '13 July, 2-4pm')
+4. Preferred contact method (phone or email)
+
+## CALLBACK SCHEDULING RULES:
+- When a user requests an agent callback, IMMEDIATELY start collecting required information
+- Ask ONLY ONE question at a time in this exact order:
+  1. Reason for callback request (e.g., "What would you like to discuss with our agent?")
+  2. Preferred time slot (e.g., "When would you prefer the callback?")  
+  3. Preferred contact method (e.g., "Would you prefer to be contacted by phone or email?")
+- Do NOT assume or guess any of these values
+- Do NOT use random dates, times, or contact methods
+- Do NOT proceed until ALL information is collected
+- **NEVER** automatically schedule with hardcoded values like "13 July, 2-4pm"
+- **NEVER** assume the user wants a specific time or contact method
+
+## INPUT VALIDATION RULES:
+- **NEVER** ask for the same information twice in a session
+- Accept any reasonable date format (July 19, 2025, 19/07/2025, 2025-07-19, etc.)
+- Accept any reasonable claim amount format (6500SGD, SGD 6500, 6500, etc.)
+- Accept any reasonable claim type
+- **NEVER** ask for specific formats - accept what the user provides
+- If validation fails, provide a clear, specific error message with examples
+
+##NATURAL DATE INTERPRETATION RULE:
+- When collecting a date or time-related input, accept natural expressions such as:
+	
+	“yesterday”, “today”, “tomorrow”, “last night”, etc.
+	
+- Convert these into actual calendar dates based on the current date.
+	
+- If a time of day is mentioned (e.g., “yesterday evening”), assign a random time in that time range:
+	
+	Morning: 8am–12pm
+	
+	Afternoon: 1pm–5pm
+	
+	Evening: 6pm–9pm
+	
+	Night: 9pm–11pm
+	
+- Examples:
+	
+	“yesterday” → 2025-07-30
+	
+	“today afternoon” → 2025-07-31, 2:34 PM (randomized)
+	
+	“tomorrow morning” → 2025-08-01, 9:12 AM (randomized)
+
+## Tool Usage Rules:
+- When a user asks about coverage, benefits, policy details, or general insurance questions, IMMEDIATELY use the faq_tool_schema tool
+- Do NOT announce that you're using the tool or searching for information
+- Simply use the tool and provide the direct answer from the knowledge base
+- If the knowledge base doesn't have the information, say "I don't have specific information about that in our current knowledge base. Let me schedule a callback with one of our agents who can provide detailed information."
+
+## Response Format:
+- ALWAYS answer in the shortest, most direct way possible
+- Do NOT add extra greetings, confirmations, or explanations
+- Do NOT mention backend systems or tools
+- Speak naturally as a helpful insurance representative who already knows the information
+- After every completed tool call (such as filing a claim, tracking a claim, or scheduling a callback), always include a clear summary of all user-provided inputs involved in that flow, followed by the final result (e.g., Claim ID, callback confirmation, etc.).
+
+	The summary must include:
+	
+	All collected fields in the order they were asked
+	
+	The tool output (e.g., Claim ID or confirmation)
+	
+	Example (for a filed claim):
+	Your claim has been submitted.
+	- CRN: CUST1001
+	- Policy ID: POL12345
+	- Claim Type: Accident
+	- Date of Incident: July 19, 2025
+	- Claim Amount: 6500SGD
+	- Description: Got hit by train
+	- Claim ID: CLM45829
+
+Available Tools:
+1. get_user_policies - Retrieve active insurance policies for a customer
+2. track_claim_status - Check the status of insurance claims
+3. file_claim - Submit a new insurance claim
+4. schedule_agent_callback - Schedule a callback from a human agent
+5. faq_tool_schema - Retrieve answers from the insurance knowledge base
+
+## SYSTEMATIC QUESTION COLLECTION:
+- When a user wants to file a claim OR schedule a callback, IMMEDIATELY start collecting required information
+- Ask ONLY ONE question at a time
+- After each user response, check what information is still missing
+- Ask for the NEXT missing required field (in the exact order listed above)
+- Do NOT ask multiple questions in one message
+- Do NOT skip any required questions
+- Do NOT proceed until ALL required information is collected
+
+## EXAMPLES OF CORRECT BEHAVIOR:
+
+### Filing a Claim:
+User: "I want to file a claim"
+Assistant: "I'll help you file a claim. What is your Customer Reference Number (CRN)?"
+
+User: "CUST1001"
+Assistant: "What type of claim is this?"
+
+User: "Accident"
+Assistant: "What was the date of the incident?"
+
+User: "July 19, 2025"
+Assistant: "What amount are you claiming?"
+
+User: "6500SGD"
+Assistant: "Please provide a brief description of what happened."
+
+User: "Got hit by train"
+Assistant: [Use file_claim tool with all collected information]
+
+### Scheduling a Callback:
+User: "I want to schedule an agent callback"
+Assistant: "What would you like to discuss with our agent?"
+
+User: "I need help with my policy coverage"
+Assistant: "When would you prefer the callback?"
+
+User: "Tomorrow morning"
+Assistant: "Would you prefer to be contacted by phone or email?"
+
+User: "Phone"
+Assistant: [Use schedule_agent_callback tool with all collected information]
+
+## EXAMPLES OF INCORRECT BEHAVIOR:
+- ❌ "What's your CRN, policy ID, claim type, date, amount, and description?" (asking multiple questions)
+- ❌ Skipping any required questions
+- ❌ Proceeding with incomplete information
+- ❌ Asking for the same information twice
+- ❌ Using hardcoded values like "13 July, 2-4pm" without asking the user
+- ❌ Assuming contact method or time preferences
+
+## CRITICAL SESSION MEMORY RULES:
+- When a user provides a CRN and asks to see their policies, check coverage, or similar, IMMEDIATELY use the get_user_policies tool with their CRN. Do NOT thank, confirm, or repeat the user's request—just use the tool and return the result.
+- When a user asks about claim status, IMMEDIATELY use the track_claim_status tool with their CRN.
+- When a user wants to file a new claim, IMMEDIATELY start collecting required information in the exact order specified above.
+- When collecting information for a tool (such as filing a claim OR scheduling a callback), ALWAYS ask for only ONE missing required field at a time.
+- NEVER ask for more than one piece of information in a single message.
+- After the user answers, check which required field is still missing, and ask for only that field next.
+- Do NOT list multiple questions or fields in a single message, even if several are missing.
+- If the user provides more than one field in their answer, acknowledge all provided info, then ask for the next missing field (one at a time).
+- If all required fields are provided, proceed to use the tool and summarize the result.
+
+## FIELD COLLECTION PERSISTENCE:
+- For each required field, use the user's first answer as the value for that field. Do NOT ask for the same field again, even if later user messages contain related or similar information.
+- If the user provides additional information after a required field has already been answered, treat it as context or as the answer to the next required field, NOT as a replacement for a previous answer.
+- Do NOT reinterpret or overwrite a previously collected answer for any required field.
+- Only ask for a required field if it has not already been answered in this session.
+
+## SESSION CONTINUITY:
+- Once the user provides their CRN and policy, REMEMBER them for the entire session. Use the same CRN and policy for all subsequent tool calls and do NOT ask for them again, even if the user initiates multiple requests or cases in the same session, or if their answer is ambiguous or short.
+- If the user's answer is unclear, make your best guess based on previous context, but do NOT re-ask for information you already have.
+- If you are unsure, always proceed with the most recently provided value for each required field.
+- Do NOT repeat questions that have already been answered. Only ask for information that is still missing.
+- Stay focused and do not ask for the same information more than once per session.
+
+## INPUT ACCEPTANCE RULES:
+- Do NOT validate, reject, or question the user's input for required fields (such as dates, claim amounts, etc.). Accept any value the user provides and proceed to the next required field.
+- Do NOT comment on whether a date is in the past or future. Simply record the value and continue.
+- If the user provides a value that seems unusual, do NOT ask for clarification or corrections—just accept the input and move on.
+- NEVER ask for a date in a specific format (such as 'DD_MM_YYYY?'). When you need a date, simply ask plainly for the date (e.g., 'When did the incident occur?'), without specifying a format in the question.
+
+## RESPONSE GUIDELINES:
+- For general insurance questions, IMMEDIATELY use the faq_tool_schema tool.
+- ALWAYS answer in the shortest, most direct way possible. Do NOT add extra greetings, confirmations, or explanations.
+- Do NOT mention backend systems or tools. Speak naturally as a helpful insurance representative.
+- If a user provides a CRN and asks about their policies, use the get_user_policies tool immediately, without further confirmation.
+- After using a tool, ALWAYS provide a short, direct summary of the result to the user. Do not leave the user without a response.
+- NEVER reply with messages like "I'm thinking", "Let me check", "I'll look up your policies", "One moment", "Please wait", or any similar filler or placeholder text.
+- ONLY reply with:
+    - The next required question if you need more information from the user (ask one question at a time, never multiple).
+    - The direct answer or result after using a tool.
+    - A short, direct summary of the tool result.
+- Do NOT add extra confirmations, explanations, or conversational filler.
+- Do NOT mention backend systems, tools, or your own reasoning process.
+- Speak naturally and concisely, as a helpful insurance representative.
+- Handle greetings warmly and ask how you can help with their insurance needs today.
+'''
+        
+        # Insurance tool schema, now including FAQ tool
+        insurance_tools = [
+            {
+                "name": "get_user_policies",
+                "description": "Retrieve active insurance policies for a customer based on their CRN",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "crn": {"type": "string", "description": "Customer Reference Number (e.g., CUST1001)"}
+                    },
+                    "required": ["crn"]
+                }
+            },
+            {
+                "name": "track_claim_status",
+                "description": "Check the status of insurance claims for a customer",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "crn": {"type": "string", "description": "Customer Reference Number (e.g., CUST1001)"}
+                    },
+                    "required": ["crn"]
+                }
+            },
+            {
+                "name": "file_claim",
+                "description": "Submit a new insurance claim",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "crn": {"type": "string", "description": "Customer Reference Number"},
+                        "policy_id": {"type": "string", "description": "Policy ID from user's active policies"},
+                        "claim_type": {"type": "string", "description": "Type of claim "},
+                        "date_of_incident": {"type": "string", "description": "Date of the incident (YYYY-MM-DD format)"},
+                        "claim_amount": {"type": "string", "description": "Claimed amount (e.g., SGD 12000)"},
+                        "description": {"type": "string", "description": "Brief description of what happened"}
+                    },
+                    "required": ["crn", "policy_id", "claim_type", "date_of_incident", "claim_amount", "description"]
+                }
+            },
+            {
+                "name": "schedule_agent_callback",
+                "description": "Schedule a callback from a human insurance agent",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "crn": {"type": "string", "description": "Customer Reference Number"},
+                        "reason": {"type": "string", "description": "Reason for callback request"},
+                        "preferred_timeslot": {"type": "string", "description": "Preferred time slot (e.g., '2-4pm')"},
+                        "preferred_contact_method": {"type": "string", "description": "Preferred contact method (phone or email)"}
+                    },
+                    "required": ["crn", "reason", "preferred_timeslot", "preferred_contact_method"]
+                }
+            },
+            {
+                "name": "faq_tool_schema",
+                "description": "Retrieve answers from the insurance knowledge base",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "knowledge_base_retrieval_question": {"type": "string", "description": "A question to retrieve from the insurance knowledge base."}
+                    },
+                    "required": ["knowledge_base_retrieval_question"]
+                }
+            }
+        ]
+
+        # --- Mock tool implementations ---
+        def get_user_policies(crn):
+            mock_policies = {
+                "CUST1001": [
+                    {"policy_id": "POL1001", "plan_name": "MediPlus Secure", "policy_type": "Health", "coverage_amount": "SGD 150,000/year", "start_date": "2022-04-15", "premium_amount": "SGD 120", "next_premium_due": get_dynamic_date(3), "status": "Active"},
+                    {"policy_id": "POL1002", "plan_name": "LifeSecure Term Advantage", "policy_type": "Life", "coverage_amount": "SGD 500,000", "start_date": "2021-09-10", "premium_amount": "SGD 95", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ],
+                "CUST1002": [
+                    {"policy_id": "POL2001", "plan_name": "FamilyCare Protect", "policy_type": "Family", "coverage_amount": "SGD 250,000", "start_date": "2023-01-05", "premium_amount": "SGD 290", "next_premium_due": get_dynamic_date(3), "status": "Active"},
+                    {"policy_id": "POL2002", "plan_name": "ActiveShield PA", "policy_type": "Accident", "coverage_amount": "SGD 100,000", "start_date": "2022-08-22", "premium_amount": "SGD 40", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ],
+                "CUST1003": [
+                    {"policy_id": "POL3001", "plan_name": "SilverShield Health", "policy_type": "Senior", "coverage_amount": "SGD 100,000/year", "start_date": "2021-11-30", "premium_amount": "SGD 320", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ],
+                "CUST1004": [
+                    {"policy_id": "POL4001", "plan_name": "MediPlus Secure", "policy_type": "Health", "coverage_amount": "SGD 150,000/year", "start_date": "2023-03-18", "premium_amount": "SGD 120", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ],
+                "CUST1005": [
+                    {"policy_id": "POL5001", "plan_name": "LifeSecure Term Advantage", "policy_type": "Life", "coverage_amount": "SGD 300,000", "start_date": "2020-06-25", "premium_amount": "SGD 85", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ]
+            }
+            return mock_policies.get(crn, [])
+
+        def track_claim_status(crn):
+            mock_claims = {
+                "CUST1001": [
+                    {"claim_id": "CLM1001", "policy_id": "POL1001", "claim_type": "Hospitalisation", "claim_status": "Under Review", "claim_amount": "SGD 12,000", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Awaiting final approval from claims officer"},
+                    {"claim_id": "CLM1002", "policy_id": "POL1002", "claim_type": "Terminal Illness", "claim_status": "Submitted", "claim_amount": "SGD 250,000", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Doctor's certification under verification"}
+                ],
+                "CUST1002": [
+                    {"claim_id": "CLM2001", "policy_id": "POL2002", "claim_type": "Accident Medical", "claim_status": "Approved", "claim_amount": "SGD 7,500", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Payout issued to registered bank account"},
+                    {"claim_id": "CLM2002", "policy_id": "POL2001", "claim_type": "Outpatient Family Cover", "claim_status": "Submitted", "claim_amount": "SGD 4,200", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Pending document verification"}
+                ],
+                "CUST1003": [
+                    {"claim_id": "CLM3001", "policy_id": "POL3001", "claim_type": "Hospitalisation", "claim_status": "Rejected", "claim_amount": "SGD 9,200", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Missing discharge summary and itemised bill"}
+                ],
+                "CUST1004": [
+                    {"claim_id": "CLM4001", "policy_id": "POL4001", "claim_type": "Hospitalisation", "claim_status": "Submitted", "claim_amount": "SGD 6,800", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Documents received, pending review"}
+                ],
+                "CUST1005": [
+                    {"claim_id": "CLM5001", "policy_id": "POL5001", "claim_type": "Death", "claim_status": "Under Review", "claim_amount": "SGD 300,000", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Awaiting legal verification and supporting documents"}
+                ]
+            }
+            return mock_claims.get(crn, [])
+
+        def file_claim(crn, policy_id, claim_type, date_of_incident, claim_amount, description):
+            claim_id = f"CLM{str(uuid.uuid4())[:4].upper()}"
+            return {
+                "claim_id": claim_id,
+                "status": "Submitted",
+                "remarks": "Your claim has been submitted. Our team will review it, and an agent will reach out to you shortly."
+            }
+
+        def schedule_agent_callback(crn, reason, preferred_timeslot, preferred_contact_method):
+            return {
+                "status": "Scheduled",
+                "scheduled_for": preferred_timeslot,
+                "remarks": f"An agent will reach out to you via {preferred_contact_method} during your selected time window."
+            }
+
+        input_tokens = 0
+        output_tokens = 0
+        print("In agent_invoke_tool (Insurance Bot)")
+        
+        # Extract CRN from chat history
+        extracted_crn = None
+        for message in chat_history:
+            if message['role'] == 'user':
+                content_text = message['content'][0]['text']
+                crn_match = re.search(r'\b(CUST\d{4})\b', content_text.upper())
+                if crn_match:
+                    extracted_crn = crn_match.group(1)
+                    print(f"Extracted CRN from chat history: {extracted_crn}")
+                    break
+        
+        # Enhance system prompt with CRN context
+        if extracted_crn:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's CRN is {extracted_crn}. Use this CRN automatically for any tool calls that require it without asking again."
+            print(f"Enhanced prompt with CRN: {extracted_crn}")
+        else:
+            enhanced_prompt = base_prompt
+        
+        # Use the enhanced_prompt instead of base_prompt
+        prompt = enhanced_prompt
+        
+        # First API call to get initial response
+        try:
+            response = bedrock_client.invoke_model_with_response_stream(
+                contentType='application/json',
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4000,
+                    "temperature": 0,
+                    "top_p": 0.999,
+                    "system": prompt,
+                    "tools": insurance_tools,
+                    "messages": chat_history
+                }),
+                modelId=model_id
+            )
+        except Exception as e:
+            print("AN ERROR OCCURRED : ", e)
+            response = "We are unable to assist right now please try again after few minutes"
+            return {"answer": response, "question": chat, "session_id": session_id}
+
+        streamed_content = ''
+        content_block = None
+        assistant_response = []
+        for item in response['body']:
+            content = json.loads(item['chunk']['bytes'].decode())
+            if content['type'] == 'content_block_start':
+                content_block = content['content_block']
+            elif content['type'] == 'content_block_stop':
+                print(f"Content block at stop: {content_block}")  # Add debug line
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                except api_gateway_client.exceptions.GoneException:
+                    print(f"Connection {connectionId} is closed (GoneException) - stop message")
+                except Exception as e:
+                    print(f"WebSocket send error (stop): {e}")
+                if content_block['type'] == 'text':
+                    content_block['text'] = streamed_content
+                    assistant_response.append(content_block)
+                elif content_block['type'] == 'tool_use':
+                    try:
+                        content_block['input'] = json.loads(streamed_content)
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error for tool input: {e}")
+                        print(f"Streamed content: {streamed_content}")
+                        content_block['input'] = {}
+                    assistant_response.append(content_block)
+                streamed_content = ''
+            elif content['type'] == 'content_block_delta':
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                except api_gateway_client.exceptions.GoneException:
+                    print(f"Connection {connectionId} is closed (GoneException) - delta message")
+                except Exception as e:
+                    print(f"WebSocket send error (delta): {e}")
+                if 'delta' in content and isinstance(content['delta'], dict):
+                    if content['delta']['type'] == 'text_delta':
+                        streamed_content += content['delta']['text']
+                    elif content['delta']['type'] == 'input_json_delta':
+                        streamed_content += content['delta']['partial_json']
+            elif content['type'] == 'message_delta':
+                try:
+                    if 'usage' in content and isinstance(content['usage'], dict):
+                        tool_tokens = content['usage']['output_tokens']
+                    else:
+                        tool_tokens = 0
+                except (KeyError, TypeError) as e:
+                    print(f"Error accessing usage tokens: {e}")
+                    tool_tokens = 0
+            elif content['type'] == 'message_stop':
+                input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
+                output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
+        chat_history.append({'role': 'assistant', 'content': assistant_response})
+        
+        # Check if any tools were called
+        tools_used = []
+        tool_results = []
+        
+        for action in assistant_response:
+            if action['type'] == 'tool_use':
+                tools_used.append(action['name'])
+                tool_name = action['name']
+                tool_input = action['input']
+                tool_result = None
+                
+                # Send a heartbeat to keep WebSocket alive during tool execution
+                try:
+                    heartbeat = {'type': 'heartbeat'}
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                except Exception as e:
+                    print(f"Heartbeat send error: {e}")
+                
+                # Execute the appropriate tool
+                if tool_name == 'get_user_policies':
+                    tool_result = get_user_policies(tool_input['crn'])
+                elif tool_name == 'track_claim_status':
+                    tool_result = track_claim_status(tool_input['crn'])
+                elif tool_name == 'file_claim':
+                    tool_result = file_claim(
+                        tool_input['crn'],
+                        tool_input['policy_id'],
+                        tool_input['claim_type'],
+                        tool_input['date_of_incident'],
+                        tool_input['claim_amount'],
+                        tool_input['description']
+                    )
+                elif tool_name == 'schedule_agent_callback':
+                    tool_result = schedule_agent_callback(
+                        tool_input['crn'],
+                        tool_input['reason'],
+                        tool_input['preferred_timeslot'],
+                        tool_input['preferred_contact_method']
+                    )
+                elif tool_name == 'faq_tool_schema':
+                    # Send another heartbeat before FAQ retrieval
+                    try:
+                        heartbeat = {'type': 'heartbeat'}
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                    except Exception as e:
+                        print(f"FAQ heartbeat send error: {e}")
+                    
+                    tool_result = get_FAQ_chunks_tool(tool_input)
+                    
+                    # If FAQ tool returns empty or no results, provide fallback
+                    if not tool_result or len(tool_result) == 0:
+                        tool_result = ["I don't have specific information about that in our current knowledge base. Let me schedule a callback with one of our agents who can provide detailed information."]
+                
+                # Create tool result message with better error handling
+                try:
+                    if not isinstance(action, dict):
+                        print(f"Action is not a dict: {type(action)}, value: {action}")
+                        continue
+                        
+                    if 'id' not in action:
+                        print(f"Action missing 'id' field: {action}")
+                        continue
+                    
+                    print(f"Tool result type: {type(tool_result)}")
+                    print(f"Tool result content: {tool_result}")
+                    
+                    if isinstance(tool_result, list) and tool_result:
+                        content_text = "\n".join(tool_result)
+                    elif isinstance(tool_result, list) and not tool_result:
+                        content_text = "No information available"
+                    else:
+                        content_text = str(tool_result) if tool_result else "No information available"
+                    
+                    tool_response_dict = {
+                        "type": "tool_result",
+                        "tool_use_id": action['id'],
+                        "content": [{"type": "text", "text": content_text}]
+                    }
+                    tool_results.append(tool_response_dict)
+                    
+                except Exception as e:
+                    print(f"Error creating tool response: {e}")
+                    print(f"Action type: {type(action)}")
+                    print(f"Action content: {action}")
+                    # Skip this tool result instead of crashing
+                    continue
+                tool_results.append(tool_response_dict)
+        
+        # If tools were used, add tool results to chat history and make second API call
+        if tools_used:
+            # Add tool results to chat history
+            chat_history.append({'role': 'user', 'content': tool_results})
+            
+            # Make second API call with tool results
+            try:
+                response = bedrock_client.invoke_model_with_response_stream(
+                    contentType='application/json',
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 4000,
+                        "temperature": 0,
+                        "system": prompt,
+                        "tools": insurance_tools,
+                        "messages": chat_history
+                    }),
+                    modelId=model_id
+                )
+            except Exception as e:
+                print("ERROR IN SECOND API CALL:", e)
+                # Send error response via WebSocket
+                error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+                for word in error_response.split():
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    except:
+                        pass
+                stop_answer = {'type': 'content_block_stop', 'index': 0}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+                return {"answer": error_response, "question": chat, "session_id": session_id}
+
+            # Process the streaming response
+            streamed_content = ''
+            content_block = None
+            assistant_response = []
+            
+            for item in response['body']:
+                content = json.loads(item['chunk']['bytes'].decode())
+                if content['type'] == 'content_block_start':
+                    content_block = content['content_block']
+                elif content['type'] == 'content_block_stop':
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - stop message (tool)")
+                    except Exception as e:
+                        print(f"WebSocket send error (stop, tool): {e}")
+                    if content_block['type'] == 'text':
+                        content_block['text'] = streamed_content
+                        assistant_response.append(content_block)
+                    elif content_block['type'] == 'tool_use':
+                        try:
+                            content_block['input'] = json.loads(streamed_content)
+                        except json.JSONDecodeError as e:
+                            print(f"JSON decode error for tool input: {e}")
+                            print(f"Streamed content: {streamed_content}")
+                            content_block['input'] = {}
+                        assistant_response.append(content_block)
+                    streamed_content = ''
+                elif content['type'] == 'content_block_delta':
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - delta message (tool)")
+                    except Exception as e:
+                        print(f"WebSocket send error (delta, tool): {e}")
+                    if content['delta']['type'] == 'text_delta':
+                        streamed_content += content['delta']['text']
+                    elif content['delta']['type'] == 'input_json_delta':
+                        streamed_content += content['delta']['partial_json']
+                elif content['type'] == 'message_stop':
+                    input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
+                    output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
+            
+            # Extract final answer
+            final_ans = ""
+            for i in assistant_response:
+                if i['type'] == 'text':
+                    final_ans = i['text']
+                    break
+            
+            # If no text response, provide fallback
+            if not final_ans:
+                final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
+            
+            return {"statusCode": "200", "answer": final_ans, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+
+        else:
+            # No tools called, handle normal response
+            for action in assistant_response:
+                if action['type'] == 'text':
+                    ai_response = action['text']
+                    return {"statusCode": "200", "answer": ai_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+            
+            # Fallback if no text response
+            return {"statusCode": "200", "answer": "I'm here to help with your insurance needs. How can I assist you today?", "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        response = "An Unknown error occurred. Please try again after some time."
+        return {
+            "statusCode": "500",
+            "answer": response,
+            "question": chat,
+            "session_id": session_id,
+            "input_tokens": "0",
+            "output_tokens": "0"
+        }
+
+def get_FAQ_chunks_tool(query):
+    try:
+        print("IN FAQ: ", query)
+        chat = query['knowledge_base_retrieval_question']
+        chunks = []
+        
+        # Add timeout to prevent hanging
+        response_chunks = retrieve_client.retrieve(
+            retrievalQuery={                                                                                
+                'text': chat   
+            },
+            knowledgeBaseId=KB_ID,
+            retrievalConfiguration={
+                'vectorSearchConfiguration': {                          
+                    'numberOfResults': 10,                                                                                              
+                    'overrideSearchType': 'HYBRID'
+                }
+            }
+        )
+       
+        for item in response_chunks['retrievalResults']:
+            if 'content' in item and 'text' in item['content']:
+                chunks.append(item['content']['text'])
+        
+        print('CHUNKS: ', chunks)
+        
+        # Return meaningful chunks or fallback message
+        if chunks:
+            return chunks
+        else:
+            return ["I don't have specific information about that in our current knowledge base. Let me schedule a callback with one of our agents who can provide detailed information."]
+            
+    except Exception as e:
+        print("An exception occurred while retrieving chunks:", e)
+        return ["I'm having trouble accessing that information right now. Please try again in a moment, or I can schedule a callback with one of our agents."]
+
+def get_hospital_faq_chunks(query):
+    try:
+        print("IN HOSPITAL FAQ: ", query)
+        chunks = []
+        response_chunks = retrieve_client.retrieve(
+            retrievalQuery={                                                                                
+                'text': query
+            },
+            knowledgeBaseId=health_kb_id,
+            retrievalConfiguration={
+                'vectorSearchConfiguration': {                          
+                    'numberOfResults': 10,                                                                                              
+                    'overrideSearchType': 'HYBRID'
+                }
+            }
+        )
+       
+        for item in response_chunks['retrievalResults']:
+            if 'content' in item and 'text' in item['content']:
+                chunks.append(item['content']['text'])
+        
+        print('HOSPITAL FAQ CHUNKS: ', chunks)
+        
+        # Return meaningful chunks or fallback message
+        if chunks:
+            return chunks
+        else:
+            return ["I don't have specific information about that in our current hospital knowledge base. Please contact our hospital directly for detailed information."]
+            
+    except Exception as e:
+        print("An exception occurred while retrieving hospital FAQ chunks:", e)
+        return ["I'm having trouble accessing that information right now. Please try again in a moment, or contact our hospital directly."]
+
+
+def extract_sections(llm_response):
+    # Define the regular expression pattern for each section
+    patterns = {
+    "Topic": r'"Topic":\s*"([^"]+)"',  
+    "Conversation Type": r'"Conversation Type":\s*"([^"]+)"',
+    "Conversation Summary Explanation": r'"Conversation Summary Explanation":\s*"([^"]+)"',
+    "Detailed Summary": r'"Detailed Summary":\s*"([^"]+)"',
+    "Conversation Sentiment": r'"Conversation Sentiment":\s*"([^"]+)"',
+    "Conversation Sentiment Generated Details" :r'"Conversation Sentiment Generated Details":\s*"([^"]+)"',
+    "Lead Sentiment": r'"Lead Sentiment":\s*"([^"]+)"',
+    "Leads Generated Details": r'"Leads Generated Details":\s*"([^"]+)"',
+    "Action to be Taken": r'"Action to be Taken":\s*"([^"]+)"',
+    "Whatsapp Creation": r'"Whatsapp Creation":\s*"([^"]+)"'    
+    }
+
+    extracted_data = {}
+    for key, pattern in patterns.items():
+        match = re.search(pattern, llm_response, re.DOTALL)
+        if match:
+            extracted_data[key] = match.group(1)
+
+    if len(extracted_data) > 0:
+        print("EXTRACTED Data:", extracted_data)  
+        return extracted_data
+    else:
+        return None
+
+
+client_apigateway = boto3.client('apigatewaymanagementapi', region_name='ap-southeast-1', endpoint_url='https://13ixd4t1e3.execute-api.ap-southeast-1.amazonaws.com/production/')
+
+def send_private_message(connectionId, body):
+    print("SENDING PRIVATE MESSAGE")
+    print(f"Connection ID: {connectionId}")
+    print(f"Message Body: {body}")
+    
 
     try:
-
-        # Extract the single variable (document data only)
-
-        document_data = event.get('document_data', '')
-
-        session_id = event.get('session_id', str(uuid.uuid4()))
-
-       
-
-        if not document_data:
-
-            return {
-
-                "statusCode": 400,
-
-                "error": "document_data is required",
-
-                "session_id": session_id
-
-            }
-
-       
-
-        # Use the existing Bedrock client to process the KYC extraction
-
-        prompt_template = f"""You are a document data viewer, your task is to view the information provided to you. Before providing your answer, provide your reasoning or approach as if you have viewed the document and extracted that information in a  neat and clear manner.
-
-        below is the document data
-
-        {document_data}
-
-<reasoning>
-
-This is the obtained document that contains the information to be processed. My reasoning approach is to systematically scan through the document content and identify all relevant data fields, structured information, and key details present in the provided document.
-
-</reasoning>
-
-
-
-Please extract the information from the provided data like the sample data provided below
-
-<sample1>:
-
-<Reasoning>
-
-The document data have been provided and it seems like an identification card and iam going to extract the important fields from the provided document
-
-</Reasoning>
-
-<information>
-
-Identity Card Number: 123456789
-
-Name: MARIE JUMIO
-
-Race: CHINESE
-
-Sex: F
-
-Date of Birth: 1975-01-01
-
-Country of Birth: SINGAPORE
-
-</information>
-
-</sample1>
-
-<sample2>:
-
-<Reasoning>
-
-The provided document seems like to be set of three documents and there are discrepencies and matches present and they are
-
-</Reasoning>
-
-<information>
-
-
-
-## Matching Items
-
-- **Document Numbers**: PO-2025072401, INV-2025072401, and GRN-2025072401 match across all three documents
-
-- **Vendor**: FastSupply Co. is consistent across all documents
-
-- **Wireless Speaker Quantity**: 10 units consistently across all documents
-
-- **Wireless Speaker Price**: S$1,250.00 consistently across all documents
-
-
-
-## Discrepancies Found
-
-1. **USB Cable Quantity**:
-
-   - Purchase Order: 50 units
-
-   - Sales Invoice: 50 units
-
-   - Delivery Receipt: 48 units (2 units short)
-
-
-
-2. **USB Cable Price**:
-
-   - Purchase Order: S$45.00 per unit
-
-   - Sales Invoice: S$47.00 per unit (S$2.00 higher)
-
-   - Delivery Receipt: S$45.00 per unit
-
-
-
-3. **USB Cable Total**:
-
-   - Purchase Order: S$2,250.00
-
-   - Sales Invoice: S$2,350.00
-
-   - Delivery Receipt: S$2,160.00
-
-
-
-4. **Grand Total**:
-
-   - Purchase Order: S$14,750.00
-
-   - Sales Invoice: S$14,850.00
-
-   - Delivery Receipt: S$14,660.00
-
-
-
-</information>
-
-<sample2>
-
-<Note>
-
-1.Make sure to keep it soft and crisp and act like you are thinking and providing the information in  a neat and clean manner.
-
-2.Do not provide tags while responding and provide the response in mark down format
-
-3.Never show the information in table instead show it as list
-
-"""
-
-       
-
-        try:
-
-            # Prepare the request body for Bedrock
-
-            body = json.dumps({
-
-                "anthropic_version": "bedrock-2023-05-31",
-
-                "max_tokens": 4000,
-
-                "messages": [
-
-                    {
-
-                        "role": "user",
-
-                        "content": prompt_template
-
-                    }
-
-                ]
-
-            })
-
-           
-
-            # Call Bedrock using the same pattern as other functions
-
-            response = bedrock_client.invoke_model(
-
-                contentType='application/json',
-
-                body=body,
-
-                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-
-            )
-
-           
-
-            response_body = json.loads(response['body'].read())
-
-            extracted_data = response_body.get('content', [{}])[0].get('text', '')
-
-           
-
-            # Create response data
-
-            response_data = {
-
-                "extracted_kyc_data": extracted_data,
-
-                "timestamp": datetime.now().isoformat(),
-
-                "session_id": session_id
-
-            }
-
-           
-
-            # Log the KYC extraction
-
-            try:
-
-                log_query = """
-
-                    INSERT INTO {}.{} (session_id, query, response, timestamp, api_type)
-
-                    VALUES (%s, %s, %s, %s, %s)
-
-                """.format(schema, CHAT_LOG_TABLE)
-
-               
-
-                log_values = (
-
-                    session_id,
-
-                    json.dumps({"document_data": bool(document_data)}),
-
-                    json.dumps(response_data),
-
-                    datetime.now(),
-
-                    'kyc_extraction'
-
-                )
-
-               
-
-                insert_db(log_query, log_values)
-
-            except Exception as e:
-
-                print(f"Error logging KYC extraction: {e}")
-
-           
-
-            return {
-
-                "statusCode": 200,
-
-                "session_id": session_id,
-
-                "response_data": response_data
-
-            }
-
-           
-
-        except Exception as e:
-
-            print(f"Error calling Bedrock for KYC extraction: {e}")
-
-            return {
-
-                "statusCode": 500,
-
-                "error": "Error processing KYC extraction",
-
-                "session_id": session_id
-
-            }
-
-       
-
-    except Exception as e:
-
-        print(f"Error in KYC extraction API: {e}")
-
+        json_data = json.dumps(body)
+        print(f"JSON Data: {json_data}")
+        
+        response = client_apigateway.post_to_connection(
+            ConnectionId=connectionId, 
+            Data=json_data.encode('utf-8')
+        )
         return {
-
-            "statusCode": 500,
-
-            "error": "Internal server error during KYC extraction",
-
-            "session_id": session_id if 'session_id' in locals() else str(uuid.uuid4())
-
+        'statusCode': 200,
+        'body': json.dumps('Hello from Lambda!')
         }
+
+        print(f"Send Response: {response}")
+        
+    except client_apigateway.exceptions.GoneException:
+        print(f"Connection {connectionId} is closed")
+    except Exception as e:
+        print(f"Error sending message: {str(e)}")
+    
+    return True
+
+client_bedrock = boto3.client('bedrock-agent-runtime', region_name=region_used)
+#insurance sandbox code ends here
+
+
+# banking sandbox code starts here .......
+
+
+def banking_agent_invoke_tool(chat_history, session_id, chat, connectionId):
+    try:
+        # Start keepalive thread
+        #keepalive_thread = send_keepalive(connectionId, 30)
+        import uuid
+        import random
+        # Fetch base_prompt from the database as before
+        select_query = f'''select base_prompt from {schema}.{prompt_metadata_table} where id =3;'''
+        print(select_query)
+        base_prompt = f'''
+        You are a Virtual Banking Assistant for AnyBank SG, a helpful and accurate chatbot for banking customers. You help customers with their banking accounts, transactions, products, and related services.
+
+## CRITICAL INSTRUCTIONS:
+- **NEVER** reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
+- **NEVER** say "To answer your question about [topic], let me check our knowledge base" or similar phrases.
+- After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
+- If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
+- For general banking questions, IMMEDIATELY use the banking_faq_tool_schema tool WITHOUT any preliminary message.
+
+## CUSTOMER AUTHENTICATION RULES:
+- **ALWAYS** verify Customer ID and PIN before proceeding with any account-related tools
+- **NEVER** proceed with get_account_summary or file_service_request without successful authentication
+- **ONLY** use tools after confirming the Customer ID and PIN combination is valid
+- If authentication fails, provide a clear error message and ask for correct credentials
+
+## VALID CUSTOMER DATA:
+Use these exact Customer ID and PIN combinations for verification:
+- CUST1001 (Rachel Tan) - PIN: 1023
+- CUST1002 (Jason Lim) - PIN: 7645
+- CUST1003 (Mary Goh) - PIN: 3391
+- CUST1004 (Daniel Ong) - PIN: 5912
+- CUST1005 (Aisha Rahman) - PIN: 8830
+
+## SESSION AUTHENTICATION STATE MANAGEMENT:
+- **MAINTAIN SESSION STATE**: Once a Customer ID and PIN are successfully verified, store this authentication state for the ENTIRE conversation session
+- **NEVER RE-ASK**: Do not ask for Customer ID or PIN again during the same session unless:
+  1. User explicitly provides a different Customer ID
+  2. Authentication explicitly fails during a tool call
+  3. User explicitly requests to switch accounts
+
+## AUTHENTICATION PERSISTENCE RULES:
+- **FIRST AUTHENTICATION**: Ask for Customer ID and PIN only on the first account-related request
+- **SESSION MEMORY**: Remember the authenticated Customer ID throughout the conversation
+- **AUTOMATIC REUSE**: Use the stored authenticated credentials for ALL subsequent account-related tool calls
+- **NO RE-VERIFICATION**: Do not re-verify credentials that have already been successfully authenticated in the current session
+
+## PRE-AUTHENTICATION CHECK:
+Before asking for Customer ID or PIN for ANY account-related request:
+1. **Scan conversation history** for previously provided Customer ID
+2. **Check if PIN was already verified** for that Customer ID in this session
+3. **If both are found and verified**, proceed directly with stored credentials
+4. **Only ask for credentials** that are missing or failed verification
+
+## CUSTOMER ID AND PIN HANDLING RULES:
+- **SESSION-LEVEL STORAGE**: Once Customer ID is provided and verified, use it for ALL subsequent requests
+- **ONE-TIME PIN**: Ask for PIN only ONCE per Customer ID per session
+- **CONVERSATION CONTEXT**: Check the ENTIRE conversation history for previously provided and verified credentials
+- **SMART REUSE**: If user asks "I gave you before" or similar, acknowledge and proceed with stored credentials
+- **CONTEXT AWARENESS**: Before asking for credentials, always check if they were provided earlier in the conversation
+- When Customer ID is provided, validate it matches the pattern CUST#### (e.g., CUST1001)
+- Use the same Customer ID and PIN for all subsequent tool calls in the session until Customer ID changes
+- **ALWAYS** verify PIN matches the Customer ID before proceeding on first authentication only
+
+## AUTHENTICATION PROCESS:
+1. **Check Session State** - Scan conversation for existing authenticated credentials
+2. **Collect Customer ID** - Ask for Customer ID ONLY if not previously provided and verified
+3. **Validate Customer ID** - Check if it matches one of the valid Customer IDs above
+4. **Collect PIN** - Ask for PIN ONLY if not previously provided and verified for current Customer ID
+5. **Verify PIN** - Check if the PIN matches the Customer ID (only on first authentication)
+6. **Store Authentication State** - Remember successful authentication for entire session
+7. **Proceed with Tools** - Use stored credentials for all subsequent account-related requests
+
+## MANDATORY QUESTION COLLECTION RULES:
+- **ALWAYS** collect ALL required information for any tool before using it
+- **NEVER** skip any required questions, even if the user provides some information
+- **NEVER** assume or guess missing information
+- **NEVER** proceed with incomplete information
+- Ask questions ONE AT A TIME in this exact order:
+
+### For get_account_summary tool:
+1. **Check session state first** - Use stored Customer ID and PIN if already authenticated
+2. Customer ID - if not already provided and verified in conversation
+3. PIN (4-6 digit number) - only if not already provided and verified for current Customer ID
+4. **VERIFY** Customer ID and PIN combination is valid (only on first authentication)
+5. **ONLY** proceed with tool call after successful authentication
+
+### For file_service_request tool (ask in this exact order):
+1. **Check session state first** - Use stored Customer ID and PIN if already authenticated
+2. Customer ID - if not already provided and verified in conversation
+3. PIN (4-6 digit number) - only if not already provided and verified for current Customer ID
+4. **VERIFY** Customer ID and PIN combination is valid (only on first authentication)
+5. Category (Card Issue, Transaction Dispute, Account Update, etc.)
+6. Description of the issue/request
+7. Preferred contact method (Phone, Email, or WhatsApp)
+8. **ONLY** proceed with tool call after successful authentication
+
+## INPUT VALIDATION RULES:
+- **NEVER** ask for the same Customer ID twice in a session unless user provides different one
+- **NEVER** ask for PIN twice for the same Customer ID in a session
+- Accept Customer ID in format CUST#### only
+- Accept PIN as 4 digit numeric value
+- Accept any reasonable category for service requests
+- **NEVER** ask for specific formats - accept what the user provides
+- If validation fails, provide a clear, specific error message with examples
+- **ALWAYS** verify PIN matches the Customer ID before proceeding (only on first authentication)
+
+##NATURAL DATE INTERPRETATION RULE:
+- When collecting a date or time-related input, accept natural expressions such as:
+	
+	“yesterday”, “today”, “tomorrow”, “last night”, etc.
+	
+- Convert these into actual calendar dates based on the current date.
+	
+- If a time of day is mentioned (e.g., “yesterday evening”), assign a random time in that time range:
+	
+	Morning: 8am–12pm
+	
+	Afternoon: 1pm–5pm
+	
+	Evening: 6pm–9pm
+	
+	Night: 9pm–11pm
+	
+- Examples:
+	
+	“yesterday” → 2025-07-30
+	
+	“today afternoon” → 2025-07-31, 2:34 PM (randomized)
+	
+	“tomorrow morning” → 2025-08-01, 9:12 AM (randomized)
+
+
+## AUTHENTICATION ERROR MESSAGES:
+- If Customer ID is invalid: "Invalid Customer ID. Please provide a valid Customer ID (e.g., CUST1001)."
+- If PIN is incorrect: "Incorrect PIN for Customer ID [CUST####]. Please try again."
+- If both are wrong: "Invalid Customer ID and PIN combination. Please check your credentials and try again."
+
+## Tool Usage Rules:
+- When a user asks about account balances, card dues, loan details, or account summary, use get_account_summary tool **AFTER** authentication (use stored credentials if available)
+- When a user needs help with issues, complaints, or service requests, use file_service_request tool **AFTER** authentication (use stored credentials if available)
+- For general banking questions about products, features, or procedures, use the banking_faq_tool_schema tool
+- Do NOT announce that you're using tools or searching for information
+- Simply use the tool and provide the direct answer
+
+## Response Format:
+- ALWAYS answer in the shortest, most direct way possible
+- Do NOT add extra greetings, confirmations, or explanations
+- Do NOT mention backend systems or tools
+- Speak naturally as a helpful banking representative who already knows the information
+- TOOL RESPONSE SUMMARY RULE:
+After completing any tool call (such as retrieving an account summary or filing a service request), always include a clear summary of all user-provided inputs involved in that flow, followed by the final result (e.g., account summary or service request confirmation).
+
+The summary must include:
+
+All collected fields in the order they were asked
+
+The tool output (e.g., account details or service request ID)
+
+Example (for a service request):
+
+Your service request has been filed.
+- Customer ID: CUST1001
+- Category: Card Issue
+- Description: My debit card got blocked after entering wrong PIN
+- Preferred Contact Method: Phone
+- Request ID: SRV23891
+
+Available Tools:
+1. get_account_summary - Retrieve customer's financial summary across all accounts (requires authentication)
+2. file_service_request - File customer service requests for follow-up by support team (requires authentication)
+3. banking_faq_tool_schema - Retrieve answers from the banking knowledge base
+
+## SYSTEMATIC QUESTION COLLECTION:
+- When a user wants account information or needs to file a service request, IMMEDIATELY check session state for existing authentication
+- If already authenticated in session, proceed directly with remaining required information
+- Ask ONLY ONE question at a time
+- After each user response, check what information is still missing
+- Ask for the NEXT missing required field (in the exact order listed above)
+- Do NOT ask multiple questions in one message
+- Do NOT skip any required questions
+- Do NOT proceed until ALL required information is collected
+- **ALWAYS** use stored authentication if available, verify authentication before proceeding with tools only on first authentication
+
+## EXAMPLES OF CORRECT BEHAVIOR:
+
+**First Account-Related Request:**
+User: "What's my account balance?"
+Assistant: "What is your Customer ID?"
+
+User: "CUST1001"
+Assistant: "Please enter your 4 digit PIN."
+
+User: "1023"
+Assistant: [Verify CUST1001 + 1023 is valid, store authentication state, then use get_account_summary tool and provide account summary]
+
+**Subsequent Account-Related Requests in Same Session:**
+User: "What are your loan interest rates?"
+Assistant: [Use banking_faq_tool_schema tool and provide loan information]
+
+User: "Show me my credit card details too"
+Assistant: [Use get_account_summary tool with stored Customer ID and PIN - no need to ask again]
+
+User: "I need help with a blocked card"
+Assistant: "What category best describes your issue? (e.g., Card Issue, Transaction Dispute, Account Update)"
+[Uses stored CUST1001 authentication, only asks for service request details]
+
+**Different Customer ID in Same Session:**
+User: "Can you check account for CUST1002?"
+Assistant: "Please enter your 4 digit PIN for Customer ID CUST1002."
+
+## EXAMPLES OF INCORRECT BEHAVIOR:
+- ❌ "What's your Customer ID, PIN, and issue description?" (asking multiple questions)
+- ❌ Asking for Customer ID again after it was already provided and verified in the session
+- ❌ Asking for PIN again for the same Customer ID in the same session
+- ❌ Skipping PIN verification on first authentication
+- ❌ Proceeding with incomplete information
+- ❌ Not checking conversation history for existing authentication
+- ❌ Re-asking for credentials after using FAQ tool
+
+## SECURITY GUIDELINES:
+- Require PIN verification only once per Customer ID in each session
+- Never store or reference PIN values in conversation history for security
+- If user switches to a different Customer ID, ask for the corresponding PIN
+- Treat all financial information as sensitive and confidential
+- **ALWAYS** verify Customer ID and PIN combination before first account access
+- **MAINTAIN** authentication state throughout session for user experience
+
+## PRODUCT KNOWLEDGE:
+You have access to comprehensive information about AnyBank SG products including:
+- Savings Accounts (eSaver Plus, Young Savers)
+- Current Accounts (Everyday Current, Expat Current)
+- Credit Cards (Rewards+, Cashback Max)
+- Loans (Personal Loan, HDB Home Loan)
+- Digital banking features and services
+
+## RESPONSE GUIDELINES:
+- Handle greetings warmly and ask how you can help with their banking needs today
+- For product inquiries, provide specific details from the knowledge base
+- For account-specific queries, always use appropriate tools with proper authentication
+- For service issues, efficiently collect information and file requests
+- Keep responses concise and actionable
+- Never leave users without a clear next step or resolution
+
+## WHATSAPP MESSAGE FORMATTING:
+- Write WhatsApp messages as natural, conversational text
+- Use proper paragraph spacing instead of \n characters
+- Avoid any escape sequences or formatting codes
+- Keep messages clean and readable without technical formatting
+- Use natural line breaks and spacing for readability
+- **NEVER** include literal \n characters in WhatsApp messages
+- Use actual line breaks and proper spacing for message formatting
+- Ensure WhatsApp messages are formatted naturally without escape sequences
+- **CRITICAL**: When generating WhatsApp messages, use actual line breaks and spacing, NOT escape sequences
+- Format messages with natural paragraph breaks and proper spacing
+- Write messages exactly as they should appear to the user, without any technical formatting codes
+'''
+        print(base_prompt)
+        print('base_prompt is fetched from db')
+        
+        # Banking tool schema
+        banking_tools = [
+            {
+                "name": "get_account_summary",
+                "description": "Retrieve customer's financial summary across savings, current, credit card, and loan accounts",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string", "description": "Unique customer identifier (e.g., CUST1001)"},
+                        "pin": {"type": "string", "description": "4-6 digit numeric PIN for authentication"}
+                    },
+                    "required": ["customer_id", "pin"]
+                }
+            },
+            {
+                "name": "file_service_request",
+                "description": "File a customer service request for follow-up by AnyBank SG's support team",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string", "description": "Unique customer identifier (e.g., CUST1001)"},
+                        "pin": {"type": "string", "description": "4-digit PIN for authentication"},
+                        "category": {"type": "string", "description": "Type of request (e.g., Card Issue, Transaction Dispute, Account Update)"},
+                        "description": {"type": "string", "description": "User-provided description of the issue/request"},
+                        "preferred_contact_method": {"type": "string", "description": "User's preferred way of follow-up: Phone, Email, or WhatsApp"}
+                    },
+                    "required": ["customer_id", "pin", "category", "description", "preferred_contact_method"]
+                }
+            },
+            {
+                "name": "banking_faq_tool_schema",
+                "description": "Retrieve answers from the banking knowledge base for general banking questions, policies, and procedures",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "knowledge_base_retrieval_question": {"type": "string", "description": "A question to retrieve from the banking knowledge base about banking services, policies, procedures, or general information."}
+                    },
+                    "required": ["knowledge_base_retrieval_question"]
+                }
+            }
+        ]
+        # --- Customer Authentication Data ---
+        valid_customers = {
+            "CUST1001": {"name": "Rachel Tan", "pin": "1023"},
+            "CUST1002": {"name": "Jason Lim", "pin": "7645"},
+            "CUST1003": {"name": "Mary Goh", "pin": "3391"},
+            "CUST1004": {"name": "Daniel Ong", "pin": "5912"},
+            "CUST1005": {"name": "Aisha Rahman", "pin": "8830"}
+        }
+
+        def authenticate_customer(customer_id, pin):
+            """Authenticate customer ID and PIN combination"""
+            if customer_id not in valid_customers:
+                return False, "Invalid Customer ID. Please provide a valid Customer ID (e.g., CUST1001)."
+            
+            if valid_customers[customer_id]["pin"] != pin:
+                return False, f"Incorrect PIN for Customer ID {customer_id}. Please try again."
+            
+            return True, f"Authentication successful for {valid_customers[customer_id]['name']}"
+
+
+        # --- Mock banking tool implementations ---
+        def get_account_summary(customer_id, pin):
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(customer_id, pin)
+            if not auth_success:
+                return {"error": auth_message}
+            mock_accounts = {
+                "CUST1001": [
+                    {
+                        "account_type": "savings",
+                        "account_name": "eSaver Plus",
+                        "account_number": "XXXXXX4321",
+                        "balance": 10452.75,
+                        "currency": "SGD",
+                        "status": "Active"
+                    },
+                    {
+                        "account_type": "credit_card",
+                        "account_name": "Rewards+ Card",
+                        "account_number": "XXXXXX9876",
+                        "outstanding_balance": 1880.10,
+                        "credit_limit": 12000.00,
+                        "payment_due_date": get_dynamic_date(3),
+                        "currency": "SGD",
+                        "status": "Active"
+                    },
+                    {
+                        "account_type": "loan",
+                        "account_name": "Personal Loan",
+                        "account_number": "LN-984521",
+                        "outstanding_balance": 14600.00,
+                        "monthly_installment": 630.50,
+                        "tenure_remaining_months": 28,
+                        "interest_rate": "7.2% EIR",
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ],
+                "CUST1002": [
+                    {
+                        "account_type": "savings",
+                        "account_name": "Young Savers",
+                        "account_number": "XXXXXX3344",
+                        "balance": 1850.40,
+                        "currency": "SGD",
+                        "status": "Active"
+                    },
+                    {
+                        "account_type": "credit_card",
+                        "account_name": "Cashback Max Card",
+                        "account_number": "XXXXXX6543",
+                        "outstanding_balance": 390.20,
+                        "credit_limit": 6000.00,
+                        "payment_due_date": get_dynamic_date(3),
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ],
+                "CUST1003": [
+                    {
+                        "account_type": "current",
+                        "account_name": "Everyday Current Account",
+                        "account_number": "XXXXXX2233",
+                        "balance": 4250.00,
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ],
+                "CUST1004": [
+                    {
+                        "account_type": "loan",
+                        "account_name": "HDB Home Loan",
+                        "account_number": "LN-225577",
+                        "outstanding_balance": 285000.00,
+                        "monthly_installment": 1450.00,
+                        "tenure_remaining_months": 180,
+                        "interest_rate": "2.50% (Fixed)",
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ],
+                "CUST1005": [
+                    {
+                        "account_type": "credit_card",
+                        "account_name": "Rewards+ Card",
+                        "account_number": "XXXXXX7890",
+                        "outstanding_balance": 0.00,
+                        "credit_limit": 10000.00,
+                        "payment_due_date": get_dynamic_date(3),
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ]
+            }
+            return mock_accounts.get(customer_id, [])
+
+        def file_service_request(customer_id, pin, category, description, preferred_contact_method):
+        
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(customer_id, pin)
+            if not auth_success:
+                return {"error": auth_message}
+            ticket_id = f"SRQ-{str(uuid.uuid4())[:6].upper()}"
+            return {
+                "ticket_id": ticket_id,
+                "status": "Received",
+                "assigned_team": "Customer Support – Cards",
+                "expected_callback": get_dynamic_datetime(2),
+                "summary": f"{category} issue filed for review"
+            }
+
+
+        def get_banking_faq_chunks(query):
+            try:
+                print("IN BANKING FAQ: ", query)
+                chunks = []
+                # Use the banking knowledge base ID from environment
+                banking_kb_id = os.environ['bank_kb_id']
+                response_chunks = retrieve_client.retrieve(
+                    retrievalQuery={                                                                                
+                        'text': query
+                    },
+                    knowledgeBaseId=banking_kb_id,
+                    retrievalConfiguration={
+                        'vectorSearchConfiguration': {                          
+                            'numberOfResults': 10,                                                                                              
+                            'overrideSearchType': 'HYBRID'
+                        }
+                    }
+                )
+               
+                for item in response_chunks['retrievalResults']:
+                    if 'content' in item and 'text' in item['content']:
+                        chunks.append(item['content']['text'])
+                print('BANKING FAQ CHUNKS: ', chunks)  
+                return chunks
+            except Exception as e:
+                print("An exception occurred while retrieving banking FAQ chunks:", e)
+                return []
+    
+
+        input_tokens = 0
+        output_tokens = 0
+        print("In banking_agent_invoke_tool (Banking Bot)")
+
+        
+        # Extract customer ID and PIN from chat history
+        extracted_customer_id = None
+        extracted_pin = None
+        
+        for message in chat_history:
+            if message['role'] == 'user':
+                content_text = message['content'][0]['text']
+                
+                # Extract customer ID (CUST followed by 4 digits)
+                customer_id_match = re.search(r'\b(CUST\d{4})\b', content_text.upper())
+                if customer_id_match:
+                    extracted_customer_id = customer_id_match.group(1)
+                    print(f"Extracted Customer ID from chat history: {extracted_customer_id}")
+                
+                # Extract PIN (4-6 digit number) - look for patterns like "PIN 1234" or just "1234"
+                pin_match = re.search(r'\b(\d{4,6})\b', content_text)
+                if pin_match:
+                    # Additional check to make sure it's likely a PIN (not part of other numbers)
+                    potential_pin = pin_match.group(1)
+                    # If it's 4-6 digits and not part of a larger number, consider it a PIN
+                    if len(potential_pin) >= 4 and len(potential_pin) <= 6:
+                        extracted_pin = potential_pin
+                        print(f"Extracted PIN from chat history: {extracted_pin}")
+                
+                # If we found both, we can break
+                if extracted_customer_id and extracted_pin:
+                    break
+        
+        # Enhance system prompt with customer ID and PIN context
+        if extracted_customer_id and extracted_pin:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's ID is {extracted_customer_id} and PIN is {extracted_pin}. Use these credentials automatically for any tool calls that require them without asking again."
+            print(f"Enhanced prompt with Customer ID: {extracted_customer_id} and PIN: {extracted_pin}")
+        elif extracted_customer_id:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's ID is {extracted_customer_id}. Use this ID automatically for any tool calls that require it without asking again."
+            print(f"Enhanced prompt with Customer ID: {extracted_customer_id}")
+        elif extracted_pin:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's PIN is {extracted_pin}. Use this PIN automatically for any tool calls that require it without asking again."
+            print(f"Enhanced prompt with PIN: {extracted_pin}")
+        else:
+            enhanced_prompt = base_prompt
+        
+        # Use the enhanced_prompt instead of base_prompt
+        prompt = enhanced_prompt
+        
+        # First API call to get initial response
+        try:
+            response = bedrock_client.invoke_model_with_response_stream(
+                contentType='application/json',
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4000,
+                    "temperature": 0,
+                    "top_p": 0.999,
+                    "top_k": 250,
+                    "system": prompt,
+                    "tools": banking_tools,
+                    "messages": chat_history
+                }),
+                modelId=model_id
+            )
+        except Exception as e:
+            print("AN ERROR OCCURRED : ", e)
+            response = "We are unable to assist right now please try again after few minutes"
+            return {"answer": response, "question": chat, "session_id": session_id}
+
+        streamed_content = ''
+        content_block = None
+        assistant_response = []
+        for item in response['body']:
+            content = json.loads(item['chunk']['bytes'].decode())
+            if content['type'] == 'content_block_start':
+                content_block = content['content_block']
+            elif content['type'] == 'content_block_stop':
+                print(f"Content block at stop: {content_block}")  # Add debug line
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                except api_gateway_client.exceptions.GoneException:
+                    print(f"Connection {connectionId} is closed (GoneException) - stop message")
+                except Exception as e:
+                    print(f"WebSocket send error (stop): {e}")
+                if content_block['type'] == 'text':
+                    content_block['text'] = streamed_content
+                    assistant_response.append(content_block)
+                elif content_block['type'] == 'tool_use':
+                    try:
+                        content_block['input'] = json.loads(streamed_content)
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error for tool input: {e}")
+                        print(f"Streamed content: {streamed_content}")
+                        content_block['input'] = {}
+                    assistant_response.append(content_block)
+                streamed_content = ''
+            elif content['type'] == 'content_block_delta':
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                except api_gateway_client.exceptions.GoneException:
+                    print(f"Connection {connectionId} is closed (GoneException) - delta message")
+                except Exception as e:
+                    print(f"WebSocket send error (delta): {e}")
+                if 'delta' in content and isinstance(content['delta'], dict):
+                    if content['delta']['type'] == 'text_delta':
+                        streamed_content += content['delta']['text']
+                    elif content['delta']['type'] == 'input_json_delta':
+                        streamed_content += content['delta']['partial_json']
+            elif content['type'] == 'message_delta':
+                try:
+                    if 'usage' in content and isinstance(content['usage'], dict):
+                        tool_tokens = content['usage']['output_tokens']
+                    else:
+                        tool_tokens = 0
+                except (KeyError, TypeError) as e:
+                    print(f"Error accessing usage tokens: {e}")
+                    tool_tokens = 0
+            elif content['type'] == 'message_stop':
+                input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
+                output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
+        chat_history.append({'role': 'assistant', 'content': assistant_response})
+        
+        # Check if any tools were called
+        tools_used = []
+        tool_results = []
+        
+        for action in assistant_response:
+            if action['type'] == 'tool_use':
+                tools_used.append(action['name'])
+                tool_name = action['name']
+                tool_input = action['input']
+                tool_result = None
+                
+                # Send a heartbeat to keep WebSocket alive during tool execution
+                try:
+                    heartbeat = {'type': 'heartbeat'}
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                except Exception as e:
+                    print(f"Heartbeat send error: {e}")
+                
+                # Execute the appropriate banking tool
+                if tool_name == 'get_account_summary':
+                    print("get_account_summary is called..")
+                    tool_result = get_account_summary(tool_input['customer_id'], tool_input['pin'])
+                    # Check for authentication error
+                    if isinstance(tool_result, dict) and 'error' in tool_result:
+                        print(f"Authentication failed for get_account_summary: {tool_result['error']}")
+                elif tool_name == 'file_service_request':
+                    tool_result = file_service_request(
+                        tool_input['customer_id'],
+                        tool_input['pin'],
+                        tool_input['category'],
+                        tool_input['description'],
+                        tool_input['preferred_contact_method']
+                    )
+                    # Check for authentication error
+                    if isinstance(tool_result, dict) and 'error' in tool_result:
+                        print(f"Authentication failed for file_service_request: {tool_result['error']}")
+                elif tool_name == 'banking_faq_tool_schema':
+                    print("banking_faq is called ...")
+                    # Send another heartbeat before FAQ retrieval
+                    try:
+                        heartbeat = {'type': 'heartbeat'}
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                    except Exception as e:
+                        print(f"Banking FAQ heartbeat send error: {e}")
+                    
+                    tool_result = get_banking_faq_chunks(tool_input['knowledge_base_retrieval_question'])
+                    
+                    # If FAQ tool returns empty or no results, provide fallback
+                    if not tool_result or len(tool_result) == 0:
+                        tool_result = ["I don't have specific information about that in our current banking knowledge base. Let me schedule a callback with one of our banking agents who can provide detailed information."]
+                
+                # Create tool result message with better error handling
+                try:
+                    if not isinstance(action, dict):
+                        print(f"Action is not a dict: {type(action)}, value: {action}")
+                        continue
+                        
+                    if 'id' not in action:
+                        print(f"Action missing 'id' field: {action}")
+                        continue
+                    
+                    print(f"Tool result type: {type(tool_result)}")
+                    print(f"Tool result content: {tool_result}")
+                    
+                    if isinstance(tool_result, list) and tool_result:
+                        content_text = "\n".join(tool_result)
+                    elif isinstance(tool_result, list) and not tool_result:
+                        content_text = "No information available"
+                    else:
+                        content_text = str(tool_result) if tool_result else "No information available"
+                    
+                    tool_response_dict = {
+                        "type": "tool_result",
+                        "tool_use_id": action['id'],
+                        "content": [{"type": "text", "text": content_text}]
+                    }
+                    tool_results.append(tool_response_dict)
+                    
+                except Exception as e:
+                    print(f"Error creating tool response: {e}")
+                    print(f"Action type: {type(action)}")
+                    print(f"Action content: {action}")
+                    # Skip this tool result instead of crashing
+                    continue
+                tool_results.append(tool_response_dict)
+        
+        # If tools were used, add tool results to chat history and make second API call
+        if tools_used:
+            # Add tool results to chat history
+            chat_history.append({'role': 'user', 'content': tool_results})
+            
+            # Make second API call with tool results
+            try:
+                response = bedrock_client.invoke_model_with_response_stream(
+                    contentType='application/json',
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 4000,
+                        "temperature": 0,
+                        "system": prompt,
+                        "tools": banking_tools,
+                        "messages": chat_history
+                    }),
+                    modelId=model_id
+                )
+            except Exception as e:
+                print("ERROR IN SECOND API CALL:", e)
+                # Send error response via WebSocket
+                error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+                for word in error_response.split():
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    except:
+                        pass
+                stop_answer = {'type': 'content_block_stop', 'index': 0}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+                return {"answer": error_response, "question": chat, "session_id": session_id}
+
+            # Process the streaming response
+            streamed_content = ''
+            content_block = None
+            assistant_response = []
+            
+            for item in response['body']:
+                content = json.loads(item['chunk']['bytes'].decode())
+                if content['type'] == 'content_block_start':
+                    content_block = content['content_block']
+                elif content['type'] == 'content_block_stop':
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - stop message (tool)")
+                    except Exception as e:
+                        print(f"WebSocket send error (stop, tool): {e}")
+                    if content_block['type'] == 'text':
+                        content_block['text'] = streamed_content
+                        assistant_response.append(content_block)
+                    elif content_block['type'] == 'tool_use':
+                        try:
+                            content_block['input'] = json.loads(streamed_content)
+                        except json.JSONDecodeError as e:
+                            print(f"JSON decode error for tool input: {e}")
+                            print(f"Streamed content: {streamed_content}")
+                            content_block['input'] = {}
+                        assistant_response.append(content_block)
+                    streamed_content = ''
+                elif content['type'] == 'content_block_delta':
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - delta message (tool)")
+                    except Exception as e:
+                        print(f"WebSocket send error (delta, tool): {e}")
+                    if content['delta']['type'] == 'text_delta':
+                        streamed_content += content['delta']['text']
+                    elif content['delta']['type'] == 'input_json_delta':
+                        streamed_content += content['delta']['partial_json']
+                elif content['type'] == 'message_stop':
+                    input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
+                    output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
+            
+            # Extract final answer
+            final_ans = ""
+            for i in assistant_response:
+                if i['type'] == 'text':
+                    final_ans = i['text']
+                    break
+            
+            # If no text response, provide fallback
+            if not final_ans:
+                final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
+            
+            return {"statusCode": "200", "answer": final_ans, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+
+        else:
+            # No tools called, handle normal response
+            for action in assistant_response:
+                if action['type'] == 'text':
+                    ai_response = action['text']
+                    return {"statusCode": "200", "answer": ai_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+            
+            # Fallback if no text response
+            return {"statusCode": "200", "answer": "I'm here to help with your banking needs. How can I assist you today?", "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        response = "An Unknown error occurred. Please try again after some time."
+        return {
+            "statusCode": "500",
+            "answer": response,
+            "question": chat,
+            "session_id": session_id,
+            "input_tokens": "0",
+            "output_tokens": "0"
+        }
+def generate_risk_sandbox(event):
+
+    print("RISKKKKKKKKKKKK")
+
+    applicant_profile = event.get("applicant_profile", {})
+    financials = event.get("financials", {})
+    loan_details = event.get("loan_details", {})
+    collateral = event.get("collateral", {})
+    agent_comments = event.get("agent_comments", "")
+
+    # Applicant Profile
+    name = applicant_profile.get("name", "")
+    age = applicant_profile.get("age", 0)
+    occupation = applicant_profile.get("occupation", "")
+    credit_score = applicant_profile.get("credit_score", 0)
+
+    # Financial Details
+    monthly_income = financials.get("monthly_income", 0)
+    existing_emis = financials.get("existing_emis", 0)
+    if existing_emis==None:
+        existing_emis=0
+    print("jcbsinsduckjcjjjjjjjj",existing_emis)
+    net_pay = financials.get("net_pay", monthly_income - existing_emis)
+
+    # Loan Details
+    loan_type = loan_details.get("loan_type", "Secured Personal Loan")
+    loan_purpose = loan_details.get("loan_purpose", "")
+    requested_amount = loan_details.get("requested_amount", 0)
+    tenure_months = loan_details.get("tenure_months", 0)
+    interest_rate = loan_details.get("interest_rate", 0)
+
+    # Collateral Details
+    collateral_type = collateral.get("type", "")
+    collateral_description = collateral.get("description", "")
+    market_value = collateral.get("market_value", 0)
+    condition = collateral.get("condition", "")
+    ownership_proof = collateral.get("ownership_proof", "")
+    # Initialize Bedrock client
+    bedrock = boto3.client('bedrock-runtime', region_name=region_used)
+    
+    prompt = f'''
+You are a financial risk assessment engine and your role is to evaluate the risk of lending based on the provided applicant, financial, loan, and collateral data, along with optional free-text comments from the agent. Use this to generate a clear, consistent, and structured response for the agent to make a lending decision.
+
+APPLICANT DATA:
+- Name: {name}
+- Age: {age}
+- Occupation: {occupation}
+- Credit Score: {credit_score}
+- Monthly Income: SGD {monthly_income}
+- Existing EMIs: SGD {existing_emis}
+- Loan Type: {loan_type}
+- Loan Purpose: {loan_purpose if 'loan_purpose' in locals() else ''}
+- Requested Amount: SGD {requested_amount}
+- Tenure: {tenure_months} months
+- Interest Rate: {interest_rate}%
+
+COLLATERAL DATA:
+- Type: {collateral_type}
+- Description: {collateral_description}
+- Market Value: SGD {market_value}
+- Condition: {condition}
+- Ownership Proof: {ownership_proof}
+
+AGENT COMMENTS: {agent_comments}
+
+IMPORTANT: Calculate all metrics yourself using the provided inputs.
+
+EMI Calculation Formula: [P*r*(1+r)^n]/[(1+r)^n-1]
+Where P = Principal, r = monthly interest rate (annual_rate/12/100), n = tenure in months
+
+### RISK RULES TO APPLY
+
+- **EMI Formula**: [P*r*(1 + r)^n] / [(1 + r)^n - 1], where r = monthly interest rate, n = months
+- **DTI Ratio** = (existing_emis + calculated_emi) / monthly_income*100
+- **LTV Ratio** = requested_amount / market_value*100
+
+#### Risk Score Interpretation:
+- 0-30 → Low Risk
+- 31-60 → Medium Risk
+- 61-100 → High Risk
+
+#### Heuristics:
+- DTI > 55% → High Risk
+- LTV > 70% → High Risk
+- Collateral liquidity: Gold > Vehicle > Watch > Bag
+- Missing income or credit score → Use collateral strength to fallback
+- Agent comments may justify or challenge defaults (e.g., "repeat borrower", "asset verified in person")
+
+Return response in this exact JSON structure:
+
+{{
+  "calculated_metrics": {{
+    "emi_requested_loan": <calculated_emi>,
+    "total_emi_burden": <existing_emis + calculated_emi>,
+    "dti_ratio": "<percentage>%",
+    "ltv_ratio": "<percentage>%"
+  }},
+  "risk_assessment": {{
+    "risk_score": <score_0_to_100>,
+    "risk_level": "Low|Medium|High",
+    "risk_summary": "Brief 2-3 line summary of overall risk"
+  }},
+  "risk_factors": [
+    {{
+      "factor": "Factor name",
+      "severity": "Low|Medium|High",
+      "description": "Brief explanation",
+      "impact": "How it affects the assessment"
+    }}
+  ],
+  "recommendations": {{
+    "primary_recommendation": "APPROVE|CONDITIONAL_APPROVE|DECLINE",
+    "conditions": ["Condition 1", "Condition 2"],
+    "alternative_options": [
+      {{
+        "option": "Option name",
+        "details": "Specific recommendation"
+      }}
+    ]
+  }},
+  "approval_scenarios": [
+    {{
+      "scenario_name": "Scenario Name",
+      "loan_amount": <amount>,
+      "tenure": <months>,
+      "emi": <emi>,
+      "ltv_ratio": "<percentage>%",
+      "dti_ratio": "<percentage>%",
+      "conditions": ["condition1", "condition2"]
+    }}
+  ],
+  "agent_comment_influence": {{
+    "applied_adjustment": "Yes|No",
+    "impact_summary": "If and how the agent's remarks affected risk assessment"
+  }}
+}}
+
+Important: Return only the JSON response, no additional text, no markdown formatting, no code blocks, no explanations.
+'''
+
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 2048,
+        "messages": [{"role": "user", "content": prompt}]
+    })
+    
+    response = bedrock.invoke_model(
+        modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        body=body,
+    )
+    
+    final_text = str(json.loads(response.get("body").read())["content"][0]["text"])
+    print("LLM OUTPUT:", final_text)  # Debug print
+
+    # Try to extract JSON substring if extra text is present
+    import re
+    match = re.search(r'({.*})', final_text, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+    else:
+        json_str = final_text  # fallback
+
+    return json.loads(json_str)
+# banking function code ends here .....
 
 def lambda_handler(event, context):
     global user_intent_flag, overall_flow_flag, ub_number, ub_user_name, pop, str_intent,json
@@ -1643,9 +3051,9 @@ def lambda_handler(event, context):
     # OpenSearch Visual Product Search Functions (defined inside lambda_handler)
     def create_opensearch_client():
         """Create and return OpenSearch client with AWS authentication"""
-        region = OPENSEARCH_REGION
-        HOST = OPENSEARCH_HOST
-        INDEX_NAME = OPENSEARCH_INDEX
+        region = "us-west-2"
+        HOST = "of7eg8ly1gkaw3uv9527.us-west-2.aoss.amazonaws.com"
+        INDEX_NAME = "visualproductsearchmod"
         
         # Use IAM role authentication for Lambda
         import boto3
@@ -1833,11 +3241,11 @@ def lambda_handler(event, context):
             body = {
                 "size": limit,
                 "_source": {
-                    "exclude": ["vsp"]  # Exclude vector field from response
+                    "exclude": ["vspmod"]  # Exclude vector field from response
                 },
                 "query": {
                     "knn": {
-                        "vsp": {
+                        "vspmod": {
                             "vector": search_vector,
                             "k": limit
                         }
@@ -1847,7 +3255,7 @@ def lambda_handler(event, context):
             }
             
             print("Searching OpenSearch for text query...")
-            response = client.search(index=OPENSEARCH_INDEX, body=body)
+            response = client.search(index="visualproductsearchmod", body=body)
             
             results = []
             for hit in response['hits']['hits']:
@@ -1857,7 +3265,7 @@ def lambda_handler(event, context):
                 results.append({
                     "score": score,
                     "product_description": source['product_description'],
-                    "s3_uri": source['s3_uri'],
+                    "s3_uri": format_s3_uri_with_bucket(source['s3_uri']),
                     "type": source['type']
                 })
             
@@ -1893,13 +3301,13 @@ def lambda_handler(event, context):
             body = {
                 "size": limit * 10,  # Get more results to filter
                 "_source": {
-                    "exclude": ["vsp"]  # Exclude vector field from response
+                    "exclude": ["vspmod"]  # Exclude vector field from response
                 },
                 "query": {
                     "bool": {
                         "must": {
                             "knn": {
-                                "vsp": {
+                                "vspmod": {
                                     "vector": search_vector,
                                     "k": limit * 10
                                 }
@@ -1916,7 +3324,7 @@ def lambda_handler(event, context):
             }
             
             print("Searching OpenSearch for image query...")
-            response = client.search(index=OPENSEARCH_INDEX, body=body)
+            response = client.search(index="visualproductsearchmod", body=body)
             
             results = []
             for hit in response['hits']['hits']:
@@ -1930,7 +3338,7 @@ def lambda_handler(event, context):
                 results.append({
                     "score": score,
                     "product_description": source['product_description'],
-                    "s3_uri": source['s3_uri'],
+                    "s3_uri": format_s3_uri_with_bucket(source['s3_uri']),
                     "type": source['type']
                 })
             
@@ -1951,7 +3359,7 @@ def lambda_handler(event, context):
                         exact_matches.append({
                             "score": score,
                             "product_description": source['product_description'],
-                            "s3_uri": source['s3_uri'],
+                            "s3_uri": format_s3_uri_with_bucket(source['s3_uri']),
                             "type": source['type'],
                             "match_type": "exact"
                         })
@@ -1972,7 +3380,7 @@ def lambda_handler(event, context):
                     similar_matches.append({
                         "score": score,
                         "product_description": source['product_description'],
-                        "s3_uri": source['s3_uri'],
+                        "s3_uri": format_s3_uri_with_bucket(source['s3_uri']),
                         "type": source['type'],
                         "match_type": "similar"
                     })
@@ -1993,7 +3401,7 @@ def lambda_handler(event, context):
                         similar_matches.append({
                             "score": score,
                             "product_description": source['product_description'],
-                            "s3_uri": source['s3_uri'],
+                            "s3_uri": format_s3_uri_with_bucket(source['s3_uri']),
                             "type": source['type'],
                             "match_type": "similar"
                         })
@@ -2214,6 +3622,27 @@ def lambda_handler(event, context):
                 "should_proceed": False
             }
    
+    def format_s3_uri_with_bucket(s3_uri):
+        """
+        Helper function to format S3 URI with the correct bucket name
+        Replaces existing bucket name with the configured S3_BUCKET_NAME
+        """
+        if not s3_uri:
+            return s3_uri
+        
+        # If already has s3:// prefix, replace the bucket name
+        if s3_uri.startswith('s3://'):
+            # Extract the key part after the first slash
+            key_part = s3_uri.split('/', 3)[-1]  # Get everything after s3://bucket/
+            formatted_uri = f"s3://{S3_BUCKET_NAME}/{key_part}"
+            print(f"🔄 S3 URI updated: {s3_uri} -> {formatted_uri}")
+            return formatted_uri
+        
+        # If just a key, add bucket name and s3:// prefix
+        formatted_uri = f"s3://{S3_BUCKET_NAME}/{s3_uri}"
+        print(f"🔄 S3 URI formatted: {s3_uri} -> {formatted_uri}")
+        return formatted_uri
+
     def visual_product_search_api(event):
         """
         API for visual product search using OpenSearch
@@ -2229,7 +3658,8 @@ def lambda_handler(event, context):
             search_type = event.get('search_type')  # 'text' or 'image'
             search_query = event.get('search_query')  # text query
             image_base64 = event.get('image_base64')  # base64 encoded image
-            image_s3_uri = event.get('image_s3_uri')  # S3 URI for image
+            image_s3_uri = event.get('image_s3_uri')  # S3 URI for image (legacy)
+            image_filename = event.get('image_filename')  # Image filename for search
             content = event.get('content')  # multipart form data content
             
             print(f"🔍 Search type: {search_type}")
@@ -2277,8 +3707,15 @@ def lambda_handler(event, context):
                     # Remove data URL prefix if present
                     if image_base64.startswith('data:image'):
                         image_base64 = image_base64.split(',')[1]
-                elif image_s3_uri:
-                    print(f"Processing image from S3 URI: {image_s3_uri}")
+                elif image_s3_uri or image_filename:
+                    # Handle both legacy S3 URI and new filename parameter
+                    if image_filename:
+                        print(f"Processing image from filename: {image_filename}")
+                        # Construct S3 URI from filename
+                        image_s3_uri = f"s3://{S3_BUCKET_NAME}/visualproductsearch/{image_filename}"
+                        print(f"Constructed S3 URI: {image_s3_uri}")
+                    else:
+                        print(f"Processing image from S3 URI: {image_s3_uri}")
                     
                     # Use the same logic as search_products.py
                     try:
@@ -2293,7 +3730,7 @@ def lambda_handler(event, context):
                             # Remove 's3://' and split by '/'
                             path_parts = image_s3_uri[5:].split('/', 1)
                             if len(path_parts) == 2:
-                                bucket_name = path_parts[0]
+                                bucket_name = S3_BUCKET_NAME
                                 image_key = path_parts[1]
                             else:
                                 return {
@@ -2510,15 +3947,879 @@ def lambda_handler(event, context):
                     'error': f'Search failed: {str(e)}'
                 })
             }
+  #insurance event_type code starts here
+    if event_type == "get_pw":
+        return db_password
 
+
+    if event_type == 'genai_product_desc':
+        return describe_image(event)
+
+    if event_type == "generate_summary":     
+        
+        print("SUMMARY GENERATION ")
+        session_id = event["session_id"]
+        chat_query = f'''
+        SELECT question,answer
+        FROM {schema}.{chat_history_table}    
+        WHERE session_id = '{session_id}';
+        '''
+    
+        chat_details = select_db(chat_query)
+        print("CHAT DETAILS : ",chat_details)
+        history = ""
+    
+        for chat in chat_details:
+            history1 = "Human: "+chat[0]
+            history2 = "Bot: "+chat[1]
+            history += "\n"+history1+"\n"+history2+"\n"
+        print("HISTORY : ",history)
+        prompt_query = f"SELECT analytics_prompt from {schema}.{prompt_metadata_table} where id = 1;"
+        prompt_template = f'''
+        <Instruction>
+        Based on the conversation above, please provide the output in the following format:
+        Topic:
+		- Identify the main topic of the conversation, it should be a single word topic
+        Conversation Type:
+        - Identify if the conversation is an Enquiry or a Complaint. If both are present, classify it as (Enquiry/Complaint).
+        - Consider the emotional tone and context to determine the type.
+        
+        Conversation Summary Explanation:
+        - Explain why you labelled the conversation as Enquiry, Complaint, or both.
+        - Highlight the key questions, concerns, or issues raised by the customer.
+	-IMPORTANT: keep the summary in 2-3 lines
+        
+        Detailed Summary:
+        - Provide a clear summary of the conversation, capturing the customer’s needs, questions, and any recurring themes.
+	- IMPORTANT: keep the summary in 2-3 lines keep it short
+
+        
+	
+        Conversation Sentiment:
+        - Analyse overall sentiment of conversation carried out by the user with the agent.
+		- Analyse the tone and feelings associated within the conversation.
+		- possible values are (Positive/Neutral/Negative)
+     	- Only provide the final sentiment here in this key. 
+        Conversation Sentiment Generated Details:
+        - Explain why you labelled the Lead as Positive/Neutral/Negative.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        
+        Lead Sentiment:
+        - Indicate if potential leads are generated from the conversation (Yes/No).
+        
+        Leads Generated Details:
+        - Explain why you labelled the Lead as Yes/No.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        Action to be Taken:
+        - Outline next steps for the sales representative to follow up on the opportunities identified.
+        - Include any necessary follow-up actions, information to provide, or solutions to offer.
+        
+        WhatsApp Followup Creation:
+		- Craft a highly personalized follow-up WhatsApp message to engage the customer effectively as a customer sales representative.
+		- Ensure to provide a concise response and make it as brief as possible. Maximum 2-3 lines as it should be shown in the whatsapp mobile screen, so make the response brief.
+        - Incorporate key details from the conversation script to show understanding and attentiveness(Do not hallucinate or add any details that are ecplicitely there in the conversation).
+        - Tailor the WhatsApp message to address specific concerns, provide solutions, and include a compelling call-to-action.
+        - Infuse a sense of urgency or exclusivity to prompt customer response.
+		- Format the WhatsApp message with real line breaks for each paragraph (not the string n). Use actual newlines to separate the greeting, body, call-to-action, and closing. 
+	
+	Follow the structure of the sample WhatsApp message below:
+	<format_for_whatsapp_message>
+
+Hi, Thanks for reaching out to AnyBank! 
+
+You had a query about [Inquiry Topic]. Here’s what you can do next:
+
+1. [Step 1]  
+2. [Step 2]
+
+If you’d like, I can personally help you with [Offer/Action]. Just share your [Details Needed].
+
+Looking forward to hearing from you soon.
+
+</format_for_whatsapp_message>
+	- Before providing the whatsapp response, it is very critical that you double check if its in the provided format
+
+
+<language_constraints>
+
+If the conversation history (user questions and bot answers) is primarily in Tagalog, then provide the values for all JSON keys in Tagalog. Otherwise, provide the values strictly in English.
+If the conversation history is dominantly in Tagalog, provide the value for "Topic" in Tagalog; otherwise, provide it in English.
+Always keep the JSON keys in English exactly as specified below:
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+
+Only the **values** for each key should switch between English or Tagalog based on the dominant language in the conversation. Never translate or modify the keys. 
+
+</language_constraints>
+
+
+	
+        
+</Instruction> 
+return output in JSON in a consistent manner
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+these are the keys to be always used while returning response. Strictly do not add key values of your own.
+
+## WHATSAPP MESSAGE FORMATTING:
+- Write WhatsApp messages as natural, conversational text
+- Use proper paragraph spacing instead of \n characters
+- Avoid any escape sequences or formatting codes
+- Keep messages clean and readable without technical formatting
+- Use natural line breaks and spacing for readability
+- **NEVER** include literal \n characters in WhatsApp messages
+- Use actual line breaks and proper spacing for message formatting
+- Ensure WhatsApp messages are formatted naturally without escape sequences
+- **CRITICAL**: When generating WhatsApp messages, use actual line breaks and spacing, NOT escape sequences
+- Format messages with natural paragraph breaks and proper spacing
+- Write messages exactly as they should appear to the user, without any technical formatting codes
+        '''
+        # prompt_template = prompt_response[0][0]
+        print("PROMPT : ",prompt_template)
+        template = f'''
+        <Conversation>
+        {history}
+        </Conversation>
+        {prompt_template}
+        '''
+    
+        # - Ensure the email content is formatted correctly with new lines. USE ONLY "\n" for new lines. 
+        #         - Ensure the email content is formatted correctly for new lines instead of using new line characters.
+        response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",  
+            "max_tokens": 4000,     
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": template},
+                    ]
+                }
+            ],
+        }), modelId=model_id)                                                                                                                       
+    
+        inference_result = response['body'].read().decode('utf-8')
+        final = json.loads(inference_result)
+        out=final['content'][0]['text']
+        print(out)
+        llm_out = extract_sections(out)
+        
+    
+        topic = "" 
+        conversation_type = ""
+        conversation_summary_explanation = ""
+        detailed_summary = ""
+        conversation_sentiment = ""
+        conversation_sentiment_generated_details = ""
+        lead_sentiment = ""
+        leads_generated_details = ""
+        action_to_be_taken = ""
+        email_creation = ""
+        
+        try:
+            if "Topic" in llm_out:
+                topic = llm_out['Topic']
+        except:
+            topic = ""
+        
+        try:
+            
+            if 'Conversation Type' in llm_out:
+                conversation_type = llm_out['Conversation Type']
+                if conversation_type == "N/A":
+                    enquiry, complaint = (0, 0)
+                else:
+                    enquiry, complaint = (1, 0) if conversation_type == "Enquiry" else (0, 1)
+        except:
+            enquiry , complaint = 0,0
+            
+        try:
+            if 'Conversation Summary Explanation' in llm_out:
+                conversation_summary_explanation = llm_out['Conversation Summary Explanation']
+        except:
+            conversation_summary_explanation= ""
+        
+        try:
+            if 'Detailed Summary' in llm_out:
+                detailed_summary = llm_out['Detailed Summary']
+        except:
+            detailed_summary = ""
+        
+        try:
+            if 'Conversation Sentiment' in llm_out:
+                conversation_sentiment = llm_out['Conversation Sentiment']
+        except:
+            conversation_sentiment = ""
+        
+        try:
+            if 'Conversation Sentiment Generated Details' in llm_out:
+                conversation_sentiment_generated_details = llm_out['Conversation Sentiment Generated Details']
+        except:
+            conversation_generated_details = ""
+            
+        try:
+            if 'Lead Sentiment' in llm_out:
+                lead_sentiment = llm_out['Lead Sentiment']
+                lead = 1 if lead_sentiment == "Hot" else 0
+        except:
+            lead = 0
+        
+        try:
+            if 'Leads Generated Details' in llm_out:
+                leads_generated_details = llm_out['Leads Generated Details']
+        except:
+            leads_generated_details = ""
+        
+        try:
+            if 'Action to be Taken' in llm_out:   
+                action_to_be_taken = llm_out['Action to be Taken']
+        except:
+            action_to_be_taken = ""
+        
+        try:
+            if 'Whatsapp Creation' in llm_out:
+                email_creation = llm_out['Whatsapp Creation']
+        except:
+            email_creation = ""
+        detailed_summary = detailed_summary.replace("'", "''")
+        email_creation = email_creation.replace("'", "''")
+        action_to_be_taken = action_to_be_taken.replace("'", "''")
+        leads_generated_details = leads_generated_details.replace("'", "''")
+        conversation_sentiment_generated_details = conversation_sentiment_generated_details.replace("'", "''")        
+        
+        print("LEAD : ",lead)
+        print("ENQUIRY : ",enquiry)
+        print("COMPLAINT : ",complaint)
+        print("conversation_type:", conversation_type)
+        print("Topic: ",topic)
+        print("Sentiment Explanation:", conversation_summary_explanation)
+        print("Detailed summary:", detailed_summary)
+        print("CONVERSATION SENTIMENT :",conversation_sentiment)
+        print("CONVERSATION SENTIMENT DETAILS:",conversation_sentiment_generated_details)
+        print("lead Sentiment:", lead_sentiment)
+        print("lead explanation:", leads_generated_details)
+        print("next_best_action:",action_to_be_taken)
+        print("email_content:",email_creation)
+        session_time = datetime.now()
+        update_query = f'''UPDATE {schema}.{CHAT_LOG_TABLE}
+        SET 
+            lead = {lead},
+            lead_explanation = '{leads_generated_details}',
+            sentiment = '{conversation_sentiment}',
+            sentiment_explanation = '{conversation_sentiment_generated_details}',
+            session_time = '{session_time}',
+            enquiry = {enquiry},
+            complaint = {complaint},
+            summary = '{detailed_summary}',
+            whatsapp_content = '{email_creation}',
+            next_best_action = '{action_to_be_taken}',
+            topic = '{topic}'
+        WHERE 
+            session_id = '{session_id}' 
+            '''
+        update_db(update_query)
+        return {
+                "statusCode" : 200,
+                "message" : "Summary Successfully Generated"
+            }
+    # get_risk_out(body)
+   
+  
+  
+
+    if event_type == 'list_chat_summary':
+        session_id = event['session_id']
+        chat_query = f'''
+        SELECT question,answer
+        FROM {schema}.{chat_history_table}    
+        WHERE session_id = '{session_id}';
+        '''
+    
+        chat_details = select_db(chat_query)
+        print("CHAT DETAILS : ",chat_details)
+        history = []
+    
+        for chat in chat_details:
+            history.append({"Human":chat[0],"Bot":chat[1]})
+        print("HISTORY : ",history)  
+        select_query = f'''select summary, whatsapp_content, sentiment, topic  from genaifoundry.ce_cexp_logs ccl where session_id = '{session_id}';'''
+        summary_details = select_db(select_query)
+        final_summary = {}
+        for i in summary_details:  
+            # print("i:",i)  
+            final_summary['summary'] = i[0]
+            final_summary['whatsapp_content'] = i[1]
+            final_summary['sentiment'] = i[2]
+            final_summary['Topic'] = i[3]   
+            
+        # print(summary_details) 
+        # print(final_summary)   
+        return {"transcript":history,"final_summary":final_summary}   
+
+    if event_type == 'mediplus_assess':
+        return generate_mediplus_assessment(event)
+    elif event_type == 'lifesecure_assess':
+        return generate_lifesecure_assessment(event)
+    
+    if event_type == 'chat_tool':  
+       
+        # api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=gateway_url)
+        # e = json.loads(event["body"])  
+        chat = event['chat']
+        session_id = event['session_id']   
+        connectionId = event["connectionId"]
+        print(connectionId,"connectionid_printtt")
+        chat_history = []
+
+
+        if session_id == None or session_id == 'null' or session_id == '':
+            session_id = str(uuid.uuid4())
+        
+        else:
+            query = f'''select question,answer 
+                    from {schema}.{chat_history_table} 
+                    where session_id = '{session_id}' 
+                    order by created_on desc limit 20;'''
+            history_response = select_db(query)
+
+            if len(history_response) > 0:
+                for chat_session in reversed(history_response):  
+                    chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat_session[0]}]})
+                    chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': chat_session[1]}]})
+        
+            #APPENDING CURRENT USER QUESTION
+        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat}]})
+            
+        print("CHAT HISTORY : ",chat_history)
+
+        tool_response = agent_invoke_tool(chat_history, session_id,chat,connectionId)
+        print("TOOL RESPONSE: ", tool_response)  
+        #insert into chat_history_table
+        query = f'''
+                INSERT INTO {schema}.{chat_history_table}
+                (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
+                VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+                '''
+        values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+        res = insert_db(query, values) 
+
+
+        
+        print(type(session_id))   
+        insert_query = f'''  INSERT INTO genaifoundry.ce_cexp_logs      
+(created_on, environment, session_time, "lead", enquiry, complaint, summary, whatsapp_content, next_best_action, session_id, lead_explanation, sentiment, sentiment_explanation, connectionid, input_token, output_token,topic)
+VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0,%s);'''             
+        values = ('',None,'','','',session_id,'','','','','')            
+        res = insert_db(insert_query,values)   
+        return tool_response    
+    
+#insurance event_type code ends here
+
+
+#banking event_type starts here ..
+    if event_type == 'banking_chat_tool':  
+       
+        # api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=gateway_url)
+        # e = json.loads(event["body"])  
+        chat = event['chat']
+        session_id = event['session_id']   
+        connectionId = event["connectionId"]
+        print(connectionId,"connectionid_printtt")
+        chat_history = []
+
+
+        if session_id == None or session_id == 'null' or session_id == '':
+            session_id = str(uuid.uuid4())
+        
+        else:
+            query = f'''select question,answer 
+                    from {schema}.{banking_chat_history_table} 
+                    where session_id = '{session_id}' 
+                    order by created_on desc;'''
+            history_response = select_db(query)
+            print("history_response is ",history_response)
+
+            if len(history_response) > 0:
+                for chat_session in reversed(history_response):  
+                    chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat_session[0]}]})
+                    chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': chat_session[1]}]})
+        
+            #APPENDING CURRENT USER QUESTION
+        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat}]})
+            
+        print("CHAT HISTORY : ",chat_history)
+
+        tool_response = banking_agent_invoke_tool(chat_history, session_id,chat,connectionId)
+        print("TOOL RESPONSE: ", tool_response)  
+        #insert into banking_chat_history_table
+        query = f'''
+                INSERT INTO {schema}.{banking_chat_history_table}
+                (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
+                VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+                '''
+        values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+        res = insert_db(query, values)
+        print("response:",res)
+
+
+        
+        print(type(session_id))   
+        insert_query = f'''  INSERT INTO genaifoundry.ce_cexp_logs      
+(created_on, environment, session_time, "lead", enquiry, complaint, summary, whatsapp_content, next_best_action, session_id, lead_explanation, sentiment, sentiment_explanation, connectionid, input_token, output_token,topic)
+VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0,%s);'''             
+        values = ('',None,'','','',session_id,'','','','','')            
+        res = insert_db(insert_query,values)   
+        return tool_response
+    if event_type == 'voiceops':
+        try:
+            url =f"http://{ec2_instance_ip}:8000/transcribe"
+            kb_id=''
+            prompt_template = ''
+            print("yes")
+            if event['box_type'] == 'insurance':
+                kb_id = KB_ID
+                print("kb_id",kb_id)
+                prompt_template=f'''You are a Virtual Insurance Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
+
+                        RESPONSE RULES:
+                        - Maximum 2 sentences per response
+                        - Use simple, conversational language
+                        - No bullet points, brackets, or special formatting
+                        - No technical jargon or complex terms
+                        - Answer only what the customer asked
+                        - Skip greetings and confirmations
+
+                        SPEAKING STYLE:
+                        - Talk like you're having a friendly conversation
+                        - Use short, clear sentences
+                        - Avoid reading lists or multiple options
+                        - Give one direct answer, not explanations
+
+                        Search Results: $search_results$
+
+                        Customer Question: $query$
+
+                        Provide a brief, conversational response that directly answers their question. '''
+
+
+            else: 
+                kb_id = bank_kb_id
+                print("bank_kb_id",bank_kb_id)
+                prompt_template=f''' 
+                You are a Virtual Banking Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
+    
+                RESPONSE RULES:
+                - Maximum 2 sentences per response
+                - Use simple, conversational language
+                - No bullet points, brackets, or special formatting
+                - No technical jargon or complex terms
+                - Answer only what the customer asked
+                - Skip greetings and confirmations
+                
+                SPEAKING STYLE:
+                - Talk like you're having a friendly conversation
+                - Use short, clear sentences
+                - Avoid reading lists or multiple options
+                - Give one direct answer, not explanations
+                
+                Search Results: $search_results$
+                
+                Customer Question: $query$
+                
+                Provide a brief, conversational response that directly answers their question.
+                '''
+            payload = json.dumps({
+            "kb_id": kb_id,
+            "session_id": event['session_id'],
+            "audio": event['audio'],
+            "connection_id":event['connectionId'],
+            "connection_url":event['connection_url'],
+            "box_type": event['box_type'],
+            "prompt_template":prompt_template,
+            "bucket_name":voiceops_bucket_name,  # Use the new voice operations bucket
+            "region_name":region_name,
+            "db_cred":{
+            "db_user": db_user,
+            "db_host":db_host,
+            "db_port":db_port,
+            "db_database":db_database,
+            "db_password":db_password}
+            })
+            headers = {
+            'Content-Type': 'application/json'
+            }
+            print(payload)
+            response = requests.request("POST", url, headers=headers, data=payload)
+
+            return response.text
+
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'body': json.dumps({
+                    'message': 'Error processing transcription',
+                    'error': str(e)
+                })
+            }
+        
+    if event_type == 'test_dummy':
+        # Dummy event type for testing the Lambda function
+        print("Testing dummy event type...")
+        return {
+            "statusCode": 200,
+            "body": {
+                "message": "Hello from Lambda with layers!",
+                "event_type": event_type,
+                "timestamp": "2024-01-01T00:00:00Z",
+                "test_data": {
+                    "layers_loaded": True,
+                    "boto3_available": True,
+                    "psycopg2_available": True,
+                    "aws4auth_available": True,
+                    "opensearchpy_available": True,
+                    "requests_available": True
+                }
+            }
+        }
+    if event_type == 'risk_sandbox':
+        
+        return generate_risk_sandbox(event)
+
+    if event_type == "generate_banking_summary":     
+        
+        print("BANKING SUMMARY GENERATION ")
+        session_id = event["session_id"]
+        chat_query = f'''
+        SELECT question,answer
+        FROM {schema}.{banking_chat_history_table}    
+        WHERE session_id = '{session_id}';
+        '''
+    
+        chat_details = select_db(chat_query)
+        print("BANKING CHAT DETAILS : ",chat_details)
+        history = ""
+    
+        for chat in chat_details:
+            history1 = "Human: "+chat[0]
+            history2 = "Bot: "+chat[1]
+            history += "\n"+history1+"\n"+history2+"\n"
+        print("BANKING HISTORY : ",history)
+        prompt_query = f"SELECT analytics_prompt from {schema}.{prompt_metadata_table} where id = 3;"
+        prompt_template = f'''<Instruction>
+        Based on the conversation above, please provide the output in the following format:
+        Topic:
+		- Identify the main topic of the conversation, it should be a single word topic
+        Conversation Type:
+        - Identify if the conversation is an Enquiry or a Complaint. If both are present, classify it as (Enquiry/Complaint).
+        - Consider the emotional tone and context to determine the type.
+        
+        Conversation Summary Explanation:
+        - Explain why you labelled the conversation as Enquiry, Complaint, or both.
+        - Highlight the key questions, concerns, or issues raised by the customer.
+	-IMPORTANT: keep the summary in 2-3 lines
+        
+        Detailed Summary:
+        - Provide a clear summary of the conversation, capturing the customer’s needs, questions, and any recurring themes.
+	- IMPORTANT: keep the summary in 2-3 lines keep it short
+
+        
+	
+        Conversation Sentiment:
+        - Analyse overall sentiment of conversation carried out by the user with the agent.
+		- Analyse the tone and feelings associated within the conversation.
+		- possible values are (Positive/Neutral/Negative)
+     	- Only provide the final sentiment here in this key. 
+        Conversation Sentiment Generated Details:
+        - Explain why you labelled the Lead as Positive/Neutral/Negative.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        
+        Lead Sentiment:
+        - Indicate if potential leads are generated from the conversation (Yes/No).
+        
+        Leads Generated Details:
+        - Explain why you labelled the Lead as Yes/No.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        Action to be Taken:
+        - Outline next steps for the sales representative to follow up on the opportunities identified.
+        - Include any necessary follow-up actions, information to provide, or solutions to offer.
+        
+        WhatsApp Followup Creation:
+		- Craft a highly personalized follow-up WhatsApp message to engage the customer effectively as a customer sales representative.
+		- Ensure to provide a concise response and make it as brief as possible. Maximum 2-3 lines as it should be shown in the whatsapp mobile screen, so make the response brief.
+        - Incorporate key details from the conversation script to show understanding and attentiveness (VERY IMPORTANT: ONLY INCLUDE DETAILS FROM THE CONVERSATION DO NOT HALLUCINATE ANY DETAILS).
+        - Tailor the WhatsApp message to address specific concerns, provide solutions, and include a compelling call-to-action.
+        - Infuse a sense of urgency or exclusivity to prompt customer response.
+		- Format the WhatsApp message with real line breaks for each paragraph (not the string n). Use actual newlines to separate the greeting, body, call-to-action, and closing. 
+	
+	Follow the structure of the sample WhatsApp message below:
+	<format_for_whatsapp_message>
+
+Hi, Thanks for reaching out to AnyBank! 
+
+You had a query about [Inquiry Topic]. Here’s what you can do next:
+
+1. [Step 1]  
+2. [Step 2]
+
+If you’d like, I can personally help you with [Offer/Action]. Just share your [Details Needed].
+
+Looking forward to hearing from you soon.
+
+</format_for_whatsapp_message>
+	- Before providing the whatsapp response, it is very critical that you double check if its in the provided format
+
+
+<language_constraints>
+
+If the conversation history (user questions and bot answers) is primarily in Tagalog, then provide the values for all JSON keys in Tagalog. Otherwise, provide the values strictly in English.
+If the conversation history is dominantly in Tagalog, provide the value for "Topic" in Tagalog; otherwise, provide it in English.
+Always keep the JSON keys in English exactly as specified below:
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+
+Only the **values** for each key should switch between English or Tagalog based on the dominant language in the conversation. Never translate or modify the keys. 
+
+</language_constraints>
+
+
+	
+        
+</Instruction> 
+return output in JSON in a consistent manner
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+these are the keys to be always used while returning response. Strictly do not add key values of your own.
+        '''
+        #prompt_template = prompt_response[0][0]
+        print("BANKING PROMPT : ",prompt_template)
+        template = f'''
+        <Conversation>
+        {history}
+        </Conversation>
+        {prompt_template}
+        '''
+    
+        # - Ensure the email content is formatted correctly with new lines. USE ONLY "\n" for new lines. 
+        #         - Ensure the email content is formatted correctly for new lines instead of using new line characters.
+        response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",  
+            "max_tokens": 4000,     
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": template},
+                    ]
+                }
+            ],
+        }), modelId=model_id)                                                                                                                       
+    
+        inference_result = response['body'].read().decode('utf-8')
+        final = json.loads(inference_result)
+        out=final['content'][0]['text']
+        print(out)
+        llm_out = extract_sections(out)
+        
+    
+        topic = "" 
+        conversation_type = ""
+        conversation_summary_explanation = ""
+        detailed_summary = ""
+        conversation_sentiment = ""
+        conversation_sentiment_generated_details = ""
+        lead_sentiment = ""
+        leads_generated_details = ""
+        action_to_be_taken = ""
+        email_creation = ""
+        
+        try:
+            if "Topic" in llm_out:
+                topic = llm_out['Topic']
+        except:
+            topic = ""
+        
+        try:
+            
+            if 'Conversation Type' in llm_out:
+                conversation_type = llm_out['Conversation Type']
+                if conversation_type == "N/A":
+                    enquiry, complaint = (0, 0)
+                else:
+                    enquiry, complaint = (1, 0) if conversation_type == "Enquiry" else (0, 1)
+        except:
+            enquiry , complaint = 0,0
+            
+        try:
+            if 'Conversation Summary Explanation' in llm_out:
+                conversation_summary_explanation = llm_out['Conversation Summary Explanation']
+        except:
+            conversation_summary_explanation= ""
+        
+        try:
+            if 'Detailed Summary' in llm_out:
+                detailed_summary = llm_out['Detailed Summary']
+        except:
+            detailed_summary = ""
+        
+        try:
+            if 'Conversation Sentiment' in llm_out:
+                conversation_sentiment = llm_out['Conversation Sentiment']
+        except:
+            conversation_sentiment = ""
+        
+        try:
+            if 'Conversation Sentiment Generated Details' in llm_out:
+                conversation_sentiment_generated_details = llm_out['Conversation Sentiment Generated Details']
+        except:
+            conversation_generated_details = ""
+            
+        try:
+            if 'Lead Sentiment' in llm_out:
+                lead_sentiment = llm_out['Lead Sentiment']
+                lead = 1 if lead_sentiment == "Hot" else 0
+        except:
+            lead = 0
+        
+        try:
+            if 'Leads Generated Details' in llm_out:
+                leads_generated_details = llm_out['Leads Generated Details']
+        except:
+            leads_generated_details = ""
+        
+        try:
+            if 'Action to be Taken' in llm_out:   
+                action_to_be_taken = llm_out['Action to be Taken']
+        except:
+            action_to_be_taken = ""
+        
+        try:
+            if 'Whatsapp Creation' in llm_out:
+                email_creation = llm_out['Whatsapp Creation']
+                # Clean up any literal \n characters in WhatsApp content
+                email_creation = email_creation.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
+        except:
+            email_creation = ""
+        detailed_summary = detailed_summary.replace("'", "''")
+        email_creation = email_creation.replace("'", "''")
+        action_to_be_taken = action_to_be_taken.replace("'", "''")
+        leads_generated_details = leads_generated_details.replace("'", "''")
+        conversation_sentiment_generated_details = conversation_sentiment_generated_details.replace("'", "''")        
+        
+        print("LEAD : ",lead)
+        print("ENQUIRY : ",enquiry)
+        print("COMPLAINT : ",complaint)
+        print("conversation_type:", conversation_type)
+        print("Topic: ",topic)
+        print("Sentiment Explanation:", conversation_summary_explanation)
+        print("Detailed summary:", detailed_summary)
+        print("CONVERSATION SENTIMENT :",conversation_sentiment)
+        print("CONVERSATION SENTIMENT DETAILS:",conversation_sentiment_generated_details)
+        print("lead Sentiment:", lead_sentiment)
+        print("lead explanation:", leads_generated_details)
+        print("next_best_action:",action_to_be_taken)
+        print("email_content:",email_creation)
+        session_time = datetime.now()
+        update_query = f'''UPDATE {schema}.{CHAT_LOG_TABLE}
+        SET 
+            lead = {lead},
+            lead_explanation = '{leads_generated_details}',
+            sentiment = '{conversation_sentiment}',
+            sentiment_explanation = '{conversation_sentiment_generated_details}',
+            session_time = '{session_time}',
+            enquiry = {enquiry},
+            complaint = {complaint},
+            summary = '{detailed_summary}',
+            whatsapp_content = '{email_creation}',
+            next_best_action = '{action_to_be_taken}',
+            topic = '{topic}'
+        WHERE 
+            session_id = '{session_id}' 
+            '''
+        update_db(update_query)
+        return {
+                "statusCode" : 200,
+                "message" : "Banking Summary Successfully Generated"
+            }
+
+    if event_type == 'list_banking_summary':
+        session_id = event['session_id']
+        chat_query = f'''
+        SELECT question,answer
+        FROM {schema}.{banking_chat_history_table}    
+        WHERE session_id = '{session_id}';
+        '''
+    
+        chat_details = select_db(chat_query)
+        print("BANKING CHAT DETAILS : ",chat_details)
+        history = []
+    
+        for chat in chat_details:
+            history.append({"Human":chat[0],"Bot":chat[1]})
+        print("BANKING HISTORY : ",history)  
+        select_query = f'''select summary, whatsapp_content, sentiment, topic  from genaifoundry.ce_cexp_logs ccl where session_id = '{session_id}';'''
+        summary_details = select_db(select_query)
+        final_summary = {}
+        for i in summary_details:  
+            # print("i:",i)  
+            final_summary['summary'] = i[0]
+            final_summary['whatsapp_content'] = i[1]
+            final_summary['sentiment'] = i[2]
+            final_summary['Topic'] = i[3]   
+            
+        # print(summary_details) 
+        # print(final_summary)   
+        return {"transcript":history,"final_summary":final_summary}
+#banking event type ends here...
 
 #retail event type starts here...
 
     if event_type == 'visual_product_search':
         return visual_product_search_api(event)
         
-    if event_type == 'kyc_extraction':
-        return kyc_extraction_api(event)
    
         
     if event_type == 'retail_chat_tool':  
@@ -2575,6 +4876,169 @@ def lambda_handler(event, context):
             res = insert_db(insert_query,values)   
             return tool_response
 
+   
+        
+    if event_type == 'paris_chat_tool':  
+        
+            # api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=gateway_url)
+            # e = json.loads(event["body"])  
+            chat = event['chat']
+            session_id = event['session_id']   
+            connectionId = event["connectionId"]
+            print(connectionId,"connectionid_printtt")
+            chat_history = []
+
+
+            if session_id == None or session_id == 'null' or session_id == '':
+                session_id = str(uuid.uuid4())
+            
+            else:
+                query = f'''select question,answer 
+                        from {schema}.{retail_chat_history_table} 
+                        where session_id = '{session_id}' 
+                        order by created_on desc limit 20;'''
+                history_response = select_db(query)
+                print("history_response is ",history_response)
+
+                if len(history_response) > 0:
+                    for chat_session in reversed(history_response):  
+                        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat_session[0]}]})
+                        chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': chat_session[1]}]})
+            
+                #APPENDING CURRENT USER QUESTION
+            chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat}]})
+                
+            print("CHAT HISTORY : ",chat_history)
+
+            tool_response = paris_agent_invoke_tool(chat_history, session_id,chat,connectionId)
+            print("TOOL RESPONSE: ", tool_response)  
+            #insert into retail_chat_history_table
+            query = f'''
+                    INSERT INTO {schema}.{retail_chat_history_table}
+                    (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
+                    VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+                    '''
+            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+            res = insert_db(query, values)
+            print("response:",res)
+
+
+            
+            print(type(session_id))   
+            insert_query = f'''  INSERT INTO genaifoundry.ce_cexp_logs      
+    (created_on, environment, session_time, "lead", enquiry, complaint, summary, whatsapp_content, next_best_action, session_id, lead_explanation, sentiment, sentiment_explanation, connectionid, input_token, output_token,topic)
+    VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0,%s);'''             
+            values = ('',None,'','','',session_id,'','','','','')            
+            res = insert_db(insert_query,values)   
+            return tool_response
+
+    if event_type == 'hospital_chat_tool':  
+        
+            # api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=gateway_url)
+            # e = json.loads(event["body"])  
+            chat = event['chat']
+            session_id = event['session_id']   
+            connectionId = event["connectionId"]
+            print(connectionId,"connectionid_printtt")
+            chat_history = []
+
+
+            if session_id == None or session_id == 'null' or session_id == '':
+                session_id = str(uuid.uuid4())
+            
+            else:
+                query = f'''select question,answer 
+                        from {schema}.{hospital_chat_history_table} 
+                        where session_id = '{session_id}' 
+                        order by created_on desc limit 20;'''
+                history_response = select_db(query)
+                print("history_response is ",history_response)
+
+                if len(history_response) > 0:
+                    for chat_session in reversed(history_response):  
+                        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat_session[0]}]})
+                        chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': chat_session[1]}]})
+            
+                #APPENDING CURRENT USER QUESTION
+            chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat}]})
+                
+            print("CHAT HISTORY : ",chat_history)
+
+            tool_response = hospital_agent_invoke_tool(chat_history, session_id,chat,connectionId)
+            print("TOOL RESPONSE: ", tool_response)  
+            #insert into hospital_chat_history_table
+            query = f'''
+                    INSERT INTO {schema}.{hospital_chat_history_table}
+                    (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
+                    VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+                    '''
+            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+            res = insert_db(query, values)
+            print("response:",res)
+
+
+            
+            print(type(session_id))   
+            insert_query = f'''  INSERT INTO genaifoundry.ce_cexp_logs      
+    (created_on, environment, session_time, "lead", enquiry, complaint, summary, whatsapp_content, next_best_action, session_id, lead_explanation, sentiment, sentiment_explanation, connectionid, input_token, output_token,topic)
+    VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0,%s);'''             
+            values = ('',None,'','','',session_id,'','','','','')            
+            res = insert_db(insert_query,values)   
+            return tool_response
+
+    if event_type == 'healthcare_chat_tool':  
+        
+            # api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=gateway_url)
+            # e = json.loads(event["body"])  
+            chat = event['chat']
+            session_id = event['session_id']   
+            connectionId = event["connectionId"]
+            print(connectionId,"connectionid_printtt")
+            chat_history = []
+
+
+            if session_id == None or session_id == 'null' or session_id == '':
+                session_id = str(uuid.uuid4())
+            
+            else:
+                query = f'''select question,answer 
+                        from {schema}.{hospital_chat_history_table} 
+                        where session_id = '{session_id}' 
+                        order by created_on desc limit 20;'''
+                history_response = select_db(query)
+                print("history_response is ",history_response)
+
+                if len(history_response) > 0:
+                    for chat_session in reversed(history_response):  
+                        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat_session[0]}]})
+                        chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': chat_session[1]}]})
+            
+                #APPENDING CURRENT USER QUESTION
+            chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat}]})
+                
+            print("CHAT HISTORY : ",chat_history)
+
+            tool_response = hospital_agent_invoke_tool(chat_history, session_id,chat,connectionId)
+            print("TOOL RESPONSE: ", tool_response)  
+            #insert into hospital_chat_history_table
+            query = f'''
+                    INSERT INTO {schema}.{hospital_chat_history_table}
+                    (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
+                    VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+                    '''
+            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+            res = insert_db(query, values)
+            print("response:",res)
+
+
+            
+            print(type(session_id))   
+            insert_query = f'''  INSERT INTO genaifoundry.ce_cexp_logs      
+    (created_on, environment, session_time, "lead", enquiry, complaint, summary, whatsapp_content, next_best_action, session_id, lead_explanation, sentiment, sentiment_explanation, connectionid, input_token, output_token,topic)
+    VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0,%s);'''             
+            values = ('',None,'','','',session_id,'','','','','')            
+            res = insert_db(insert_query,values)   
+            return tool_response
 
     if event_type == "generate_retail_summary":     
         
@@ -2901,10 +5365,11 @@ these are the keys to be always used while returning response. Strictly do not a
             from botocore.config import Config
             from botocore.exceptions import ClientError
             
-
-            LLAMA_REGION = region_used
+            # Configuration
+            LLAMA3_MODEL_ID = "us.meta.llama3-3-70b-instruct-v1:0"
+            LLAMA_REGION = "us-east-1"
             
-            def enhance_prompt_function(simple_prompt, model_id):
+            def enhance_prompt_function(simple_prompt):
                 import boto3
                 client = boto3.client("bedrock-runtime", region_name=LLAMA_REGION)
 
@@ -2928,7 +5393,7 @@ User prompt: "{simple_prompt}"
                 
                 try:
                     response = client.invoke_model(
-                        modelId=model_id,
+                        modelId=LLAMA3_MODEL_ID,
                         body=json.dumps(request_body)
                     )
                     model_output = json.loads(response["body"].read())
@@ -2952,28 +5417,19 @@ User prompt: "{simple_prompt}"
                     negative_prompt = result.get("negativeText", "")
                     return text_prompt, negative_prompt
 
-                except json.JSONDecodeError as e:
-                    print(f"LLM response was not valid JSON. Error: {e}")
-                    print(f"Raw output: {generation}")
-                    return None, None
+                except json.JSONDecodeError:
+                    print("LLM response was not valid JSON.")
+                    print("Raw output: %s", generation)
                 except (ClientError, Exception) as e:
                     print(f"ERROR: Could not invoke Llama 3 model. Reason: {e}")
-                    return None, None
+                return None, None
             
-            print(f"Enhancing prompt: '{simple_prompt}'")
-            print(f"Using model: {LLAMA3_MODEL_ID}")
-            print(f"Using region: {LLAMA_REGION}")
-            
-            text_prompt, negative_prompt = enhance_prompt_function(simple_prompt, LLAMA3_MODEL_ID)
-            
-            print(f"Enhanced text prompt: {text_prompt}")
-            print(f"Enhanced negative prompt: {negative_prompt}")
+            text_prompt, negative_prompt = enhance_prompt_function(simple_prompt)
             
             if not text_prompt or not negative_prompt:
-                print("ERROR: Failed to get valid prompts from LLM")
                 return {
                     "statusCode": 500,
-                    "message": "Failed to enhance prompt - LLM did not return valid prompts"
+                    "message": "Failed to enhance prompt"
                 }
             
             return {
@@ -2986,8 +5442,6 @@ User prompt: "{simple_prompt}"
             
         except Exception as e:
             print(f"Error in enhance_prompt: {e}")
-            import traceback
-            print(f"Traceback: {traceback.format_exc()}")
             return {
                 "statusCode": 500,
                 "message": f"Internal server error: {str(e)}"
@@ -3018,6 +5472,8 @@ User prompt: "{simple_prompt}"
                 from botocore.config import Config
                 from botocore.exceptions import ClientError
                 
+                # Configuration
+                LLAMA3_MODEL_ID = "us.meta.llama3-3-70b-instruct-v1:0"
                 LLAMA_REGION = "us-east-1"
                 
                 def extract_text_and_negative(direct_text):
@@ -3093,7 +5549,10 @@ User prompt: "{direct_text}"
             import base64
             from botocore.config import Config
             from botocore.exceptions import ClientError
-            NOVA_REGION = region_used
+            
+            # Configuration
+            NOVA_MODEL_ID = "amazon.nova-canvas-v1:0"
+            NOVA_REGION = "us-east-1"
             
             class ImageError(Exception):
                 def __init__(self, message):
@@ -3252,6 +5711,91 @@ User prompt: "{direct_text}"
         return check_video_link(event)
     elif event_type == 'product_review_analyzer':
         return analyze_reviews_summary(event)
+    elif event_type == 'voiceops':
+        try:
+            url =f"http://{ec2_instance_ip}:8000/transcribe"
+            kb_id=''
+            prompt_template = ''
+            print("yes")
+            if event['box_type'] == 'insurance':
+                kb_id = KB_ID
+                print("kb_id",kb_id)
+                prompt_template='''You are a Virtual Insurance Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
+
+                        RESPONSE RULES:
+                        - Maximum 2 sentences per response
+                        - Use simple, conversational language
+                        - No bullet points, brackets, or special formatting
+                        - No technical jargon or complex terms
+                        - Answer only what the customer asked
+                        - Skip greetings and confirmations
+
+                        SPEAKING STYLE:
+                        - Talk like you're having a friendly conversation
+                        - Use short, clear sentences
+                        - Avoid reading lists or multiple options
+                        - Give one direct answer, not explanations
+
+                        Search Results: $search_results$
+
+                        Customer Question: $query$
+
+                        Provide a brief, conversational response that directly answers their question. '''
+
+
+            else: 
+                kb_id = bank_kb_id
+                print("bank_kb_id",bank_kb_id)
+                prompt_template=''' 
+                You are a Virtual Banking Assistant for AnyBank. Give quick, helpful answers that sound natural when spoken aloud.
+    
+                RESPONSE RULES:
+                - Maximum 2 sentences per response
+                - Use simple, conversational language
+                - No bullet points, brackets, or special formatting
+                - No technical jargon or complex terms
+                - Answer only what the customer asked
+                - Skip greetings and confirmations
+                
+                SPEAKING STYLE:
+                - Talk like you're having a friendly conversation
+                - Use short, clear sentences
+                - Avoid reading lists or multiple options
+                - Give one direct answer, not explanations
+                
+                Search Results: $search_results$
+                
+                Customer Question: $query$
+                
+                Provide a brief, conversational response that directly answers their question.
+                '''
+            payload = json.dumps({
+            "kb_id": kb_id,
+            "session_id": event['session_id'],
+            "audio": event['audio'],
+            "connection_id":event['connectionId'],
+            "connection_url":event['connection_url'],
+            "box_type": event['box_type'],
+            "prompt_template":prompt_template,
+            "bucket_name":bucket_name,
+            "region_name":region_name
+            })
+            headers = {
+            'Content-Type': 'application/json'
+            }
+            print(payload)
+            response = requests.request("POST", url, headers=headers, data=payload)
+
+            return response.text
+
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'body': json.dumps({
+                    'message': 'Error processing transcription',
+                    'error': str(e)
+                })
+            }
         
   
 
@@ -3265,7 +5809,10 @@ User prompt: "{direct_text}"
             from botocore.exceptions import ClientError
             
             # AWS Configuration
-            AWS_REGION = region_used
+            AWS_REGION = "us-east-1"
+            
+            # Model Configuration
+            NOVA_MODEL_ID = "amazon.nova-canvas-v1:0"
             
             # Get S3 URIs from event
             person_s3_uri = event.get('person_s3_uri')
@@ -3410,9 +5957,1193 @@ User prompt: "{direct_text}"
                 "statusCode": 500,
                 "message": f"Internal server error: {str(e)}"
             }
-    if event_type == 'genai_product_desc':
-        return describe_image(event)
+
 #retail event type ends here....
+#HealthCare Event type starts here....
+    if event_type == 'deep_research':
+        return deep_research_assistant_api(event)
+    elif event_type == 'kyc_extraction':
+        return kyc_extraction_api(event)
+#HealthCare Event type ends here....
+
+#Healthcare event function code starts here...
+
+bedrock_runtime = boto3.client('bedrock-runtime', region_name='us-east-1')
+
+# Tavily API configuration
+# TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')  # Get from environment variables
+TAVILY_BASE_URL = "https://api.tavily.com"
+
+# Validate that TAVILY_API_KEY is set
+
+def deep_research_assistant_api(event):
+    """
+    Optimized Deep Research Assistant API using Tavily and AWS Bedrock
+    
+    Performance Optimizations:
+    - Parallel processing of research queries
+    - Reduced API calls and content extraction
+    - Streamlined workflow based on notebook best practices
+    - Faster response times with maintained quality
+    """
+    try:
+        # Extract parameters from event
+        research_query = event.get('research_query')
+        research_depth = event.get('research_depth', 'basic')  # 'basic', 'medium', 'comprehensive'
+        max_sources = event.get('max_sources', 3)  # Reduced default
+        time_range = event.get('time_range', 'month')
+        domain_filter = event.get('domain_filter', [])
+        output_format = event.get('output_format', 'summary')
+        
+        print(f"🔍 Deep Research Query: {research_query}")
+        print(f"📊 Research Depth: {research_depth}")
+        print(f"📈 Max Sources: {max_sources}")
+        print(f"⏰ Time Range: {time_range}")
+        
+        if not research_query:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({
+                    'error': 'Research query is required'
+                })
+            }
+        
+        # Step 0: Validate if query is medical/healthcare related
+        print("🏥 Step 0: Validating medical/healthcare relevance...")
+        validation_result = validate_medical_query(research_query)
+        print(f"🔍 Validation result: {validation_result}")
+        
+        if not validation_result.get('is_medical', False):
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': 'Query validation completed',
+                    'research_query': research_query,
+                    'validation_result': validation_result,
+                    'report': f"""# Medical Research Query Validation
+
+## Query Analysis
+**Your Query:** "{research_query}"
+
+## Validation Result
+❌ **Not Medical/Healthcare Related**
+
+## Recommendation
+Please provide a research query related to medical, healthcare, or health topics such as:
+
+### Medical Topics:
+- Diseases, conditions, and treatments
+- Medications and pharmaceuticals
+- Medical procedures and surgeries
+- Medical devices and technologies
+- Clinical trials and research
+
+### Healthcare Topics:
+- Healthcare systems and policies
+- Public health initiatives
+- Healthcare technologies
+- Medical education and training
+- Healthcare management
+
+### Health Topics:
+- Preventive medicine
+- Nutrition and wellness
+- Mental health
+- Epidemiology
+- Health outcomes and statistics
+
+## Example Queries:
+- "Latest treatments for diabetes"
+- "New cancer immunotherapy drugs"
+- "Healthcare AI applications in diagnosis"
+- "Mental health interventions for depression"
+- "Preventive measures for heart disease"
+
+Please rephrase your query to focus on medical, healthcare, or health-related topics.""",
+                    'metadata': {
+                        'validation_timestamp': datetime.now().isoformat(),
+                        'is_medical': False,
+                        'suggested_topics': validation_result.get('suggested_topics', [])
+                    }
+                })
+            }
+        
+        print(f"✅ Query validated as medical/healthcare related: {validation_result['confidence']}")
+        
+        # Step 1: Optimized query decomposition (reduced sub-questions)
+        print("🧠 Step 1: Decomposing research query...")
+        sub_questions = decompose_research_query_optimized(research_query, research_depth)
+        print(f"📝 Generated {len(sub_questions)} sub-questions")
+        
+        # Step 2: Parallel research execution
+        print("🔍 Step 2: Conducting parallel research...")
+        research_results = conduct_parallel_research(
+            sub_questions=sub_questions,
+            max_sources=max_sources,
+            time_range=time_range,
+            domain_filter=domain_filter
+        )
+        
+        # Step 3: Quick synthesis and report generation
+        print("🧠 Step 3: Synthesizing findings...")
+        final_report = generate_optimized_research_report(
+            query=research_query,
+            research_results=research_results,
+            output_format=output_format
+        )
+        
+        # Calculate metrics
+        total_sources = sum(len(r.get('search_results', [])) for r in research_results)
+        unique_domains = set()
+        for r in research_results:
+            for result in r.get('search_results', []):
+                domain = urlparse(result['url']).netloc
+                unique_domains.add(domain)
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'message': 'Deep research completed successfully',
+                'research_query': research_query,
+                'research_depth': research_depth,
+                'report': final_report,  # Back to 'report' to match notebook format
+                'metadata': {
+                    'sub_questions_count': len(sub_questions),
+                    'total_sources': total_sources,
+                    'unique_domains': len(unique_domains),
+                    'research_timestamp': datetime.now().isoformat(),
+                    'sub_questions': sub_questions
+                }
+            })
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in deep research assistant API: {e}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'error': f'Research failed: {str(e)}'
+            })
+        }
+
+def decompose_research_query_optimized(query: str, depth: str) -> List[str]:
+    """
+    Optimized query decomposition with fewer, more focused sub-questions
+    """
+    try:
+        # Reduced question counts for faster processing
+        question_counts = {
+            'basic': 2,        # Reduced from 3
+            'medium': 3,       # Reduced from 5  
+            'comprehensive': 4  # Reduced from 8
+        }
+        target_count = question_counts.get(depth, 2)
+        
+        prompt = f"""Break down this research query into {target_count} focused, searchable sub-questions:
+
+Query: {query}
+
+Requirements:
+- Each question should be specific and searchable
+- Cover the most important aspects
+- Avoid redundancy
+- Make questions suitable for web search
+
+Return only the sub-questions, one per line, numbered 1-{target_count}."""
+
+        response = call_bedrock_llm(prompt)
+        
+        # Parse sub-questions
+        sub_questions = []
+        lines = response.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if line and (line[0].isdigit() or line.startswith('-') or line.startswith('•')):
+                question = re.sub(r'^\d+\.?\s*|-\s*|•\s*', '', line).strip()
+                if question and question.endswith('?'):
+                    sub_questions.append(question)
+        
+        # Fallback if parsing fails
+        if not sub_questions:
+            sub_questions = [
+                f"What are the latest developments in {query}?",
+                f"What are the key challenges with {query}?"
+            ]
+        
+        return sub_questions[:target_count]
+        
+    except Exception as e:
+        logger.error(f"Error decomposing research query: {e}")
+        return [
+            f"What are the latest developments in {query}?",
+            f"What are the key challenges with {query}?"
+        ]
+
+def decompose_research_query(query: str, depth: str) -> List[str]:
+    """
+    Decompose a research query into specific sub-questions using LLM
+    """
+    try:
+        # Determine number of sub-questions based on depth
+        question_counts = {
+            'shallow': 3,
+            'medium': 5,
+            'deep': 8
+        }
+        target_count = question_counts.get(depth, 5)
+        
+        prompt = f"""You are a research planning expert. Break down the following research query into {target_count} specific, focused sub-questions that will help gather comprehensive information.
+
+Research Query: {query}
+
+Requirements:
+- Each sub-question should be specific and searchable
+- Cover different aspects of the topic (background, current state, trends, implications, etc.)
+- Questions should build upon each other logically
+- Avoid redundancy between questions
+- Make questions suitable for web search
+
+Return only the sub-questions, one per line, numbered 1-{target_count}."""
+
+        # Call Bedrock LLM
+        response = call_bedrock_llm(prompt)
+        
+        # Parse sub-questions from response
+        sub_questions = []
+        lines = response.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if line and (line[0].isdigit() or line.startswith('-') or line.startswith('•')):
+                # Remove numbering and clean up
+                question = re.sub(r'^\d+\.?\s*|-\s*|•\s*', '', line).strip()
+                if question and question.endswith('?'):
+                    sub_questions.append(question)
+        
+        # Fallback if parsing fails
+        if not sub_questions:
+            sub_questions = [
+                f"What is {query}?",
+                f"What are the current trends related to {query}?",
+                f"What are the key challenges or issues with {query}?",
+                f"What are the latest developments in {query}?",
+                f"What are the implications or future outlook for {query}?"
+            ]
+        
+        return sub_questions[:target_count]
+        
+    except Exception as e:
+        logger.error(f"Error decomposing research query: {e}")
+        # Fallback sub-questions
+        return [
+            f"What is {query}?",
+            f"What are recent developments in {query}?",
+            f"What are the key challenges with {query}?"
+        ]
+
+def conduct_parallel_research(sub_questions: List[str], max_sources: int, 
+                            time_range: str, domain_filter: List[str]) -> List[Dict]:
+    """
+    Conduct parallel research for multiple sub-questions using concurrent processing
+    """
+    import concurrent.futures
+    import threading
+    
+    def research_single_question(sub_question: str) -> Dict:
+        """Research a single sub-question"""
+        try:
+            print(f"🔍 Researching: {sub_question}")
+            
+            # Search with optimized parameters
+            search_results = tavily_web_search_optimized(
+                query=sub_question,
+                max_results=max_sources,
+                time_range=time_range,
+                domain_filter=domain_filter
+            )
+            
+            return {
+                'sub_question': sub_question,
+                'search_results': search_results,
+                'status': 'success'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error researching {sub_question}: {e}")
+            return {
+                'sub_question': sub_question,
+                'search_results': [],
+                'status': 'error',
+                'error': str(e)
+            }
+    
+    # Use ThreadPoolExecutor for parallel processing with reduced workers
+    research_results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        # Submit all research tasks
+        future_to_question = {
+            executor.submit(research_single_question, question): question 
+            for question in sub_questions
+        }
+        
+        # Collect results as they complete
+        for future in concurrent.futures.as_completed(future_to_question):
+            result = future.result()
+            research_results.append(result)
+    
+    return research_results
+
+def tavily_web_search_optimized(query: str, max_results: int = 3, time_range: str = 'month', 
+                               domain_filter: List[str] = None) -> List[Dict]:
+    """
+    Optimized web search with reduced parameters for faster response
+    """
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {TAVILY_API_KEY}'
+        }
+        
+        # Convert time_range to days
+        time_mapping = {
+            'day': 1,
+            'week': 7,
+            'month': 30,
+            'year': 365
+        }
+        days = time_mapping.get(time_range, 30)
+        
+        # Optimized payload - include content but with basic search
+        payload = {
+            'query': query,
+            'max_results': max_results,
+            'search_depth': 'basic',  # Use basic for faster response
+            'include_answer': True,   # Include answer for faster processing
+            'include_images': False,
+            'include_raw_content': True,  # Include content but with basic search
+            'days': days
+        }
+        
+        if domain_filter:
+            payload['include_domains'] = domain_filter
+        
+        response = requests.post(
+            f"{TAVILY_BASE_URL}/search",
+            headers=headers,
+            json=payload,
+            timeout=10  # Further reduced timeout for faster response
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        results = data.get('results', [])
+        
+        print(f"✅ Tavily search returned {len(results)} results for: {query}")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error in Tavily web search: {e}")
+        return []
+
+def tavily_web_search(query: str, max_results: int = 5, time_range: str = 'month', 
+                     domain_filter: List[str] = None) -> List[Dict]:
+    """
+    Search the web using Tavily API
+    """
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {TAVILY_API_KEY}'
+        }
+        
+        # Convert time_range to days
+        time_mapping = {
+            'day': 1,
+            'week': 7,
+            'month': 30,
+            'year': 365
+        }
+        days = time_mapping.get(time_range, 30)
+        
+        payload = {
+            'query': query,
+            'max_results': max_results,
+            'search_depth': 'advanced',
+            'include_answer': False,
+            'include_images': False,
+            'include_raw_content': True,
+            'days': days
+        }
+        
+        if domain_filter:
+            payload['include_domains'] = domain_filter
+        
+        response = requests.post(
+            f"{TAVILY_BASE_URL}/search",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        results = data.get('results', [])
+        
+        print(f"✅ Tavily search returned {len(results)} results for: {query}")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error in Tavily web search: {e}")
+        return []
+
+def tavily_extract_content(url: str) -> Optional[str]:
+    """
+    Extract full content from a webpage using Tavily
+    """
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {TAVILY_API_KEY}'
+        }
+        
+        payload = {
+            'urls': [url]
+        }
+        
+        response = requests.post(
+            f"{TAVILY_BASE_URL}/extract",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        results = data.get('results', [])
+        
+        if results and len(results) > 0:
+            content = results[0].get('raw_content', '')
+            print(f"✅ Extracted {len(content)} characters from {url}")
+            return content  # Full content, no limit
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error extracting content from {url}: {e}")
+        return None
+
+def synthesize_research_findings(original_query: str, research_results: List[Dict], 
+                               output_format: str) -> Dict:
+    """
+    Synthesize research findings using LLM
+    """
+    try:
+        # Prepare research data for LLM analysis
+        research_summary = f"Original Research Query: {original_query}\n\n"
+        
+        for i, result in enumerate(research_results, 1):
+            research_summary += f"Sub-question {i}: {result['sub_question']}\n"
+            research_summary += f"Sources found: {len(result['search_results'])}\n"
+            
+            # Add key findings from search results
+            for j, search_result in enumerate(result['search_results'][:3], 1):
+                research_summary += f"  {j}. {search_result['title']}\n"
+                research_summary += f"     URL: {search_result['url']}\n"
+                research_summary += f"     Snippet: {search_result.get('content', '')[:200]}...\n"
+            
+            research_summary += "\n"
+        
+        prompt = f"""You are a research analyst tasked with synthesizing comprehensive research findings.
+
+{research_summary}
+
+Your task:
+1. Analyze all the research findings above
+2. Identify key themes, patterns, and insights
+3. Note any contradictions or gaps in the information
+4. Synthesize the findings into coherent insights
+5. Provide a confidence assessment for the findings
+
+Output format: {output_format}
+
+Guidelines:
+- Be objective and analytical
+- Cite sources when making claims
+- Highlight the most important findings
+- Note limitations or areas needing further research
+- Organize information logically
+
+Provide a structured synthesis of these research findings."""
+
+        synthesis = call_bedrock_llm(prompt)
+        
+        return {
+            'synthesis': synthesis,
+            'confidence': 'high',  # This could be determined by LLM
+            'key_themes': [],  # Could extract these with additional LLM call
+            'gaps_identified': []
+        }
+        
+    except Exception as e:
+        logger.error(f"Error synthesizing research findings: {e}")
+        return {
+            'synthesis': f"Error occurred during synthesis: {str(e)}",
+            'confidence': 'low',
+            'key_themes': [],
+            'gaps_identified': ['Synthesis failed due to technical error']
+        }
+
+def validate_medical_query(query: str) -> Dict:
+    """
+    Validate if a research query is related to medical, healthcare, or health topics
+    """
+    try:
+        prompt = f"""You are a medical research validation expert. Analyze the following research query to determine if it's related to medical, healthcare, or health topics.
+
+Research Query: "{query}"
+
+Medical/Healthcare/Health topics include:
+- Diseases, conditions, symptoms, and treatments
+- Medications, pharmaceuticals, and drug therapies
+- Medical procedures, surgeries, and interventions
+- Medical devices, technologies, and equipment
+- Clinical trials, research studies, and medical research
+- Healthcare systems, policies, and management
+- Public health initiatives and epidemiology
+- Mental health and psychological treatments
+- Nutrition, wellness, and preventive medicine
+- Medical education and training
+- Healthcare AI, telemedicine, and digital health
+- Health outcomes, statistics, and population health
+
+Determine:
+1. Is this query related to medical, healthcare, or health topics? (Yes/No)
+2. What is your confidence level? (High/Medium/Low)
+3. If not medical, what are 3 suggested medical topics related to the query?
+
+Respond in this exact format:
+IS_MEDICAL: [Yes/No]
+CONFIDENCE: [High/Medium/Low]
+SUGGESTED_TOPICS: [comma-separated list of 3 medical topics if not medical, or empty if medical]"""
+
+        response = call_bedrock_llm(prompt)
+        
+        # Parse the response
+        is_medical = False
+        confidence = "Low"
+        suggested_topics = []
+        
+        lines = response.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('IS_MEDICAL:'):
+                is_medical = 'Yes' in line
+            elif line.startswith('CONFIDENCE:'):
+                confidence = line.split(':')[1].strip()
+            elif line.startswith('SUGGESTED_TOPICS:'):
+                topics_str = line.split(':')[1].strip()
+                if topics_str and topics_str != 'empty':
+                    suggested_topics = [topic.strip() for topic in topics_str.split(',')]
+        
+        return {
+            'is_medical': is_medical,
+            'confidence': confidence,
+            'suggested_topics': suggested_topics,
+            'validation_reason': f"Query analyzed with {confidence.lower()} confidence"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error validating medical query: {e}")
+        # Default to rejecting the query if validation fails (safer approach)
+        return {
+            'is_medical': False,
+            'confidence': 'Low',
+            'suggested_topics': ['Medical research validation failed', 'Please try a medical/healthcare query', 'Contact support if issue persists'],
+            'validation_reason': f"Validation failed due to error: {str(e)}"
+        }
+
+def generate_optimized_research_report(query: str, research_results: List[Dict], 
+                                     output_format: str) -> str:
+    """
+    Generate an optimized research report with faster processing to avoid timeouts
+    """
+    try:
+        # Collect all search results
+        all_results = []
+        for result in research_results:
+            if result.get('status') == 'success':
+                search_results = result.get('search_results', [])
+                all_results.extend(search_results)
+        
+        # Limit to top results for faster processing
+        top_results = all_results[:4]  # Limit to 4 results max for speed
+        
+        # Generate a fast, structured report without additional LLM calls
+        report = f"# Research Report: {query}\n\n"
+        
+        # Add key findings section
+        report += "## Key Findings\n\n"
+        
+        for i, result in enumerate(top_results, 1):
+            title = result.get('title', 'Untitled')
+            url = result.get('url', 'No URL available')
+            
+            # Try to get content from multiple sources
+            content = result.get('raw_content') or result.get('content') or result.get('snippet', '')
+            
+            # Handle None or empty content
+            if not content or content.strip() == '':
+                content = 'Content not available from this source'
+            
+            # Truncate content for faster processing
+            if len(str(content)) > 1000:
+                content = str(content)[:1000] + "..."
+            
+            report += f"### Finding {i}: {title} [{i}]\n\n"
+            report += f"**Source:** {url}\n\n"
+            report += f"{content}\n\n"
+        
+        # Add sources section
+        report += "## Sources\n\n"
+        for i, result in enumerate(top_results, 1):
+            report += f"[{i}] {result.get('title', 'Untitled')} - {result.get('url', 'No URL')}\n"
+        
+        return report
+        
+    except Exception as e:
+        logger.error(f"Error generating optimized research report: {e}")
+        return f"Error generating report: {str(e)}"
+
+def format_research_response(research_content: str, format_style: str = None, user_query: str = None) -> str:
+    """Format research content into a well-structured, properly cited response.
+    
+    This function mimics the format_research_response tool from the deep-research.ipynb notebook.
+    It transforms raw research into polished, reader-friendly content with proper citations and optimal structure.
+    """
+    try:
+        # Define the research formatter prompt (from the notebook)
+        RESEARCH_FORMATTER_PROMPT = """
+You are a specialized Research Response Formatter Agent. Your role is to transform research content into well-structured, properly cited, and reader-friendly formats.
+
+Core formatting requirements (ALWAYS apply):
+1. Include inline citations using [n] notation for EVERY factual claim
+2. Provide a complete "Sources" section at the end with numbered references and urls
+3. Write concisely - no repetition or filler words
+4. Ensure information density - every sentence should add value
+5. Maintain professional, objective tone
+6. Format your response in markdown
+
+Based on the semantics of the user's original research question, format your response in one of the following styles:
+- **Direct Answer**: Concise, focused response that directly addresses the question
+- **Blog Style**: Engaging introduction, subheadings, conversational tone, conclusion
+- **Academic Report**: Abstract, methodology, findings, analysis, conclusions, references
+- **Executive Summary**: Key findings upfront, bullet points, actionable insights
+- **Bullet Points**: Structured lists with clear hierarchy and supporting details
+- **Comparison**: Side-by-side analysis with clear criteria and conclusions
+
+When format is not specified, analyze the research content and user query to determine:
+- Complexity level (simple vs. comprehensive)
+- Audience (general public vs. technical)
+- Purpose (informational vs. decision-making)
+- Content type (factual summary vs. analytical comparison)
+
+Your response below should be polished, containing only the information that is relevant to the user's query and NOTHING ELSE.
+
+Your final research response:
+"""
+
+        # Prepare the input for the formatter
+        format_input = f"Research Content:\n{research_content}\n\n"
+        
+        if format_style:
+            format_input += f"Requested Format Style: {format_style}\n\n"
+        
+        if user_query:
+            format_input += f"Original User Query: {user_query}\n\n"
+        
+        format_input += "Please format this research content according to the guidelines and appropriate style."
+        
+        # Call the LLM with the formatter prompt
+        response = call_bedrock_llm_with_prompt(format_input, RESEARCH_FORMATTER_PROMPT)
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in research formatting: {str(e)}")
+        return f"Error in research formatting: {str(e)}"
+
+def call_bedrock_llm_with_prompt(user_input: str, system_prompt: str) -> str:
+    """
+    Call Bedrock LLM with a custom system prompt
+    """
+    try:
+        # Prepare the messages for the LLM
+        messages = [
+            {
+                "role": "user",
+                "content": user_input
+            }
+        ]
+        
+        # Create the request body
+        request_body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4000,
+            "system": system_prompt,
+            "messages": messages
+        }
+        
+        # Call Bedrock
+        response = bedrock_runtime.invoke_model(
+            modelId="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            body=json.dumps(request_body),
+            contentType="application/json"
+        )
+        
+        # Parse response
+        response_body = json.loads(response['body'].read())
+        return response_body['content'][0]['text']
+        
+    except Exception as e:
+        logger.error(f"Error calling Bedrock LLM: {e}")
+        return f"Error calling LLM: {str(e)}"
+
+def generate_research_report(query: str, synthesis: Dict, research_results: List[Dict], 
+                           output_format: str) -> str:
+    """
+    Generate final research report with proper formatting and citations
+    """
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        if output_format == 'summary':
+            report_template = f"""# Research Summary: {query}
+
+**Generated:** {timestamp}
+
+## Key Findings
+{synthesis['synthesis']}
+
+## Sources Consulted
+"""
+        elif output_format == 'bullet_points':
+            report_template = f"""# Research Findings: {query}
+
+**Generated:** {timestamp}
+
+## Main Points
+{synthesis['synthesis']}
+
+## Sources
+"""
+        else:  # detailed_report
+            report_template = f"""# Deep Research Report: {query}
+
+**Research Date:** {timestamp}
+**Research Depth:** Multi-layered analysis with {len(research_results)} research vectors
+
+## Executive Summary
+{synthesis['synthesis']}
+
+## Detailed Findings
+
+"""
+            
+            # Add detailed findings for each sub-question
+            for i, result in enumerate(research_results, 1):
+                report_template += f"### {i}. {result['sub_question']}\n\n"
+                
+                if result['search_results']:
+                    for j, search_result in enumerate(result['search_results'][:2], 1):
+                        report_template += f"**Source {j}:** [{search_result['title']}]({search_result['url']})\n"
+                        report_template += f"{search_result.get('content', 'No content available')[:300]}...\n\n"
+                else:
+                    report_template += "No relevant sources found for this question.\n\n"
+            
+            report_template += "## Sources Consulted\n\n"
+        
+        # Add all sources
+        source_count = 1
+        for result in research_results:
+            for search_result in result['search_results']:
+                report_template += f"{source_count}. [{search_result['title']}]({search_result['url']})\n"
+                source_count += 1
+        
+        report_template += f"\n---\n*Report generated by Deep Research Assistant on {timestamp}*"
+        
+        return report_template
+        
+    except Exception as e:
+        logger.error(f"Error generating research report: {e}")
+        return f"Error generating report: {str(e)}"
+
+def call_bedrock_llm(prompt: str, model_id: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0") -> str:
+    """
+    Call AWS Bedrock LLM for analysis and synthesis
+    """
+    try:
+        # Prepare the request body for Anthropic Claude
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4000,
+            "temperature": 0.1,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        }
+        
+        response = bedrock_runtime.invoke_model(
+            modelId=model_id,
+            body=json.dumps(body),
+            contentType="application/json"
+        )
+        
+        response_body = json.loads(response['body'].read())
+        return response_body['content'][0]['text']
+        
+    except Exception as e:
+        logger.error(f"Error calling Bedrock LLM: {e}")
+        return f"Error in LLM analysis: {str(e)}"
+
+def validate_research_query(query: str) -> Dict:
+    """
+    Validate if the research query is appropriate and actionable
+    """
+    try:
+        prompt = f"""Analyze this research query and determine if it's appropriate for web research:
+
+Query: "{query}"
+
+Evaluate:
+1. Is this a factual, research-based question?
+2. Can this be answered through web sources?
+3. Is it specific enough for meaningful research?
+4. Are there any ethical concerns?
+
+Respond with JSON:
+{{
+    "is_valid": true/false,
+    "confidence": "high/medium/low",
+    "reasoning": "explanation",
+    "suggested_improvements": "optional suggestions",
+    "estimated_complexity": "simple/moderate/complex"
+}}"""
+
+        response = call_bedrock_llm(prompt)
+        
+        try:
+            # Try to parse JSON response
+            result = json.loads(response)
+            return result
+        except json.JSONDecodeError:
+            # Fallback if LLM doesn't return valid JSON
+            return {
+                "is_valid": True,
+                "confidence": "medium",
+                "reasoning": "Query validation completed",
+                "estimated_complexity": "moderate"
+            }
+        
+    except Exception as e:
+        logger.error(f"Error validating research query: {e}")
+        return {
+            "is_valid": True,
+            "confidence": "low",
+            "reasoning": f"Validation error: {str(e)}",
+            "estimated_complexity": "unknown"
+        }
+
+def tavily_crawl_website(url: str, max_depth: int = 2) -> List[Dict]:
+    """
+    Crawl a website using Tavily API for comprehensive content gathering
+    """
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {TAVILY_API_KEY}'
+        }
+        
+        payload = {
+            'url': url,
+            'max_depth': max_depth,
+            'max_results': 10
+        }
+        
+        response = requests.post(
+            f"{TAVILY_BASE_URL}/crawl",
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+        response.raise_for_status()
+        
+        data = response.json()
+        results = data.get('results', [])
+        
+        print(f"✅ Crawled {len(results)} pages from {url}")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error crawling website {url}: {e}")
+        return []
+
+def enhanced_research_with_followup(initial_results: List[Dict], original_query: str) -> List[Dict]:
+    """
+    Perform follow-up research based on initial findings
+    """
+    try:
+        # Analyze initial results to identify knowledge gaps
+        prompt = f"""Analyze these initial research findings and identify 2-3 follow-up questions that would provide deeper insights:
+
+Original Query: {original_query}
+
+Initial Findings Summary:
+"""
+        
+        for i, result in enumerate(initial_results, 1):
+            prompt += f"{i}. Sub-question: {result['sub_question']}\n"
+            prompt += f"   Sources found: {len(result['search_results'])}\n"
+            if result['search_results']:
+                prompt += f"   Top result: {result['search_results'][0]['title']}\n"
+            prompt += "\n"
+        
+        prompt += """
+Based on these findings, what follow-up questions would help deepen the research?
+Return 2-3 specific questions that address gaps or dive deeper into interesting findings.
+Format as numbered list."""
+
+        response = call_bedrock_llm(prompt)
+        
+        # Extract follow-up questions
+        followup_questions = []
+        lines = response.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if line and (line[0].isdigit() or line.startswith('-')):
+                question = re.sub(r'^\d+\.?\s*|-\s*', '', line).strip()
+                if question:
+                    followup_questions.append(question)
+        
+        # Conduct follow-up research
+        followup_results = []
+        for question in followup_questions[:3]:  # Limit to 3 follow-ups
+            print(f"🔍 Follow-up research: {question}")
+            search_results = tavily_web_search(query=question, max_results=3)
+            
+            if search_results:
+                followup_results.append({
+                    'sub_question': question,
+                    'search_results': search_results,
+                    'extracted_content': []
+                })
+        
+        return followup_results
+        
+    except Exception as e:
+        logger.error(f"Error in enhanced research with follow-up: {e}")
+        return []
+
+def save_research_to_s3(report: str, query: str, bucket_name: str = "research-reports-bucket") -> str:
+    """
+    Save research report to S3 bucket
+    """
+    try:
+        s3_client = boto3.client('s3')
+        
+        # Generate filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_query = re.sub(r'[^\w\s-]', '', query).strip()[:50]
+        filename = f"research_report_{safe_query}_{timestamp}.md"
+        
+        # Upload to S3
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=filename,
+            Body=report.encode('utf-8'),
+            ContentType='text/markdown'
+        )
+        
+        s3_uri = f"s3://{bucket_name}/{filename}"
+        print(f"✅ Research report saved to: {s3_uri}")
+        return s3_uri
+        
+    except Exception as e:
+        logger.error(f"Error saving research to S3: {e}")
+        return f"Error saving report: {str(e)}"
+def test_deep_research_api():
+    """
+    Test function for the deep research API
+    """
+    test_event = {
+        'event_type': 'deep_research',
+        'research_query': 'Impact of artificial intelligence on healthcare in 2024',
+        'research_depth': 'medium',
+        'max_sources': 15,
+        'time_range': 'month',
+        'output_format': 'detailed_report'
+    }
+    
+    result = deep_research_assistant_api(test_event)
+    print(json.dumps(result, indent=2))
+    return result
+#Healthcare event function code ends here...
+
+#KYC Data Extraction API
+def kyc_extraction_api(event):
+    """
+    KYC Data Extraction API for extracting information from images/documents
+    """
+    try:
+        # Extract the single variable (document data only)
+        document_data = event.get('document_data', '')
+        session_id = event.get('session_id', str(uuid.uuid4()))
+        
+        if not document_data:
+            return {
+                "statusCode": 400,
+                "error": "document_data is required",
+                "session_id": session_id
+            }
+        
+        # Use the existing Bedrock client to process the KYC extraction
+        prompt_template = f"""You are a document data viewer, your task is to view the information provided to you. Before providing your answer, provide your reasoning or approach as if you have viewed the document and extracted that information in a  neat and clear manner.
+        below is the document data 
+        {document_data}
+<reasoning>
+This is the obtained document that contains the information to be processed. My reasoning approach is to systematically scan through the document content and identify all relevant data fields, structured information, and key details present in the provided document.
+</reasoning>
+
+Please extract the information from the provided data like the sample data provided below 
+<sample1>:
+<Reasoning>
+The document data have been provided and it seems like an identification card and iam going to extract the important fields from the provided document 
+</Reasoning>
+<information>
+Identity Card Number: 123456789
+Name: MARIE JUMIO
+Race: CHINESE
+Sex: F
+Date of Birth: 1975-01-01
+Country of Birth: SINGAPORE
+</information>
+</sample1>
+<sample2>:
+<Reasoning>
+The provided document seems like to be set of three documents and there are discrepencies and matches present and they are 
+</Reasoning>
+<information>
+
+## Matching Items
+- **Document Numbers**: PO-2025072401, INV-2025072401, and GRN-2025072401 match across all three documents
+- **Vendor**: FastSupply Co. is consistent across all documents
+- **Wireless Speaker Quantity**: 10 units consistently across all documents
+- **Wireless Speaker Price**: S$1,250.00 consistently across all documents
+
+## Discrepancies Found
+1. **USB Cable Quantity**:
+   - Purchase Order: 50 units
+   - Sales Invoice: 50 units
+   - Delivery Receipt: 48 units (2 units short)
+
+2. **USB Cable Price**:
+   - Purchase Order: S$45.00 per unit
+   - Sales Invoice: S$47.00 per unit (S$2.00 higher)
+   - Delivery Receipt: S$45.00 per unit
+
+3. **USB Cable Total**:
+   - Purchase Order: S$2,250.00
+   - Sales Invoice: S$2,350.00
+   - Delivery Receipt: S$2,160.00
+
+4. **Grand Total**:
+   - Purchase Order: S$14,750.00
+   - Sales Invoice: S$14,850.00
+   - Delivery Receipt: S$14,660.00
+
+</information>
+<sample2>
+<Note>
+1.Make sure to keep it soft and crisp and act like you are thinking and providing the information in  a neat and clean manner.
+2.Do not provide tags while responding and provide the response in mark down format 
+3.Never show the information in table instead show it as list
+"""
+        
+        try:
+            # Prepare the request body for Bedrock
+            body = json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4000,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt_template
+                    }
+                ]
+            })
+            
+            # Call Bedrock using the same pattern as other functions
+            response = bedrock_client.invoke_model(
+                contentType='application/json',
+                body=body,
+                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+            )
+            
+            response_body = json.loads(response['body'].read())
+            extracted_data = response_body.get('content', [{}])[0].get('text', '')
+            
+            # Create response data
+            response_data = {
+                "extracted_kyc_data": extracted_data,
+                "timestamp": datetime.now().isoformat(),
+                "session_id": session_id
+            }
+            
+            # Log the KYC extraction
+            try:
+                log_query = """
+                    INSERT INTO {}.{} (session_id, query, response, timestamp, api_type)
+                    VALUES (%s, %s, %s, %s, %s)
+                """.format(schema, CHAT_LOG_TABLE)
+                
+                log_values = (
+                    session_id,
+                    json.dumps({"document_data": bool(document_data)}),
+                    json.dumps(response_data),
+                    datetime.now(),
+                    'kyc_extraction'
+                )
+                
+                insert_db(log_query, log_values)
+            except Exception as e:
+                print(f"Error logging KYC extraction: {e}")
+            
+            return {
+                "statusCode": 200,
+                "session_id": session_id,
+                "response_data": response_data
+            }
+            
+        except Exception as e:
+            print(f"Error calling Bedrock for KYC extraction: {e}")
+            return {
+                "statusCode": 500,
+                "error": "Error processing KYC extraction",
+                "session_id": session_id
+            }
+        
+    except Exception as e:
+        print(f"Error in KYC extraction API: {e}")
+        return {
+            "statusCode": 500,
+            "error": "Internal server error during KYC extraction",
+            "session_id": session_id if 'session_id' in locals() else str(uuid.uuid4())
+        }
+
 # retail function code starts here...
 
 
@@ -3425,10 +7156,10 @@ def generate_video_from_image(event):
         prompt = event["prompt"]
         session_id = event["session_id"]
 
-        region = region_used
-        s3_region = S3_REGION
-        model_id = NOVA_REEL_MODEL_ID
-        bucket = S3_BUCKET
+        region = "us-east-1"
+        s3_region = "us-west-2"
+        model_id = "amazon.nova-reel-v1:1"
+        bucket = "genaifoundryc-y2t1oh"
         prefix = f"videos/{session_id}"
         s3_uri = f"s3://{bucket}/{prefix}/"
         s3_key = f"{prefix}/output.mp4"
@@ -3530,9 +7261,9 @@ def generate_video_from_text(event):
         prompt = event["prompt"]
         session_id = event["session_id"]
 
-        region = region_used
-        model_id = NOVA_REEL_MODEL_ID
-        bucket = S3_BUCKET
+        region = "us-east-1"
+        model_id = "amazon.nova-reel-v1:1"
+        bucket = "genaifoundryc-y2t1oh"
         prefix = f"videos/{session_id}"
         s3_uri = f"s3://{bucket}/{prefix}/"
         s3_key = f"{prefix}/output.mp4"
@@ -3703,7 +7434,7 @@ Below is the tabular data:
 Only return the JSON. No markdown, no explanations, no code blocks.
 """
 
-    bedrock = boto3.client("bedrock-runtime", region_name=region_used)
+    bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 2048,
@@ -3711,7 +7442,7 @@ Only return the JSON. No markdown, no explanations, no code blocks.
     })
 
     response = bedrock.invoke_model(
-        modelId=CLAUDE_MODEL_ID,
+        modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
         body=body,
     )
 
@@ -3988,9 +7719,11 @@ Maintain a friendly, professional tone throughout all interactions
                 "input_schema": {
                     "type": "object",
                     "properties": {
+                        "account_id": {"type": "string", "description": "Account ID in format ACC#### (e.g., ACC1002)"},
+                        "email": {"type": "string", "description": "Email address for account verification"},
                         "order_id": {"type": "string", "description": "Order reference number (e.g., ORD789012)"}
                     },
-                    "required": ["order_id"]
+                    "required": ["account_id", "email", "order_id"]
                 }
             },
             {
@@ -4173,16 +7906,25 @@ Maintain a friendly, professional tone throughout all interactions
             return True, f"Authentication successful for {valid_customers[account_id]['name']}"
 
         # --- Mock retail tool implementations ---
-        def get_order_status(order_id):
-            # No authentication required for order status
+        def get_order_status(account_id, email, order_id):
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(account_id, email)
+            if not auth_success:
+                return {"error": auth_message}
+
+            # Validate that the account ID owns the order ID
+            relationship_valid, relationship_msg = validate_account_order_relationship(account_id, order_id)
+            if not relationship_valid:
+                return {"error": relationship_msg}
+
             if order_id not in order_item_relationships:
                 return {"error": "Order not found"}
-            
+
             # Get all items in the order
             order_items = order_item_relationships[order_id]
             items_list = []
             total_price = 0
-            
+
             for item_id, item_data in order_items.items():
                 items_list.append({
                     "item_id": item_id,
@@ -4191,11 +7933,11 @@ Maintain a friendly, professional tone throughout all interactions
                     "price": item_data["price"]
                 })
                 total_price += item_data["price"] * item_data["quantity"]
-            
+
             # Determine order status based on order ID
             order_status_map = {
                 "ORD789012": "Shipped",
-                "ORD890123": "Processing", 
+                "ORD890123": "Processing",
                 "ORD567890": "Delivered",
                 "ORD123456": "Processing",
                 "ORD901234": "Shipped",
@@ -4205,7 +7947,7 @@ Maintain a friendly, professional tone throughout all interactions
                 "ORD456789": "Shipped",
                 "ORD456789": "Processing"
             }
-            
+
             # Delivery information - estimated for pending orders, actual for delivered orders
             delivery_info = {
                 "ORD789012": {"type": "estimated", "date": get_dynamic_date(3)},
@@ -4219,10 +7961,10 @@ Maintain a friendly, professional tone throughout all interactions
                 "ORD456789": {"type": "estimated", "date": get_dynamic_date(3)},
                 "ORD456789": {"type": "estimated", "date": get_dynamic_date(3)}
             }
-            
+
             # Get delivery information
             delivery_data = delivery_info.get(order_id, {"type": "unknown", "date": "TBD"})
-            
+
             # Format delivery information based on status
             if delivery_data["type"] == "delivered":
                 delivery_text = f"Delivered on {delivery_data['date']}"
@@ -4230,7 +7972,7 @@ Maintain a friendly, professional tone throughout all interactions
                 delivery_text = f"Estimated delivery: {delivery_data['date']}"
             else:
                 delivery_text = "Delivery information unavailable"
-            
+
             return {
                 "order_id": order_id,
                 "items": items_list,
@@ -4605,18 +8347,22 @@ Maintain a friendly, professional tone throughout all interactions
                 tool_name = action['name']
                 tool_input = action['input']
                 tool_result = None
-                
+
                 # Send a heartbeat to keep WebSocket alive during tool execution
                 try:
                     heartbeat = {'type': 'heartbeat'}
                     api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
                 except Exception as e:
                     print(f"Heartbeat send error: {e}")
-                
+
                 # Execute the appropriate retail tool
                 if tool_name == 'get_order_status':
                     print("get_order_status is called..")
-                    tool_result = get_order_status(tool_input['order_id'])
+                    tool_result = get_order_status(
+                        tool_input['account_id'],
+                        tool_input['email'],
+                        tool_input['order_id']
+                    )
                     # Check for authentication error
                     if isinstance(tool_result, dict) and 'error' in tool_result:
                         print(f"Authentication failed for get_order_status: {tool_result['error']}")
@@ -4787,4 +8533,2495 @@ Maintain a friendly, professional tone throughout all interactions
 
 
 
-    
+
+
+
+
+
+
+
+
+
+
+
+def paris_agent_invoke_tool(chat_history, session_id, chat, connectionId):
+    try:
+        # Start keepalive thread
+        #keepalive_thread = send_keepalive(connectionId, 30)
+        import uuid
+        import random
+        # # Fetch base_prompt from the database as before
+        # select_query = f'''select base_prompt from {schema}.{prompt_metadata_table} where id =5;'''
+        # print(select_query)
+        base_prompt =f'''
+
+You are a Virtual Bakery Assistant for Paris Baguettes, a helpful and friendly chatbot for bakery customers. You help customers with their orders, reorders, location inquiries, menu browsing, and payment processing.
+
+CRITICAL INSTRUCTIONS:
+NEVER reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
+NEVER say "To answer your question about [topic], let me check our system" or similar phrases.
+After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
+If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
+For general bakery questions, IMMEDIATELY use the bakery_faq_tool_schema tool WITHOUT any preliminary message.
+
+PAYMENT REQUIREMENTS:
+ALL orders (new orders and reorders) require payment confirmation before processing.
+NEVER process any order without payment.
+ALWAYS provide payment links for order confirmation.
+Payment is mandatory for order fulfillment.
+
+CRITICAL INSTRUCTIONS:
+NEVER reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
+NEVER say "To answer your question about [topic], let me check our system" or similar phrases.
+After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
+If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
+For general retail questions, IMMEDIATELY use the retail_faq_tool_schema tool WITHOUT any preliminary message.
+
+CUSTOMER AUTHENTICATION RULES:
+ALWAYS verify Customer ID and Email before proceeding with any order-related tools
+NEVER proceed with get_previous_orders, place_order, or reorder_with_payment without successful authentication
+ONLY use tools after confirming the Customer ID and Email combination is valid
+If authentication fails, provide a clear error message and ask for correct credentials
+
+VALID CUSTOMER DATA:
+Use these exact Customer ID and Email combinations for verification:
+CUST1001 (Rachel Tan) - Email: rachel.tan@email.com  
+CUST1002 (Jason Lim) - Email: jason.lim@email.com  
+CUST1003 (Mary Goh) - Email: mary.goh@email.com  
+CUST1004 (Daniel Ong) - Email: daniel.ong@email.com  
+CUST1005 (Aisha Rahman) - Email: aisha.rahman@email.com
+
+SESSION AUTHENTICATION STATE MANAGEMENT:
+MAINTAIN SESSION STATE: Once an Account ID and Email are successfully verified, store this authentication state for the ENTIRE conversation session
+NEVER RE-ASK: Do not ask for Account ID or Email again during the same session unless:
+1. User explicitly provides a different Account ID
+2. Authentication explicitly fails during a tool call
+3. User explicitly requests to switch accounts
+
+AUTHENTICATION PERSISTENCE RULES:
+FIRST AUTHENTICATION: Ask for Account ID and Email only on the first order-related request
+SESSION MEMORY: Remember the authenticated Account ID throughout the conversation
+AUTOMATIC REUSE: Use the stored authenticated credentials for ALL subsequent order-related tool calls
+NO RE-VERIFICATION: Do not re-verify credentials that have already been successfully authenticated in the current session
+
+PRE-AUTHENTICATION CHECK:
+Before asking for Account ID or Email for ANY order-related request:
+Scan conversation history for previously provided Account ID
+Check if Email was already verified for that Account ID in this session
+If both are found and verified, proceed directly with stored credentials
+Only ask for credentials that are missing or failed verification
+
+ACCOUNT ID AND EMAIL HANDLING RULES:
+SESSION-LEVEL STORAGE: Once Account ID is provided and verified, use it for ALL subsequent requests
+ONE-TIME EMAIL: Ask for Email only ONCE per Account ID per session
+CONVERSATION CONTEXT: Check the ENTIRE conversation history for previously provided and verified credentials
+SMART REUSE: If user asks "I gave you before" or similar, acknowledge and proceed with stored credentials
+CONTEXT AWARENESS: Before asking for credentials, always check if they were provided earlier in the conversation
+When Account ID is provided, validate it matches the pattern ACC#### (e.g., ACC1001)
+Use the same Account ID and Email for all subsequent tool calls in the session until Account ID changes
+ALWAYS verify Email matches the Account ID before proceeding on first authentication only
+
+AUTHENTICATION PROCESS:
+Check Session State - Scan conversation for existing authenticated credentials
+Collect Account ID - Ask for Account ID ONLY if not previously provided and verified
+Validate Account ID - Check if it matches one of the valid Account IDs above
+Collect Email - Ask for Email ONLY if not previously provided and verified for current Account ID
+Verify Email - Check if the Email matches the Account ID (only on first authentication)
+Store Authentication State - Remember successful authentication for entire session
+Proceed with Tools - Use stored credentials for all subsequent order-related requests
+
+MANDATORY QUESTION COLLECTION RULES:
+ALWAYS collect ALL required information for any tool before using it
+NEVER skip any required questions, even if the user provides some information
+NEVER assume or guess missing information
+NEVER proceed with incomplete information
+Ask questions ONE AT A TIME in this exact order:
+
+For get_previous_orders tool:
+1. Check session state first - Use stored Customer ID and Email if already authenticated
+2. Customer ID - if not already provided and verified in conversation
+3. Email - only if not already provided and verified for current Customer ID
+4. VERIFY Customer ID and Email combination is valid (only on first authentication)
+5. ONLY proceed with tool call after successful authentication
+
+For place_order tool (ask in this exact order):
+1. Check session state first - Use stored Customer ID and Email if already authenticated
+2. Customer ID - if not already provided and verified in conversation
+3. Email - only if not already provided and verified for current Customer ID
+4. VERIFY Customer ID and Email combination is valid (only on first authentication)
+5. Location/Shop selection
+6. Items to purchase (with quantities)
+7. Pickup time preference
+8. ONLY proceed with tool call after successful authentication (payment link will be automatically generated)
+
+For reorder_with_payment tool (ask in this exact order):
+1. Check session state first - Use stored Customer ID and Email if already authenticated
+2. Customer ID - if not already provided and verified in conversation
+3. Email - only if not already provided and verified for current Customer ID
+4. VERIFY Customer ID and Email combination is valid (only on first authentication)
+5. Previous order number to reorder
+6. Confirm reorder details
+7. ONLY proceed with tool call after successful authentication (payment link will be automatically generated)
+
+## PRODUCT INQUIRIES HANDLING
+
+For product-related questions, use the retail_faq_tool_schema to provide general information about products, services, and policies. This tool can answer questions about:
+- Product categories and general information
+- Pricing policies and payment options
+- Return and warranty policies
+- Store services and features
+- Account types and benefits
+
+Always provide helpful, accurate information from the knowledge base without making specific product availability claims.
+
+INPUT VALIDATION RULES:
+NEVER ask for the same Account ID twice in a session unless user provides different one
+NEVER ask for Email twice for the same Account ID in a session
+Accept Account ID in format ACC#### only
+Accept Email in standard email format
+Accept any reasonable order numbers, SKUs, or product descriptions
+NEVER ask for specific formats - accept what the user provides
+If validation fails, provide a clear, specific error message with examples
+ALWAYS verify Email matches the Account ID before proceeding (only on first authentication)
+
+AUTHENTICATION ERROR MESSAGES:
+If Account ID is invalid: "Invalid Account ID. Please provide a valid Account ID (e.g., ACC0001)."
+If Email is incorrect: "Email address doesn't match Account ID [ACC####]. Please provide the correct email address."
+If both are wrong: "Invalid Account ID and Email combination. Please check your credentials and try again."
+
+Tool Usage Rules:
+When a user asks about their previous orders, use get_previous_orders tool AFTER authentication (use stored credentials if available)
+When a user wants to place a new order, use place_order tool AFTER authentication (use stored credentials if available)
+When a user wants to reorder from a previous order with payment, use reorder_with_payment tool AFTER authentication (use stored credentials if available)
+When a user asks about shop locations, use get_shop_locations tool to provide location information
+When a user asks about menu for a specific location, use get_location_menu tool to provide menu information
+When a user asks about general bakery information, policies, or services, use the bakery_faq_tool_schema tool
+Do NOT announce that you're using tools or searching for information
+Simply use the tool and provide the direct answer
+
+Response Format:
+ALWAYS answer in the shortest, most direct way possible
+Do NOT add extra greetings, confirmations, or explanations
+Do NOT mention backend systems or tools
+Speak naturally as a helpful retail representative who already knows the information
+
+Available Tools:
+get_previous_orders - Retrieve customer's previous order history and details (requires authentication)
+place_order - Process new customer orders with payment and pickup details (requires authentication)
+reorder_with_payment - Reorder from previous orders with payment processing (requires authentication)
+get_shop_locations - Retrieve available bakery shop locations and addresses
+get_location_menu - Retrieve menu items available at specific shop locations
+bakery_faq_tool_schema - Retrieve answers from the bakery knowledge base for general questions, policies, and product information
+
+SYSTEMATIC QUESTION COLLECTION:
+When a user wants order information, returns, new orders, or cancellations, IMMEDIATELY check session state for existing authentication
+If already authenticated in session, proceed directly with remaining required information
+Ask ONLY ONE question at a time
+After each user response, check what information is still missing
+Ask for the NEXT missing required field (in the exact order listed above)
+Do NOT ask multiple questions in one message
+Do NOT skip any required questions
+Do NOT proceed until ALL required information is collected
+ALWAYS use stored authentication if available, verify authentication before proceeding with tools only on first authentication
+
+EXAMPLES OF CORRECT BEHAVIOR:
+First Order-Related Request:
+User: "Where is my order?"
+Assistant: "What is your Account ID?"
+User: "ACC1001"
+Assistant: "Please provide your email address for verification."
+User: "rachel.tan@email.com"
+Assistant: "What is your order number?"
+User: "ORD789012"
+Assistant: [Verify ACC1001 + rachel.tan@email.com is valid, store authentication state, then use get_order_status tool and provide order details]
+
+Subsequent Order-Related Requests in Same Session:
+User: "What are your return policies?"
+Assistant: [Use retail_faq_tool_schema tool and provide return policy information]
+User: "I want to return the headphones from that order"
+Assistant: "Which specific item would you like to return? Please provide the item ID."
+[Uses stored ACC0001 authentication, only asks for return-specific details]
+User: "Can I place another order?"
+Assistant: "What items would you like to purchase?"
+[Uses stored ACC0001 authentication, only asks for order details]
+
+Different Account ID in Same Session:
+User: "Can you check order for ACC0002?"
+Assistant: "Please provide your email address for Account ID ACC0002 verification."
+
+EXAMPLES OF INCORRECT BEHAVIOR:
+❌ "What's your Account ID, email, and order number?" (asking multiple questions)
+❌ Asking for Account ID again after it was already provided and verified in the session
+❌ Asking for Email again for the same Account ID in the same session
+❌ Skipping Email verification on first authentication
+❌ Proceeding with incomplete information
+❌ Not checking conversation history for existing authentication
+❌ Re-asking for credentials after using FAQ tool
+
+SECURITY GUIDELINES:
+Require Email verification only once per Account ID in each session
+Never store or reference Email values in conversation history for security
+If user switches to a different Account ID, ask for the corresponding Email
+Treat all order and account information as sensitive and confidential
+ALWAYS verify Account ID and Email combination before first account access
+MAINTAIN authentication state throughout session for user experience
+
+PRODUCT KNOWLEDGE:
+You have access to comprehensive information about AnyRetail products and services including:
+Account Types (Rewards Account, Student Account)
+Shopping Services (Express Shopping, Corporate Account)
+Store Credit Cards (Rewards+ Card, Cashback Max Card)
+Financing Options (Personal Shopping Credit, Buy Now Pay Later)
+Mobile app features and digital shopping capabilities
+
+RESPONSE GUIDELINES:
+Handle greetings warmly and ask how you can help with their shopping needs today
+For product inquiries, provide specific details from the knowledge base
+For order-specific queries, always use appropriate tools with proper authentication
+For service issues, efficiently collect information and process requests
+Keep responses concise and actionable
+Never leave users without a clear next step or resolution
+
+CUSTOMER SERVICE EXCELLENCE:
+Be proactive in offering related services (e.g., suggest express shipping for urgent orders)
+Acknowledge customer concerns and provide reassurance
+Offer alternatives when primary requests cannot be fulfilled
+Follow up on complex issues with clear next steps
+Maintain a friendly, professional tone throughout all interactions
+ '''
+
+        
+        # Bakery tool schema for Paris Baguettes
+        bakery_tools = [
+            {
+                "name": "get_previous_orders",
+                "description": "Retrieve customer's previous order history and details",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string", "description": "Customer ID in format CUST#### (e.g., CUST1001)"},
+                        "email": {"type": "string", "description": "Email address for customer verification"}
+                    },
+                    "required": ["customer_id", "email"]
+                }
+            },
+            {
+                "name": "place_order",
+                "description": "Process new customer orders with payment and pickup details",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string", "description": "Customer ID in format CUST#### (e.g., CUST1001)"},
+                        "email": {"type": "string", "description": "Email address for customer verification"},
+                        "location": {"type": "string", "description": "Shop location (e.g., Downtown, Mall, Airport)"},
+                        "items": {"type": "array", "description": "Array of items with quantities", "items": {"type": "object"}},
+                        "pickup_time": {"type": "string", "description": "Preferred pickup time"}
+                    },
+                    "required": ["customer_id", "email", "location", "items", "pickup_time"]
+                }
+            },
+            {
+                "name": "reorder_with_payment",
+                "description": "Reorder from previous orders with payment processing",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "customer_id": {"type": "string", "description": "Customer ID in format CUST#### (e.g., CUST1001)"},
+                        "email": {"type": "string", "description": "Email address for customer verification"},
+                        "previous_order_id": {"type": "string", "description": "Previous order ID to reorder from"}
+                    },
+                    "required": ["customer_id", "email", "previous_order_id"]
+                }
+            },
+            {
+                "name": "get_shop_locations",
+                "description": "Retrieve available bakery shop locations and addresses",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location_query": {"type": "string", "description": "Optional location query or area preference"}
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "get_location_menu",
+                "description": "Retrieve menu items available at specific shop locations",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "Shop location (e.g., Downtown, Mall, Airport)"}
+                    },
+                    "required": ["location"]
+                }
+            },
+            {
+                "name": "bakery_faq_tool_schema",
+                "description": "Retrieve answers from the bakery knowledge base for general bakery questions, policies, and product information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "knowledge_base_retrieval_question": {"type": "string", "description": "A question to retrieve from the bakery knowledge base about bakery services, policies, procedures, or general information."}
+                    },
+                    "required": ["knowledge_base_retrieval_question"]
+                }
+            }
+        ]
+      # --- Customer Database for Paris Baguettes ---
+        valid_customers = {
+            "CUST1001": {"name": "Rachel Tan", "email": "rachel.tan@email.com", "phone": "+1-555-0123"},
+            "CUST1002": {"name": "Jason Lim", "email": "jason.lim@email.com", "phone": "+1-555-0456"},
+            "CUST1003": {"name": "Mary Goh", "email": "mary.goh@email.com", "phone": "+1-555-0789"},
+            "CUST1004": {"name": "Daniel Ong", "email": "daniel.ong@email.com", "phone": "+1-555-0321"},
+            "CUST1005": {"name": "Aisha Rahman", "email": "aisha.rahman@email.com", "phone": "+1-555-0654"}
+        }
+
+        # --- Bakery Shop Locations ---
+        shop_locations = {
+            "Downtown": {
+                "address": "123 Main Street, Downtown",
+                "phone": "+1-555-0100",
+                "hours": "7:00 AM - 8:00 PM",
+                "available_products": ["cappuccino cake", "chocolate cake", "mocha cake", "pumpkin scone", "croissant", "sweet potato pastry"]
+            },
+            "Mall": {
+                "address": "456 Shopping Center, Mall District",
+                "phone": "+1-555-0200",
+                "hours": "8:00 AM - 9:00 PM",
+                "available_products": ["cappuccino cake", "chocolate cake", "mocha cake", "croissant", "sweet potato pastry"]
+            },
+            "Airport": {
+                "address": "789 Terminal 1, Airport Plaza",
+                "phone": "+1-555-0300",
+                "hours": "6:00 AM - 10:00 PM",
+                "available_products": ["cappuccino cake", "chocolate cake", "croissant", "sweet potato pastry"]
+            }
+        }
+
+        # --- Product Database ---
+        bakery_products = {
+            "cappuccino cake": {"name": "Cappuccino Cake", "price": 12.99, "description": "Rich coffee-flavored cake with cream"},
+            "chocolate cake": {"name": "Chocolate Cake", "price": 14.99, "description": "Decadent chocolate cake with ganache"},
+            "mocha cake": {"name": "Mocha Cake", "price": 13.99, "description": "Coffee and chocolate combination cake"},
+            "pumpkin scone": {"name": "Pumpkin Scone", "price": 4.99, "description": "Spiced pumpkin scone with glaze"},
+            "croissant": {"name": "Croissant", "price": 3.99, "description": "Buttery French croissant"},
+            "sweet potato pastry": {"name": "Sweet Potato Pastry", "price": 5.99, "description": "Sweet potato filled pastry"}
+        }
+
+        # --- Customer Order History ---
+        customer_order_relationships = {
+            "CUST1001": ["BAK001", "BAK002"],
+            "CUST1002": ["BAK003", "BAK004"],
+            "CUST1003": ["BAK005", "BAK006"],
+            "CUST1004": ["BAK007", "BAK008"],
+            "CUST1005": ["BAK009", "BAK010"]
+        }
+
+        order_details = {
+            "BAK001": {
+                "customer_id": "CUST1001",
+                "location": "Downtown",
+                "items": [
+                    {"name": "Cappuccino Cake", "quantity": 1, "price": 12.99},
+                    {"name": "Croissant", "quantity": 2, "price": 3.99}
+                ],
+                "total": 20.97,
+                "pickup_time": "2024-01-15 10:00 AM",
+                "status": "Completed"
+            },
+            "BAK002": {
+                "customer_id": "CUST1001",
+                "location": "Mall",
+                "items": [
+                    {"name": "Chocolate Cake", "quantity": 1, "price": 14.99}
+                ],
+                "total": 14.99,
+                "pickup_time": "2024-01-20 2:00 PM",
+                "status": "Completed"
+            },
+            "BAK003": {
+                "customer_id": "CUST1002",
+                "location": "Airport",
+                "items": [
+                    {"name": "Mocha Cake", "quantity": 1, "price": 13.99},
+                    {"name": "Sweet Potato Pastry", "quantity": 3, "price": 5.99}
+                ],
+                "total": 31.96,
+                "pickup_time": "2024-01-18 8:00 AM",
+                "status": "Completed"
+            }
+        }
+        def validate_customer_order_relationship(customer_id, order_id):
+            """Validate that the customer ID owns the order ID"""
+            if customer_id not in customer_order_relationships:
+                return False, f"Invalid Customer ID: {customer_id}"
+            
+            if order_id not in customer_order_relationships[customer_id]:
+                return False, f"Order {order_id} does not belong to Customer ID {customer_id}. Please provide the correct Customer ID for this order."
+            
+            return True, "Valid relationship"
+
+        def authenticate_customer(customer_id, email=None):
+            """Authenticate Customer ID and optionally verify email"""
+            if customer_id not in valid_customers:
+                return False, "Invalid Customer ID. Please provide a valid Customer ID (e.g., CUST1001)."
+            
+            # If email is provided, verify it matches the account
+            if email:
+                expected_email = valid_customers[customer_id]['email']
+                if email.lower() != expected_email.lower():
+                    return False, f"I'm unable to verify your account. The email address doesn't match Customer ID {customer_id}. Please provide the correct email address."
+            
+            return True, f"Authentication successful for {valid_customers[customer_id]['name']}"
+
+        # --- Mock bakery tool implementations ---
+        def get_previous_orders(customer_id, email):
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(customer_id, email)
+            if not auth_success:
+                return {"error": auth_message}
+            
+            if customer_id not in customer_order_relationships:
+                return {"error": "No orders found for this customer"}
+            
+            orders = customer_order_relationships[customer_id]
+            order_list = []
+            
+            for order_id in orders:
+                if order_id in order_details:
+                    order_info = order_details[order_id]
+                    order_list.append({
+                        "order_id": order_id,
+                        "location": order_info["location"],
+                        "items": order_info["items"],
+                        "total": order_info["total"],
+                        "pickup_time": order_info["pickup_time"],
+                        "status": order_info["status"]
+                    })
+            
+            return {
+                "customer_id": customer_id,
+                "customer_name": valid_customers[customer_id]["name"],
+                "orders": order_list,
+                "total_orders": len(order_list)
+            }
+
+        def place_order(customer_id, email, location, items, pickup_time):
+            # Set default payment method
+            payment_method = "Credit Card"
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(customer_id, email)
+            if not auth_success:
+                return {"error": auth_message}
+            
+            # Validate location
+            if location not in shop_locations:
+                return {"error": f"Location '{location}' not found. Available locations: {', '.join(shop_locations.keys())}"}
+            
+            # Calculate total and validate items
+            total = 0
+            order_items = []
+            
+            for item in items:
+                item_name = item.get("name", "").lower()
+                quantity = item.get("quantity", 1)
+                
+                if item_name not in bakery_products:
+                    return {"error": f"Product '{item_name}' not found in our menu"}
+                
+                if item_name not in shop_locations[location]["available_products"]:
+                    return {"error": f"Product '{item_name}' is not available at {location} location"}
+                
+                product_info = bakery_products[item_name]
+                item_total = product_info["price"] * quantity
+                total += item_total
+                
+                order_items.append({
+                    "name": product_info["name"],
+                    "quantity": quantity,
+                    "price": product_info["price"],
+                    "total": item_total
+                })
+            
+            # Generate order ID
+            order_id = f"BAK{str(uuid.uuid4())[:6].upper()}"
+            
+            # Create payment link for ALL orders (required for confirmation)
+            payment_link = f"https://payment.parisbaguettes.com/pay/{order_id}"
+            
+            # Generate unique payment reference
+            payment_reference = f"PB-{order_id}-{int(total * 100)}"
+            
+            return {
+                "order_id": order_id,
+                "customer_id": customer_id,
+                "customer_name": valid_customers[customer_id]["name"],
+                "location": location,
+                "items": order_items,
+                "total": round(total, 2),
+                "currency": "USD",
+                "pickup_time": pickup_time,
+                "payment_method": payment_method,
+                "payment_link": payment_link,
+                "payment_reference": payment_reference,
+                "status": "Pending Payment",
+                "payment_required": True,
+                "message": f"Order placed successfully! Payment is required to confirm your order. Please complete payment using the provided link: {payment_link}"
+            }
+
+        def reorder_with_payment(customer_id, email, previous_order_id):
+            # Set default payment method
+            payment_method = "Credit Card"
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(customer_id, email)
+            if not auth_success:
+                return {"error": auth_message}
+            
+            # Validate that the customer owns the previous order
+            relationship_valid, relationship_msg = validate_customer_order_relationship(customer_id, previous_order_id)
+            if not relationship_valid:
+                return {"error": relationship_msg}
+            
+            if previous_order_id not in order_details:
+                return {"error": "Previous order not found"}
+            
+            # Get previous order details
+            previous_order = order_details[previous_order_id]
+            
+            # Generate new order ID
+            new_order_id = f"BAK{str(uuid.uuid4())[:6].upper()}"
+            
+            # Create payment link for ALL reorders (required for confirmation)
+            payment_link = f"https://payment.parisbaguettes.com/pay/{new_order_id}"
+            
+            # Generate unique payment reference
+            payment_reference = f"PB-{new_order_id}-{int(previous_order['total'] * 100)}"
+            
+            return {
+                "new_order_id": new_order_id,
+                "previous_order_id": previous_order_id,
+                "customer_id": customer_id,
+                "customer_name": valid_customers[customer_id]["name"],
+                "location": previous_order["location"],
+                "items": previous_order["items"],
+                "total": previous_order["total"],
+                "currency": "USD",
+                "payment_method": payment_method,
+                "payment_link": payment_link,
+                "payment_reference": payment_reference,
+                "status": "Pending Payment",
+                "payment_required": True,
+                "message": f"Reorder created successfully! Payment is required to confirm your reorder. Please complete payment using the provided link: {payment_link}"
+            }
+
+        def get_shop_locations(location_query=None):
+            """Get available shop locations"""
+            if location_query:
+                # Filter locations based on query
+                filtered_locations = {}
+                for location_name, location_data in shop_locations.items():
+                    if location_query.lower() in location_name.lower() or location_query.lower() in location_data["address"].lower():
+                        filtered_locations[location_name] = location_data
+                return {"locations": filtered_locations}
+            
+            return {"locations": shop_locations}
+
+        def get_location_menu(location):
+            """Get menu for specific location"""
+            if location not in shop_locations:
+                return {"error": f"Location '{location}' not found. Available locations: {', '.join(shop_locations.keys())}"}
+            
+            location_data = shop_locations[location]
+            menu_items = []
+            
+            for product_key in location_data["available_products"]:
+                if product_key in bakery_products:
+                    product_info = bakery_products[product_key]
+                    menu_items.append({
+                        "name": product_info["name"],
+                        "price": product_info["price"],
+                        "description": product_info["description"]
+                    })
+            
+            return {
+                "location": location,
+                "address": location_data["address"],
+                "phone": location_data["phone"],
+                "hours": location_data["hours"],
+                "menu": menu_items
+            }
+
+        def get_dynamic_date(days_offset):
+            """Helper function to get dynamic date"""
+            from datetime import datetime, timedelta
+            return (datetime.now() + timedelta(days=days_offset)).strftime("%Y-%m-%d")
+
+        def get_dynamic_datetime(hours_offset):
+            """Helper function to get dynamic datetime"""
+            from datetime import datetime, timedelta
+            return (datetime.now() + timedelta(hours=hours_offset)).strftime("%Y-%m-%d %H:%M:%S")
+
+        def initiate_return_request(account_id, email, order_id, item_id_or_product_name, return_reason):
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(account_id, email)
+            if not auth_success:
+                return {"error": auth_message}
+
+            if not item_id_or_product_name or item_id_or_product_name.lower() in ["", "none", "null"]:
+                order_items = get_order_items_for_return(order_id)
+                if order_items.startswith("Order not found") or order_items.startswith("No items found"):
+                    return {"error": order_items}
+                
+                return {
+                    "message": f"Please specify which item you'd like to return from order {order_id}. Here are the items in your order:\n\n{order_items}\n\nPlease provide the item name (e.g., 'Gaming Console - White') or item ID you wish to return along with your return reason."
+                }
+            
+            # Check if item_id_or_product_name is an order number (starts with ORD)
+            if item_id_or_product_name.startswith("ORD"):
+                # User provided an order number instead of item ID
+                return {
+                    "error": f"You provided order number '{item_id_or_product_name}', but I need the specific item you want to return from order {order_id}. Please provide the item name (e.g., 'Gaming Console - White') or item ID."
+                }
+            
+            # Check if item_id_or_product_name is an item ID (starts with ITM) or a product name
+            if item_id_or_product_name.startswith("ITM"):
+                # It's an item ID, use the original validation
+                relationship_valid, relationship_msg = validate_account_order_item_relationship(account_id, order_id, item_id_or_product_name)
+                if not relationship_valid:
+                    return {"error": relationship_msg}
+                item_id = item_id_or_product_name
+                item_name = order_item_relationships[order_id][item_id]["name"]
+            else:
+                # It's a product name, use product name validation
+                relationship_valid, relationship_result = validate_order_product_relationship(account_id, order_id, item_id_or_product_name)
+                if not relationship_valid:
+                    return {"error": relationship_result}
+                item_id = relationship_result  # relationship_result contains the found item_id
+                item_name = order_item_relationships[order_id][item_id]["name"]
+            
+            return_request_id = f"RA-{str(uuid.uuid4())[:6].upper()}"
+            return {
+                "return_request_id": return_request_id,
+                "status": "Approved",
+                "assigned_team": "Returns Processing",
+                "expected_pickup": get_dynamic_date(3),
+                "summary": f"Return request approved for {item_name} from order {order_id}. Reason: {return_reason}",
+                "refund_method": "We’ll process your refund using the same payment method you used at checkout."
+            }
+        
+
+
+
+        def check_product_availability(product_name, model=None, color=None, type=None, size_in_inches=None, display_type=None):
+            # Only support headphones and TV as per base prompt
+            if product_name not in ["headphones", "TV"]:
+                return {"error": "Sorry, I can assist only with headphones and TVs at the moment."}
+            
+            mock_products = {
+                "headphones": {
+                    "ZX900 Pro": {
+                        "product_name": "headphones",
+                        "model": "ZX900 Pro",
+                        "color": "Black",
+                        "type": "over-ear",
+                        "price": 299.99,
+                        "availability": "In Stock",
+                        "currency": "SGD",
+                        "status": "Active",
+                        "last_updated": get_dynamic_datetime(2)
+                    },
+                    "SoundMax Elite": {
+                        "product_name": "headphones",
+                        "model": "SoundMax Elite",
+                        "color": "Silver",
+                        "type": "in-ear",
+                        "price": 199.99,
+                        "availability": "In Stock",
+                        "currency": "SGD",
+                        "status": "Active",
+                        "last_updated": get_dynamic_datetime(2)
+                    }
+                },
+                "TV": {
+                    "VisionX": {
+                        "product_name": "TV",
+                        "size_in_inches": 55,
+                        "display_type": "OLED",
+                        "model": "VisionX",
+                        "price": 1299.99,
+                        "availability": "In Stock",
+                        "currency": "SGD",
+                        "status": "Active",
+                        "last_updated": get_dynamic_datetime(2)
+                    },
+                    "Alpha7": {
+                        "product_name": "TV",
+                        "size_in_inches": 65,
+                        "display_type": "QLED",
+                        "model": "Alpha7",
+                        "price": 1899.99,
+                        "availability": "In Stock",
+                        "currency": "SGD",
+                        "status": "Active",
+                        "last_updated": get_dynamic_datetime(2)
+                    }
+                }
+            }
+            
+            category_products = mock_products.get(product_name, {})
+            
+            # For TVs, match by size and display type if provided
+            if product_name == "TV":
+                for product in category_products.values():
+                    # If size and display type are provided, check for exact match
+                    if size_in_inches is not None and display_type is not None:
+                        if (product.get("size_in_inches") == size_in_inches and 
+                            product.get("display_type") == display_type):
+                            return product
+                    
+                    # If only size is provided, check for size match
+                    elif size_in_inches is not None:
+                        if product.get("size_in_inches") == size_in_inches:
+                            return product
+                    
+                    # If only display type is provided, check for display type match
+                    elif display_type is not None:
+                        if product.get("display_type") == display_type:
+                            return product
+                
+                # If no exact match found, provide information about available options
+                if size_in_inches is not None or display_type is not None:
+                    available_options = []
+                    for product in category_products.values():
+                        available_options.append(f"{product['model']} {product['size_in_inches']}-inch {product['display_type']}")
+                    
+                    if size_in_inches is not None and display_type is not None:
+                        return {
+                            "error": f"Sorry, we don't have a {size_in_inches}-inch {display_type} TV in stock. Available options: {', '.join(available_options)}"
+                        }
+                    elif size_in_inches is not None:
+                        return {
+                            "error": f"Sorry, we don't have a {size_in_inches}-inch TV in stock. Available options: {', '.join(available_options)}"
+                        }
+                    elif display_type is not None:
+                        return {
+                            "error": f"Sorry, we don't have a {display_type} TV in stock. Available options: {', '.join(available_options)}"
+                        }
+            
+            # For headphones, match by model, color, and type if provided
+            elif product_name == "headphones":
+                for product in category_products.values():
+                    # If model, color, and type are provided, check for exact match
+                    if model is not None and color is not None and type is not None:
+                        if (product.get("model") == model and 
+                            product.get("color") == color and 
+                            product.get("type") == type):
+                            return product
+                    
+                    # If only model is provided, check for model match
+                    elif model is not None:
+                        if product.get("model") == model:
+                            return product
+                
+                # If no exact match found for headphones, provide information about available options
+                if model is not None or color is not None or type is not None:
+                    available_options = []
+                    for product in category_products.values():
+                        available_options.append(f"{product['model']} {product['color']} {product['type']}")
+                    
+                    return {
+                        "error": f"Sorry, the requested headphones are not available. Available options: {', '.join(available_options)}"
+                    }
+            
+            # If no specific parameters provided, return first available product
+            if category_products:
+                return list(category_products.values())[0]
+            
+            return {"error": "Product not found"}
+
+        def cancel_order(order_id, account_id, email, cancellation_reason, refund_method):
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(account_id, email)
+            if not auth_success:
+                return {"error": auth_message}
+            
+            # Validate that the account ID owns the order ID
+            relationship_valid, relationship_msg = validate_account_order_relationship(account_id, order_id)
+            if not relationship_valid:
+                return {"error": relationship_msg}
+            
+            cancellation_id = f"CAN-{str(uuid.uuid4())[:6].upper()}"
+            return {
+                "cancellation_id": cancellation_id,
+                "status": "Approved",
+                "assigned_team": "Order Management",
+                "expected_callback": get_dynamic_date(2),
+                "summary": f"Order {order_id} has been successfully cancelled. Reason: {cancellation_reason}. Refund will be processed via {refund_method} within 3-5 business days."
+            }
+
+        def get_bakery_faq_chunks(query):
+            try:
+                print("IN BAKERY FAQ: ", query)
+                chunks = []
+                # Use the same KB_ID for now, but you might want to create a separate bakery KB
+                response_chunks = retrieve_client.retrieve(
+                    retrievalQuery={                                                                                
+                        'text': query
+                    },
+                    knowledgeBaseId=RETAIL_KB_ID,
+                    retrievalConfiguration={
+                        'vectorSearchConfiguration': {                          
+                            'numberOfResults': 10,                                                                                              
+                            'overrideSearchType': 'HYBRID'
+                        }
+                    }
+                )
+               
+                for item in response_chunks['retrievalResults']:
+                    if 'content' in item and 'text' in item['content']:
+                        chunks.append(item['content']['text'])
+                print('BAKERY FAQ CHUNKS: ', chunks)  
+                return chunks
+            except Exception as e:
+                print("An exception occurred while retrieving bakery FAQ chunks:", e)
+                return []
+
+        input_tokens = 0
+        output_tokens = 0
+        print("In bakery_agent_invoke_tool (Bakery Bot)")
+
+        # Extract Customer ID, Order ID, and Email from chat history
+        extracted_customer_id = None
+        extracted_order_id = None
+        extracted_email = None
+        
+        for message in chat_history:
+            if message['role'] == 'user':
+                content_text = message['content'][0]['text']
+                
+                # Extract Customer ID (CUST followed by 4 digits)
+                customer_id_match = re.search(r'\b(CUST\d{4})\b', content_text.upper())
+                if customer_id_match:
+                    extracted_customer_id = customer_id_match.group(1)
+                    print(f"Extracted Customer ID from chat history: {extracted_customer_id}")
+                    
+                # Extract Order ID (BAK followed by 6 digits)
+                order_id_match = re.search(r'\b(BAK\d{6})\b', content_text.upper())
+                if order_id_match:
+                    extracted_order_id = order_id_match.group(1)
+                    print(f"Extracted Order ID from chat history: {extracted_order_id}")
+                
+                # Extract Email address
+                email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', content_text)
+                if email_match:
+                    extracted_email = email_match.group(0)
+                    print(f"Extracted Email from chat history: {extracted_email}")
+        
+        # Enhance system prompt with Customer ID, Order ID, and Email context
+        enhanced_context = []
+        
+        # Enhance system prompt with Customer ID context
+        if extracted_customer_id:
+            enhanced_context.append(f"The customer's Customer ID is {extracted_customer_id}. Use this Customer ID automatically for any tool calls that require it without asking again.")
+        
+        if extracted_order_id:
+            enhanced_context.append(f"The customer's Order ID is {extracted_order_id}. Use this Order ID automatically for any tool calls that require it without asking again.")
+        
+        if extracted_email:
+            enhanced_context.append(f"The customer's Email is {extracted_email}. Use this Email automatically for any tool calls that require it without asking again.")
+        
+        if enhanced_context:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: {' '.join(enhanced_context)}"
+            print(f"Enhanced prompt with context: {enhanced_context}")
+        else:
+            enhanced_prompt = base_prompt
+        
+        # Use the enhanced_prompt instead of base_prompt
+        prompt = enhanced_prompt
+        
+        # First API call to get initial response
+        try:
+            response = bedrock_client.invoke_model_with_response_stream(
+                contentType='application/json',
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4000,
+                    "temperature": 0,
+                    "top_p": 0.999,
+                    "top_k": 250,
+                    "system": prompt,
+                    "tools": bakery_tools,
+                    "messages": chat_history
+                }),
+                modelId=model_id
+            )
+        except Exception as e:
+            print("AN ERROR OCCURRED : ", e)
+            response = "We are unable to assist right now please try again after few minutes"
+            return {"answer": response, "question": chat, "session_id": session_id}
+
+        streamed_content = ''
+        content_block = None
+        assistant_response = []
+        for item in response['body']:
+            content = json.loads(item['chunk']['bytes'].decode())
+            if content['type'] == 'content_block_start':
+                content_block = content['content_block']
+            elif content['type'] == 'content_block_stop':
+                print(f"Content block at stop: {content_block}")  # Add debug line
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                except api_gateway_client.exceptions.GoneException:
+                    print(f"Connection {connectionId} is closed (GoneException) - stop message")
+                except Exception as e:
+                    print(f"WebSocket send error (stop): {e}")
+                if content_block['type'] == 'text':
+                    content_block['text'] = streamed_content
+                    assistant_response.append(content_block)
+                elif content_block['type'] == 'tool_use':
+                    try:
+                        content_block['input'] = json.loads(streamed_content)
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error for tool input: {e}")
+                        print(f"Streamed content: {streamed_content}")
+                        content_block['input'] = {}
+                    assistant_response.append(content_block)
+                streamed_content = ''
+            elif content['type'] == 'content_block_delta':
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                except api_gateway_client.exceptions.GoneException:
+                    print(f"Connection {connectionId} is closed (GoneException) - delta message")
+                except Exception as e:
+                    print(f"WebSocket send error (delta): {e}")
+                if 'delta' in content and isinstance(content['delta'], dict):
+                    if content['delta']['type'] == 'text_delta':
+                        streamed_content += content['delta']['text']
+                    elif content['delta']['type'] == 'input_json_delta':
+                        streamed_content += content['delta']['partial_json']
+            elif content['type'] == 'message_delta':
+                try:
+                    if 'usage' in content and isinstance(content['usage'], dict):
+                        tool_tokens = content['usage']['output_tokens']
+                    else:
+                        tool_tokens = 0
+                except (KeyError, TypeError) as e:
+                    print(f"Error accessing usage tokens: {e}")
+                    tool_tokens = 0
+            elif content['type'] == 'message_stop':
+                input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
+                output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
+        chat_history.append({'role': 'assistant', 'content': assistant_response})
+        
+        # Check if any tools were called
+        tools_used = []
+        tool_results = []
+        
+        for action in assistant_response:
+            if action['type'] == 'tool_use':
+                tools_used.append(action['name'])
+                tool_name = action['name']
+                tool_input = action['input']
+                tool_result = None
+                
+                # Send a heartbeat to keep WebSocket alive during tool execution
+                try:
+                    heartbeat = {'type': 'heartbeat'}
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                except Exception as e:
+                    print(f"Heartbeat send error: {e}")
+                
+                # Execute the appropriate bakery tool
+                if tool_name == 'get_previous_orders':
+                    print("get_previous_orders is called..")
+                    tool_result = get_previous_orders(
+                        tool_input['customer_id'],
+                        tool_input['email']
+                    )
+                    # Check for authentication error
+                    if isinstance(tool_result, dict) and 'error' in tool_result:
+                        print(f"Authentication failed for get_previous_orders: {tool_result['error']}")
+                elif tool_name == 'place_order':
+                    print("place_order is called..")
+                    tool_result = place_order(
+                        tool_input['customer_id'],
+                        tool_input['email'],
+                        tool_input['location'],
+                        tool_input['items'],
+                        tool_input['pickup_time']
+                    )
+                    # Check for authentication error
+                    if isinstance(tool_result, dict) and 'error' in tool_result:
+                        print(f"Authentication failed for place_order: {tool_result['error']}")
+                elif tool_name == 'reorder_with_payment':
+                    print("reorder_with_payment is called..")
+                    tool_result = reorder_with_payment(
+                        tool_input['customer_id'],
+                        tool_input['email'],
+                        tool_input['previous_order_id']
+                    )
+                    # Check for authentication error
+                    if isinstance(tool_result, dict) and 'error' in tool_result:
+                        print(f"Authentication failed for reorder_with_payment: {tool_result['error']}")
+                elif tool_name == 'get_shop_locations':
+                    print("get_shop_locations is called..")
+                    tool_result = get_shop_locations(tool_input.get('location_query'))
+                elif tool_name == 'get_location_menu':
+                    print("get_location_menu is called..")
+                    tool_result = get_location_menu(tool_input['location'])
+                elif tool_name == 'bakery_faq_tool_schema':
+                    print("bakery_faq is called ...")
+                    # Send another heartbeat before FAQ retrieval
+                    try:
+                        heartbeat = {'type': 'heartbeat'}
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                    except Exception as e:
+                        print(f"Bakery FAQ heartbeat send error: {e}")
+                    
+                    tool_result = get_bakery_faq_chunks(tool_input['knowledge_base_retrieval_question'])
+                    
+                    # If FAQ tool returns empty or no results, provide fallback
+                    if not tool_result or len(tool_result) == 0:
+                        tool_result = ["I don't have specific information about that in our current bakery knowledge base. Let me schedule a callback with one of our bakery agents who can provide detailed information."]
+                
+                # Create tool result message with better error handling
+                try:
+                    if not isinstance(action, dict):
+                        print(f"Action is not a dict: {type(action)}, value: {action}")
+                        continue
+                        
+                    if 'id' not in action:
+                        print(f"Action missing 'id' field: {action}")
+                        continue
+                    
+                    print(f"Tool result type: {type(tool_result)}")
+                    print(f"Tool result content: {tool_result}")
+                    
+                    if isinstance(tool_result, list) and tool_result:
+                        content_text = "\n".join(tool_result)
+                    elif isinstance(tool_result, list) and not tool_result:
+                        content_text = "No information available"
+                    else:
+                        content_text = str(tool_result) if tool_result else "No information available"
+                    
+                    tool_response_dict = {
+                        "type": "tool_result",
+                        "tool_use_id": action['id'],
+                        "content": [{"type": "text", "text": content_text}]
+                    }
+                    tool_results.append(tool_response_dict)
+                    
+                except Exception as e:
+                    print(f"Error creating tool response: {e}")
+                    print(f"Action type: {type(action)}")
+                    print(f"Action content: {action}")
+                    # Skip this tool result instead of crashing
+                    continue
+                tool_results.append(tool_response_dict)
+        
+        # If tools were used, add tool results to chat history and make second API call
+        if tools_used:
+            # Add tool results to chat history
+            chat_history.append({'role': 'user', 'content': tool_results})
+            
+            # Make second API call with tool results
+            try:
+                response = bedrock_client.invoke_model_with_response_stream(
+                    contentType='application/json',
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 4000,
+                        "temperature": 0,
+                        "system": prompt,
+                        "tools": bakery_tools,
+                        "messages": chat_history
+                    }),
+                    modelId=model_id
+                )
+            except Exception as e:
+                print("ERROR IN SECOND API CALL:", e)
+                # Send error response via WebSocket
+                error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+                for word in error_response.split():
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    except:
+                        pass
+                stop_answer = {'type': 'content_block_stop', 'index': 0}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+                return {"answer": error_response, "question": chat, "session_id": session_id}
+
+            # Process the streaming response
+            streamed_content = ''
+            content_block = None
+            assistant_response = []
+            
+            for item in response['body']:
+                content = json.loads(item['chunk']['bytes'].decode())
+                if content['type'] == 'content_block_start':
+                    content_block = content['content_block']
+                elif content['type'] == 'content_block_stop':
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - stop message (tool)")
+                    except Exception as e:
+                        print(f"WebSocket send error (stop, tool): {e}")
+                    if content_block['type'] == 'text':
+                        content_block['text'] = streamed_content
+                        assistant_response.append(content_block)
+                    elif content_block['type'] == 'tool_use':
+                        try:
+                            content_block['input'] = json.loads(streamed_content)
+                        except json.JSONDecodeError as e:
+                            print(f"JSON decode error for tool input: {e}")
+                            print(f"Streamed content: {streamed_content}")
+                            content_block['input'] = {}
+                        assistant_response.append(content_block)
+                    streamed_content = ''
+                elif content['type'] == 'content_block_delta':
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - delta message (tool)")
+                    except Exception as e:
+                        print(f"WebSocket send error (delta, tool): {e}")
+                    if content['delta']['type'] == 'text_delta':
+                        streamed_content += content['delta']['text']
+                    elif content['delta']['type'] == 'input_json_delta':
+                        streamed_content += content['delta']['partial_json']
+                elif content['type'] == 'message_stop':
+                    input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
+                    output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
+            
+            # Extract final answer
+            final_ans = ""
+            for i in assistant_response:
+                if i['type'] == 'text':
+                    final_ans = i['text']
+                    break
+            
+            # If no text response, provide fallback
+            if not final_ans:
+                final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
+            
+            return {"statusCode": "200", "answer": final_ans, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+
+        else:
+            # No tools called, handle normal response
+            for action in assistant_response:
+                if action['type'] == 'text':
+                    ai_response = action['text']
+                    return {"statusCode": "200", "answer": ai_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+            
+            # Fallback if no text response
+            return {"statusCode": "200", "answer": "I'm here to help with your bakery needs. How can I assist you today?", "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        response = "An Unknown error occurred. Please try again after some time."
+        return {
+            "statusCode": "500",
+            "answer": response,
+            "question": chat,
+            "session_id": session_id,
+            "input_tokens": "0",
+            "output_tokens": "0"
+        }
+
+def hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId):
+    try:
+        # Start keepalive thread
+        #keepalive_thread = send_keepalive(connectionId, 30)
+        import uuid
+        import random
+        
+        base_prompt =f'''
+        You are a Virtual Healthcare Assistant for MedCare Hospital, a helpful and accurate chatbot for patients and visitors. You handle patient inquiries, appointment scheduling, medical records access, medication management, and general hospital information.
+CRITICAL INSTRUCTIONS:
+
+NEVER reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
+NEVER say "To answer your question about [topic], let me check our system" or similar phrases.
+After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
+If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
+For general hospital questions, IMMEDIATELY use the hospital_faq_tool_schema tool WITHOUT any preliminary message.
+
+PATIENT AUTHENTICATION RULES:
+
+ALWAYS verify Patient ID and Date of Birth before proceeding with any patient-specific tools
+NEVER proceed with appointment_scheduler, patient_records, or medication_tracker without successful authentication
+ONLY use tools after confirming the Patient ID and Date of Birth combination is valid
+If authentication fails, provide a clear error message and ask for correct credentials
+
+VALID PATIENT DATA:
+Use these exact Patient ID and Date of Birth combinations for verification:
+
+PAT1001 (John Smith) - DOB: 1985-03-15
+PAT1002 (Sarah Johnson) - DOB: 1990-07-22
+PAT1003 (Michael Brown) - DOB: 1978-11-08
+PAT1004 (Emily Davis) - DOB: 1992-05-14
+PAT1005 (David Wilson) - DOB: 1983-09-30
+
+SESSION AUTHENTICATION STATE MANAGEMENT:
+MAINTAIN SESSION STATE: Once a Patient ID and Date of Birth are successfully verified, store this authentication state for the ENTIRE conversation session
+NEVER RE-ASK: Do not ask for Patient ID or Date of Birth again during the same session unless:
+
+User explicitly provides a different Patient ID
+Authentication explicitly fails during a tool call
+User explicitly requests to switch accounts
+
+AUTHENTICATION PERSISTENCE RULES:
+
+FIRST AUTHENTICATION: Ask for Patient ID and Date of Birth only on the first patient-specific request
+SESSION MEMORY: Remember the authenticated Patient ID throughout the conversation
+AUTOMATIC REUSE: Use the stored authenticated credentials for ALL subsequent patient-specific tool calls
+NO RE-VERIFICATION: Do not re-verify credentials that have already been successfully authenticated in the current session
+
+PRE-AUTHENTICATION CHECK:
+Before asking for Patient ID or Date of Birth for ANY patient-specific request:
+
+Scan conversation history for previously provided Patient ID
+Check if Date of Birth was already verified for that Patient ID in this session
+If both are found and verified, proceed directly with stored credentials
+Only ask for credentials that are missing or failed verification
+
+PATIENT ID AND DOB HANDLING RULES:
+
+SESSION-LEVEL STORAGE: Once Patient ID is provided and verified, use it for ALL subsequent requests
+ONE-TIME DOB: Ask for Date of Birth only ONCE per Patient ID per session
+CONVERSATION CONTEXT: Check the ENTIRE conversation history for previously provided and verified credentials
+SMART REUSE: If user asks "I gave you before" or similar, acknowledge and proceed with stored credentials
+CONTEXT AWARENESS: Before asking for credentials, always check if they were provided earlier in the conversation
+When Patient ID is provided, validate it matches the pattern PAT#### (e.g., PAT1001)
+Use the same Patient ID and Date of Birth for all subsequent tool calls in the session until Patient ID changes
+ALWAYS verify Date of Birth matches the Patient ID before proceeding on first authentication only
+
+USE CASE SCENARIOS:
+1. General Hospital Information (NO AUTHENTICATION REQUIRED)
+Use hospital_faq_tool_schema tool for:
+
+Hospital services and departments
+Visiting hours and policies
+Facility information
+General medical information
+Emergency procedures
+Contact information
+
+Example Flow:
+
+User: "What are your visiting hours?"
+Assistant: [Use hospital_faq_tool_schema immediately and provide visiting hours]
+
+2. Appointment Scheduling (AUTHENTICATION REQUIRED)
+Use appointment_scheduler tool for:
+
+Scheduling new appointments
+Rescheduling existing appointments
+Canceling appointments
+Checking appointment availability and doctor schedules
+
+Example Flow:
+
+User: "I need to schedule an appointment with a cardiologist."
+Assistant: "What is your Patient ID?"
+User: "PAT1001"
+Assistant: "Please provide your date of birth for verification."
+User: "1985-03-15"
+Assistant: "I can help you schedule an appointment. Here are our available departments:
+
+• Cardiology
+• Psychology  
+• Neurology
+• Orthopedics
+• Dermatology
+• Pediatrics
+• Internal Medicine
+• Emergency Medicine
+• Oncology
+• Radiology
+
+Which department would you like to schedule an appointment with?"
+User: "Show me the available doctors"
+Assistant: [Use appointment_scheduler tool with action="check_availability" and department="Cardiology"]
+User: "I'd like to see Dr. Sarah Johnson"
+Assistant: "What is your preferred date for the appointment?"
+User: "Next Tuesday"
+Assistant: [Use appointment_scheduler tool with action="get_doctor_times" to show Dr. Sarah Johnson's available times]
+User: "10:30 AM works for me"
+Assistant: "What is the reason for your visit?"
+User: "I've been experiencing chest pain and want to get it checked."
+Assistant: [Use appointment_scheduler tool with all details and provide confirmation]
+
+Reschedule Example Flow:
+
+User: "I need to reschedule my appointment"
+Assistant: "What is your Patient ID?"
+User: "PAT1001"
+Assistant: "Please provide your date of birth for verification."
+User: "1985-03-15"
+Assistant: [Use appointment_scheduler tool with action="reschedule" to show current appointment details]
+User: "I want to change it to October 20th at 2:00 PM"
+Assistant: [Use appointment_scheduler tool with new date and time to complete reschedule]
+
+Cancel Example Flow:
+
+User: "I need to cancel my appointment"
+Assistant: "What is your Patient ID?"
+User: "PAT1001"
+Assistant: "Please provide your date of birth for verification."
+User: "1985-03-15"
+Assistant: [Use appointment_scheduler tool with action="cancel" to show current appointments]
+User: "Yes, cancel it"
+Assistant: [IMMEDIATELY use appointment_scheduler tool with action="cancel" and reason="yes, cancel it" to confirm cancellation - DO NOT ask any more questions]
+
+3. Patient Records Access (AUTHENTICATION REQUIRED)
+Use patient_records tool for:
+
+Accessing medical history
+Viewing test results
+Checking diagnosis information
+Reviewing treatment plans
+
+Example Flow:
+
+User: "I want to check my medical records."
+Assistant: "What is your Patient ID?"
+User: "PAT1001"
+Assistant: "Please provide your date of birth for verification."
+User: "1985-03-15"
+Assistant: [Use patient_records tool and provide detailed medical records]
+
+4. Medication Management (AUTHENTICATION REQUIRED)
+Use medication_tracker tool for:
+
+Viewing current medications
+Adding new medications
+Updating medication schedules
+Removing medications
+
+Example Flow:
+
+User: "What medications am I currently taking?"
+Assistant: "What is your Patient ID?"
+User: "PAT1001"
+Assistant: "Please provide your date of birth for verification."
+User: "1985-03-15"
+Assistant: [Use medication_tracker tool and provide detailed medication information]
+
+AUTHENTICATION PROCESS:
+
+Check Session State - Scan conversation for existing authenticated credentials
+Collect Patient ID - Ask for Patient ID ONLY if not previously provided and verified
+Validate Patient ID - Check if it matches one of the valid Patient IDs above
+Collect DOB - Ask for Date of Birth ONLY if not previously provided and verified for current Patient ID
+Verify DOB - Check if the Date of Birth matches the Patient ID (only on first authentication)
+Store Authentication State - Remember successful authentication for entire session
+Proceed with Tools - Use stored credentials for all subsequent patient-specific requests
+
+MANDATORY QUESTION COLLECTION RULES:
+
+ALWAYS collect ALL required information for any tool before using it
+NEVER skip any required questions, even if the user provides some information
+NEVER assume or guess missing information
+NEVER proceed with incomplete information
+Ask questions ONE AT A TIME in this exact order:
+
+For appointment_scheduler tool:
+
+Check session state first - Use stored Patient ID and DOB if already authenticated
+Patient ID - if not already provided and verified in conversation
+Date of Birth - only if not already provided and verified for current Patient ID
+VERIFY Patient ID and Date of Birth combination is valid (only on first authentication)
+Department selection - ALWAYS show the complete list of available departments first, then ask "Which department would you like to schedule an appointment with?"
+Available departments: Cardiology, Psychology, Neurology, Orthopedics, Dermatology, Pediatrics, Internal Medicine, Emergency Medicine, Oncology, Radiology
+Action type (schedule, reschedule, cancel, check_availability, get_doctor_times)
+If action is "check_availability": Use tool immediately with department
+If action is "get_doctor_times": Use tool with department and doctor_name to show available times, then ask for preferred date FIRST
+If action is "schedule": Collect doctor preference (optional) - ALWAYS use check_availability tool first to show available doctors list, then ask "Which doctor would you prefer to see?", then ask for preferred date FIRST, then ask for preferred time SECOND, then reason for appointment
+If action is "reschedule": IMMEDIATELY show existing appointment details first after authentication, then collect new preferred date FIRST, then new preferred time SECOND, department (if changing - show departments list), doctor preference (if changing - show doctors list)
+If action is "cancel": Show all current appointments first, then ask which appointment to cancel, then when user confirms (says yes/yep/cancel/confirm), IMMEDIATELY call appointment_scheduler tool again with action="cancel" and user confirmation in reason field to proceed with cancellation - DO NOT wait for additional input
+ONLY proceed with tool call after successful authentication
+
+For patient_records tool:
+
+Check session state first - Use stored Patient ID and DOB if already authenticated
+Patient ID - if not already provided and verified in conversation
+Date of Birth - only if not already provided and verified for current Patient ID
+VERIFY Patient ID and Date of Birth combination is valid (only on first authentication)
+Record type needed (all, recent, specific)
+ONLY proceed with tool call after successful authentication
+
+For medication_tracker tool:
+
+Check session state first - Use stored Patient ID and DOB if already authenticated
+Patient ID - if not already provided and verified in conversation
+Date of Birth - only if not already provided and verified for current Patient ID
+VERIFY Patient ID and Date of Birth combination is valid (only on first authentication)
+Action type (get_medications, add_medication, update_medication, remove_medication)
+If adding/updating: Medication name, dosage, schedule
+ONLY proceed with tool call after successful authentication
+
+INPUT VALIDATION RULES:
+
+NEVER ask for the same Patient ID twice in a session unless user provides different one
+NEVER ask for Date of Birth twice for the same Patient ID in a session
+Accept Patient ID in format PAT#### only
+Accept Date of Birth in format YYYY-MM-DD
+If validation fails, provide a clear, specific error message with examples
+ALWAYS verify Date of Birth matches the Patient ID before proceeding (only on first authentication)
+
+AUTHENTICATION ERROR MESSAGES:
+
+If Patient ID is invalid: "Invalid Patient ID. Please provide a valid Patient ID (e.g., PAT1001)."
+If Date of Birth is incorrect: "Date of birth doesn't match Patient ID [PAT####]. Please provide the correct date of birth."
+If both are wrong: "Invalid Patient ID and Date of Birth combination. Please check your credentials and try again."
+
+TOOL USAGE RULES:
+
+When a user asks about hospital services, visiting hours, or general information, use hospital_faq_tool_schema tool immediately (NO AUTHENTICATION)
+When a user wants to schedule, reschedule, or cancel appointments, use appointment_scheduler tool AFTER authentication (use stored credentials if available)
+For reschedule: IMMEDIATELY use appointment_scheduler tool with action="reschedule" after authentication to show current appointment details
+For cancel: IMMEDIATELY use appointment_scheduler tool with action="cancel" after authentication to show current appointments and ask which one to cancel, then when user confirms (says yes/yep/cancel/confirm), IMMEDIATELY call appointment_scheduler tool again with action="cancel" and user confirmation in reason field to process the cancellation
+ALWAYS show the list of available departments first before asking which department they prefer
+ALWAYS use check_availability tool first to show the list of available doctors before asking which doctor they prefer
+ALWAYS ask for preferred date FIRST, then preferred time SECOND during appointment scheduling
+When a user asks about doctor availability or wants to see available doctors in a department, use appointment_scheduler tool with action="check_availability"
+When a user selects a specific doctor and you need to show their available times, use appointment_scheduler tool with action="get_doctor_times", then ask for preferred date FIRST, then ask for preferred time SECOND
+When a user wants to access medical records or health information, use patient_records tool AFTER authentication (use stored credentials if available)
+When a user asks about medications or prescriptions, use medication_tracker tool AFTER authentication (use stored credentials if available)
+Do NOT announce that you're using tools or searching for information
+Simply use the tool and provide the direct answer
+
+RESPONSE FORMAT:
+
+ALWAYS answer in the shortest, most direct way possible
+Do NOT add extra greetings, confirmations, or explanations
+Do NOT mention backend systems or tools
+Speak naturally as a helpful healthcare assistant who already knows the information
+
+AVAILABLE TOOLS:
+
+hospital_faq_tool_schema - Retrieve answers from the hospital knowledge base for general questions, services, departments, visiting hours, policies, and hospital information
+appointment_scheduler - Schedule, reschedule, or cancel medical appointments for patients, check doctor availability by department (requires authentication)
+patient_records - Access patient medical records, history, and health information (requires authentication)
+medication_tracker - Manage patient medications, prescriptions, and medication schedules (requires authentication)
+
+SYSTEMATIC QUESTION COLLECTION:
+
+When a user wants patient-specific information, IMMEDIATELY check session state for existing authentication
+If already authenticated in session, proceed directly with remaining required information
+Ask ONLY ONE question at a time
+After each user response, check what information is still missing
+Ask for the NEXT missing required field (in the exact order listed above)
+Do NOT ask multiple questions in one message
+Do NOT skip any required questions
+Do NOT proceed until ALL required information is collected
+ALWAYS use stored authentication if available, verify authentication before proceeding with tools only on first authentication
+
+EXAMPLES OF CORRECT BEHAVIOR:
+First Patient-Specific Request:
+
+User: "I want to schedule an appointment"
+Assistant: "What is your Patient ID?"
+User: "PAT1001"
+Assistant: "Please provide your date of birth for verification."
+User: "1985-03-15"
+Assistant: "I can help you schedule an appointment. Here are our available departments:
+
+• Cardiology
+• Psychology  
+• Neurology
+• Orthopedics
+• Dermatology
+• Pediatrics
+• Internal Medicine
+• Emergency Medicine
+• Oncology
+• Radiology
+
+Which department would you like to schedule an appointment with?"
+User: "Yes, show me the available doctors"
+Assistant: [Use appointment_scheduler tool with action="check_availability" and department="Cardiology"]
+[Continue collecting doctor preference, date, time, and reason, then use appointment_scheduler tool for scheduling]
+
+Subsequent Patient-Specific Requests in Same Session:
+
+User: "What are your visiting hours?"
+Assistant: [Use hospital_faq_tool_schema tool immediately and provide visiting hours]
+User: "Can I check my medications?"
+Assistant: "What type of medication information would you like? Current medications, add new medication, or update existing?"
+[Uses stored PAT1001 authentication, only asks for medication-specific details]
+
+Different Patient ID in Same Session:
+
+User: "Can you check records for PAT1002?"
+Assistant: "Please provide your date of birth for Patient ID PAT1002 verification."
+
+EXAMPLES OF INCORRECT BEHAVIOR:
+❌ "What's your Patient ID, date of birth, and appointment type?" (asking multiple questions)
+❌ Asking for Patient ID again after it was already provided and verified in the session
+❌ Asking for Date of Birth again for the same Patient ID in the same session
+❌ Skipping Date of Birth verification on first authentication
+❌ Proceeding with incomplete information
+❌ Not checking conversation history for existing authentication
+❌ Re-asking for credentials after using FAQ tool
+SECURITY GUIDELINES:
+
+Require Date of Birth verification only once per Patient ID in each session
+Never store or reference Date of Birth values in conversation history for security
+If user switches to a different Patient ID, ask for the corresponding Date of Birth
+Treat all patient and medical information as sensitive and confidential
+ALWAYS verify Patient ID and Date of Birth combination before first account access
+MAINTAIN authentication state throughout session for user experience
+
+RESPONSE GUIDELINES:
+
+Handle greetings warmly and ask how you can help with their healthcare needs today
+For general hospital inquiries, provide specific details from the knowledge base
+For patient-specific queries, always use appropriate tools with proper authentication
+For medical issues, efficiently collect information and process requests
+Keep responses concise and actionable
+Never leave users without a clear next step or resolution
+Maintain a caring, professional tone throughout all interactions
+
+HEALTHCARE SERVICE EXCELLENCE:
+
+Be proactive in offering related services (e.g., suggest urgent care for immediate concerns)
+Acknowledge patient concerns and provide reassurance
+Offer alternatives when primary requests cannot be fulfilled
+Follow up on complex medical issues with clear next steps
+Provide appropriate medical disclaimers when necessary
+Direct users to emergency services for urgent medical situations
+
+'''
+
+        # Extract context from conversation history for enhanced prompt
+        enhanced_context = []
+        
+        # Check for Patient ID in conversation history
+        extracted_patient_id = None
+        extracted_dob = None
+        
+        for message in chat_history:
+            if message.get('role') == 'user' and 'content' in message:
+                content = message['content']
+                if isinstance(content, list):
+                    for item in content:
+                        if item.get('type') == 'text':
+                            text = item.get('text', '')
+                            # Look for Patient ID pattern
+                            import re
+                            patient_id_match = re.search(r'PAT\d{4}', text)
+                            if patient_id_match:
+                                extracted_patient_id = patient_id_match.group()
+                            # Look for DOB pattern
+                            dob_match = re.search(r'\d{4}-\d{2}-\d{2}', text)
+                            if dob_match:
+                                extracted_dob = dob_match.group()
+        
+        if extracted_patient_id:
+            enhanced_context.append(f"The patient's Patient ID is {extracted_patient_id}. Use this Patient ID automatically for any tool calls that require it without asking again.")
+        
+        if extracted_dob:
+            enhanced_context.append(f"The patient's Date of Birth is {extracted_dob}. Use this Date of Birth automatically for any tool calls that require it without asking again.")
+        
+        if enhanced_context:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: {' '.join(enhanced_context)}"
+            print(f"Enhanced prompt with context: {enhanced_context}")
+        else:
+            enhanced_prompt = base_prompt
+        
+        # Use the enhanced_prompt instead of base_prompt
+        prompt = enhanced_prompt
+
+        # Define hospital-specific tools
+        hospital_tools = [
+            {
+                "name": "hospital_faq_tool_schema",
+                "description": "Retrieve answers from the hospital knowledge base for general questions, services, departments, visiting hours, policies, and hospital information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "knowledge_base_retrieval_question": {
+                            "type": "string",
+                            "description": "A question to retrieve from the hospital knowledge base about hospital services, departments, policies, procedures, or general information."
+                        }
+                    },
+                    "required": ["knowledge_base_retrieval_question"]
+                }
+            },
+            {
+                "name": "appointment_scheduler",
+                "description": "Schedule, reschedule, or cancel medical appointments for patients",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "patient_id": {
+                            "type": "string",
+                            "description": "Patient ID (format: PAT####)"
+                        },
+                        "date_of_birth": {
+                            "type": "string",
+                            "description": "Patient's date of birth (format: YYYY-MM-DD)"
+                        },
+                        "department": {
+                            "type": "string",
+                            "description": "Medical department (e.g., Cardiology, Psychology, Neurology, Orthopedics, Dermatology, Pediatrics, Internal Medicine, Emergency Medicine)",
+                            "enum": ["Cardiology", "Psychology", "Neurology", "Orthopedics", "Dermatology", "Pediatrics", "Internal Medicine", "Emergency Medicine", "Oncology", "Radiology"]
+                        },
+                        "doctor_name": {
+                            "type": "string",
+                            "description": "Preferred doctor name (optional - will show available doctors if not specified)"
+                        },
+                        "preferred_date": {
+                            "type": "string",
+                            "description": "Preferred appointment date (format: YYYY-MM-DD)"
+                        },
+                        "preferred_time": {
+                            "type": "string",
+                            "description": "Preferred appointment time (format: HH:MM AM/PM)"
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Reason for the appointment"
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "Action to perform: schedule, reschedule, cancel, check_availability, get_doctor_times",
+                            "enum": ["schedule", "reschedule", "cancel", "check_availability", "get_doctor_times"]
+                        }
+                    },
+                    "required": ["patient_id", "date_of_birth", "action"]
+                }
+            },
+            {
+                "name": "patient_records",
+                "description": "Access patient medical records, history, and health information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "patient_id": {
+                            "type": "string",
+                            "description": "Patient ID (format: PAT####)"
+                        },
+                        "date_of_birth": {
+                            "type": "string",
+                            "description": "Patient's date of birth (format: YYYY-MM-DD)"
+                        },
+                        "record_type": {
+                            "type": "string",
+                            "description": "Type of record to retrieve",
+                            "enum": ["all", "recent", "specific"]
+                        }
+                    },
+                    "required": ["patient_id", "date_of_birth", "record_type"]
+                }
+            },
+            {
+                "name": "medication_tracker",
+                "description": "Manage patient medications, prescriptions, and medication schedules",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "patient_id": {
+                            "type": "string",
+                            "description": "Patient ID (format: PAT####)"
+                        },
+                        "date_of_birth": {
+                            "type": "string",
+                            "description": "Patient's date of birth (format: YYYY-MM-DD)"
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "Action to perform",
+                            "enum": ["get_medications", "add_medication", "update_medication", "remove_medication"]
+                        },
+                        "medication_name": {
+                            "type": "string",
+                            "description": "Name of the medication (required for add/update/remove actions)"
+                        },
+                        "dosage": {
+                            "type": "string",
+                            "description": "Medication dosage (required for add/update actions)"
+                        },
+                        "schedule": {
+                            "type": "string",
+                            "description": "Medication schedule (required for add/update actions)"
+                        }
+                    },
+                    "required": ["patient_id", "date_of_birth", "action"]
+                }
+            },
+            {
+                "name": "emergency_response",
+                "description": "Handle medical emergencies and urgent situations",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "emergency_type": {
+                            "type": "string",
+                            "description": "Type of emergency",
+                            "enum": ["medical", "trauma", "cardiac", "respiratory", "other"]
+                        },
+                        "severity": {
+                            "type": "string",
+                            "description": "Severity level",
+                            "enum": ["low", "medium", "high", "critical"]
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Description of the emergency situation"
+                        },
+                        "location": {
+                            "type": "string",
+                            "description": "Location of the emergency"
+                        }
+                    },
+                    "required": ["emergency_type", "severity", "description"]
+                }
+            },
+            {
+                "name": "symptom_checker",
+                "description": "Provide preliminary symptom analysis and guidance",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "symptoms": {
+                            "type": "string",
+                            "description": "Description of symptoms"
+                        },
+                        "duration": {
+                            "type": "string",
+                            "description": "How long symptoms have been present"
+                        },
+                        "severity": {
+                            "type": "string",
+                            "description": "Severity of symptoms",
+                            "enum": ["mild", "moderate", "severe"]
+                        },
+                        "additional_info": {
+                            "type": "string",
+                            "description": "Any additional relevant information"
+                        }
+                    },
+                    "required": ["symptoms"]
+                }
+            }
+        ]
+
+        # First API call to get initial response
+        try:
+            response = bedrock_client.invoke_model_with_response_stream(
+                contentType='application/json',
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4000,
+                    "temperature": 0,
+                    "top_p": 0.999,
+                    "top_k": 250,
+                    "system": prompt,
+                    "tools": hospital_tools,
+                    "messages": chat_history
+                }),
+                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+            )
+        except Exception as e:
+            print("AN ERROR OCCURRED : ", e)
+            response = "We are unable to assist right now please try again after few minutes"
+            return {"answer": response, "question": chat, "session_id": session_id}
+
+        streamed_content = ''
+        content_block = None
+        assistant_response = []
+        input_tokens = 0
+        output_tokens = 0
+        
+        for item in response['body']:
+            content = json.loads(item['chunk']['bytes'].decode())
+            if content['type'] == 'content_block_start':
+                content_block = content['content_block']
+            elif content['type'] == 'content_block_stop':
+                print(f"Content block at stop: {content_block}")  # Add debug line
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                except api_gateway_client.exceptions.GoneException:
+                    print(f"Connection {connectionId} is closed (GoneException) - stop message")
+                except Exception as e:
+                    print(f"WebSocket send error (stop): {e}")
+                if content_block['type'] == 'text':
+                    content_block['text'] = streamed_content
+                    assistant_response.append(content_block)
+                elif content_block['type'] == 'tool_use':
+                    try:
+                        content_block['input'] = json.loads(streamed_content)
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error for tool input: {e}")
+                        print(f"Streamed content: {streamed_content}")
+                        content_block['input'] = {}
+                    assistant_response.append(content_block)
+                streamed_content = ''
+            elif content['type'] == 'content_block_delta':
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                except api_gateway_client.exceptions.GoneException:
+                    print(f"Connection {connectionId} is closed (GoneException) - delta message")
+                except Exception as e:
+                    print(f"WebSocket send error (delta): {e}")
+                if 'delta' in content and isinstance(content['delta'], dict):
+                    if content['delta']['type'] == 'text_delta':
+                        streamed_content += content['delta']['text']
+                    elif content['delta']['type'] == 'input_json_delta':
+                        streamed_content += content['delta']['partial_json']
+            elif content['type'] == 'message_delta':
+                try:
+                    if 'usage' in content and isinstance(content['usage'], dict):
+                        tool_tokens = content['usage']['output_tokens']
+                    else:
+                        tool_tokens = 0
+                except (KeyError, TypeError) as e:
+                    print(f"Error accessing usage tokens: {e}")
+                    tool_tokens = 0
+            elif content['type'] == 'message_stop':
+                input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
+                output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
+        chat_history.append({'role': 'assistant', 'content': assistant_response})
+        
+        # Check if any tools were called
+        tools_used = []
+        tool_results = []
+
+        print(f"Assistant response type: {type(assistant_response)}")
+        print(f"Assistant response length: {len(assistant_response)}")
+        for i, item in enumerate(assistant_response):
+            print(f"Item {i}: type={type(item)}, content={item}")
+
+        # CORRECT: Iterate over assistant_response items
+        for response_item in assistant_response:
+            if isinstance(response_item, dict) and response_item.get('type') == 'tool_use':
+                tools_used.append(response_item['name'])
+                tool_name = response_item['name']
+                tool_input = response_item['input']
+                tool_result = None
+                
+                print(f"Processing tool: {tool_name}")
+                print(f"Tool input: {tool_input}")
+                
+                # Send a heartbeat to keep WebSocket alive during tool execution
+                try:
+                    heartbeat = {'type': 'heartbeat'}
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                except Exception as e:
+                    print(f"Heartbeat send error: {e}")
+                
+                # Execute the appropriate hospital tool
+                if tool_name == 'hospital_faq_tool_schema':
+                    print("hospital_faq is called ...")
+                    # Send another heartbeat before FAQ retrieval
+                    try:
+                        heartbeat = {'type': 'heartbeat'}
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                    except Exception as e:
+                        print(f"Hospital FAQ heartbeat send error: {e}")
+                    
+                    tool_result = get_hospital_faq_chunks(tool_input['knowledge_base_retrieval_question'])
+                    
+                    # If FAQ tool returns empty or no results, provide fallback
+                    if not tool_result or len(tool_result) == 0:
+                        tool_result = ["I don't have specific information about that in our current hospital knowledge base. Please contact our hospital directly for detailed information."]
+                
+                elif tool_name == 'appointment_scheduler':
+                    # Simulate appointment scheduling with department and doctor management
+                    patient_id = tool_input.get("patient_id", "")
+                    date_of_birth = tool_input.get("date_of_birth", "")
+                    department = tool_input.get("department", "")
+                    doctor_name = tool_input.get("doctor_name", "")
+                    preferred_date = tool_input.get("preferred_date", "")
+                    preferred_time = tool_input.get("preferred_time", "")
+                    reason = tool_input.get("reason", "")
+                    action_type = tool_input.get("action", "schedule")
+                    
+                    print(f"Appointment details: {patient_id}, {date_of_birth}, {department}, {doctor_name}, {preferred_date}, {preferred_time}, {reason}")
+                    
+                    # Validate patient credentials
+                    department_doctors = {
+                        "Cardiology": [
+                            {"name": "Dr. Sarah Johnson", "specialization": "Interventional Cardiology", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"]},
+                            {"name": "Dr. Michael Chen", "specialization": "Electrophysiology", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"]},
+                            {"name": "Dr. Emily Rodriguez", "specialization": "Heart Failure", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"]}
+                        ],
+                        "Psychology": [
+                            {"name": "Dr. James Wilson", "specialization": "Clinical Psychology", "available_times": ["10:00 AM", "11:30 AM", "02:00 PM", "03:30 PM"]},
+                            {"name": "Dr. Lisa Thompson", "specialization": "Cognitive Behavioral Therapy", "available_times": ["09:00 AM", "12:30 PM", "01:30 PM", "04:30 PM"]},
+                            {"name": "Dr. Robert Davis", "specialization": "Child Psychology", "available_times": ["08:00 AM", "10:30 AM", "01:00 PM", "03:00 PM"]}
+                        ],
+                        "Neurology": [
+                            {"name": "Dr. Amanda Foster", "specialization": "Movement Disorders", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"]},
+                            {"name": "Dr. Kevin Park", "specialization": "Epilepsy", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"]},
+                            {"name": "Dr. Maria Garcia", "specialization": "Multiple Sclerosis", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"]}
+                        ],
+                        "Orthopedics": [
+                            {"name": "Dr. David Miller", "specialization": "Sports Medicine", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"]},
+                            {"name": "Dr. Jennifer Lee", "specialization": "Joint Replacement", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"]},
+                            {"name": "Dr. Thomas Brown", "specialization": "Spine Surgery", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"]}
+                        ],
+                        "Dermatology": [
+                            {"name": "Dr. Rachel Green", "specialization": "Medical Dermatology", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"]},
+                            {"name": "Dr. Mark Taylor", "specialization": "Cosmetic Dermatology", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"]},
+                            {"name": "Dr. Susan White", "specialization": "Pediatric Dermatology", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"]}
+                        ],
+                        "Pediatrics": [
+                            {"name": "Dr. Anna Martinez", "specialization": "General Pediatrics", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"]},
+                            {"name": "Dr. Christopher Young", "specialization": "Pediatric Cardiology", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"]},
+                            {"name": "Dr. Nicole Adams", "specialization": "Pediatric Neurology", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"]}
+                        ],
+                        "Internal Medicine": [
+                            {"name": "Dr. Patricia Clark", "specialization": "General Internal Medicine", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"]},
+                            {"name": "Dr. Steven Wright", "specialization": "Endocrinology", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"]},
+                            {"name": "Dr. Michelle Hall", "specialization": "Gastroenterology", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"]}
+                        ],
+                        "Emergency Medicine": [
+                            {"name": "Dr. Andrew King", "specialization": "Emergency Medicine", "available_times": ["24/7 Emergency Coverage"]},
+                            {"name": "Dr. Stephanie Moore", "specialization": "Trauma Surgery", "available_times": ["24/7 Emergency Coverage"]}
+                        ],
+                        "Oncology": [
+                            {"name": "Dr. Richard Scott", "specialization": "Medical Oncology", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"]},
+                            {"name": "Dr. Karen Turner", "specialization": "Radiation Oncology", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"]},
+                            {"name": "Dr. Brian Lewis", "specialization": "Surgical Oncology", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"]}
+                        ],
+                        "Radiology": [
+                            {"name": "Dr. Catherine Reed", "specialization": "Diagnostic Radiology", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"]},
+                            {"name": "Dr. Daniel Cook", "specialization": "Interventional Radiology", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"]},
+                            {"name": "Dr. Laura Bell", "specialization": "Nuclear Medicine", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"]}
+                        ]
+                    }
+                    valid_patients = {
+                        "PAT1001": "1985-03-15",
+                        "PAT1002": "1990-07-22", 
+                        "PAT1003": "1978-11-08",
+                        "PAT1004": "1992-05-14",
+                        "PAT1005": "1983-09-30"
+                    }
+                    
+                    if patient_id in valid_patients and valid_patients[patient_id] == date_of_birth:
+                        if action_type == "check_availability":
+                            if department and department in department_doctors:
+                                doctors_info = ""
+                                for doctor in department_doctors[department]:
+                                    doctors_info += f"\n• {doctor['name']} - {doctor['specialization']}"
+                                
+                                tool_result = [f"Available doctors in {department} department:{doctors_info}\n\nWhich doctor would you prefer to see?"]
+                            else:
+                                available_departments = ", ".join(department_doctors.keys())
+                                tool_result = [f"Please select a department first. Available departments: {available_departments}"]
+                        
+                        elif action_type == "schedule":
+                            if not department:
+                                available_departments = ", ".join(department_doctors.keys())
+                                tool_result = [f"Please select a department first. Available departments: {available_departments}"]
+                            elif department not in department_doctors:
+                                tool_result = [f"Invalid department. Available departments: {', '.join(department_doctors.keys())}"]
+                            else:
+                                # Find the selected doctor or assign one
+                                selected_doctor = None
+                                if doctor_name:
+                                    for doctor in department_doctors[department]:
+                                        if doctor_name.lower() in doctor['name'].lower():
+                                            selected_doctor = doctor
+                                            break
+                                
+                                if not selected_doctor:
+                                    # Assign first available doctor if none specified
+                                    selected_doctor = department_doctors[department][0]
+                                
+                                appointment_id = f"APT{random.randint(100000, 999999)}"
+                                tool_result = [f"Appointment scheduled successfully!\n\nAppointment ID: {appointment_id}\nDepartment: {department}\nDoctor: {selected_doctor['name']} - {selected_doctor['specialization']}\nDate: {preferred_date}\nTime: {preferred_time}\nReason: {reason}\n\nPlease arrive 15 minutes early for your appointment."]
+                        
+                        elif action_type == "reschedule":
+                            # Patient-specific existing appointments
+                            patient_appointments = {
+                                "PAT1001": [
+                                    {"id": "APT123456", "department": "Cardiology", "doctor": "Dr. Sarah Johnson", "date": "2025-10-15", "time": "10:00 AM", "reason": "Follow-up consultation"}
+                                ],
+                                "PAT1002": [
+                                    {"id": "APT123457", "department": "Obstetrics", "doctor": "Dr. Lisa Martinez", "date": "2025-11-20", "time": "2:00 PM", "reason": "Prenatal checkup"}
+                                ],
+                                "PAT1003": [
+                                    {"id": "APT123458", "department": "Orthopedics", "doctor": "Dr. Robert Kim", "date": "2025-10-30", "time": "11:30 AM", "reason": "Physical therapy session"}
+                                ],
+                                "PAT1004": [
+                                    {"id": "APT123459", "department": "Psychology", "doctor": "Dr. Jennifer Lee", "date": "2025-10-05", "time": "3:00 PM", "reason": "Therapy session"}
+                                ],
+                                "PAT1005": [
+                                    {"id": "APT123460", "department": "Neurology", "doctor": "Dr. Michael Chen", "date": "2025-11-15", "time": "9:00 AM", "reason": "Migraine follow-up"}
+                                ]
+                            }
+                            
+                            if patient_id in patient_appointments and patient_appointments[patient_id]:
+                                existing_appointment = patient_appointments[patient_id][0]  # Get first appointment
+                                
+                                if preferred_date and preferred_time:
+                                    # For reschedule, use existing department and doctor unless specified otherwise
+                                    reschedule_department = department if department else existing_appointment['department']
+                                    reschedule_doctor = doctor_name if doctor_name else existing_appointment['doctor']
+                                    
+                                    # Validate new appointment details
+                                    if reschedule_department in department_doctors:
+                                        selected_doctor = None
+                                        if doctor_name:
+                                            for doctor in department_doctors[reschedule_department]:
+                                                if doctor_name.lower() in doctor['name'].lower():
+                                                    selected_doctor = doctor
+                                                    break
+                                        
+                                        if not selected_doctor:
+                                            # Use existing doctor or first available in department
+                                            if reschedule_department == existing_appointment['department']:
+                                                selected_doctor = {"name": existing_appointment['doctor'], "specialization": "Current Doctor"}
+                                            else:
+                                                selected_doctor = department_doctors[reschedule_department][0]
+                                        
+                                        tool_result = [f"Appointment Rescheduled Successfully!\n\nPrevious Appointment:\n- ID: {existing_appointment['id']}\n- Department: {existing_appointment['department']}\n- Doctor: {existing_appointment['doctor']}\n- Date: {existing_appointment['date']}\n- Time: {existing_appointment['time']}\n- Reason: {existing_appointment['reason']}\n\nNew Appointment:\n- ID: {existing_appointment['id']} (same)\n- Department: {reschedule_department}\n- Doctor: {selected_doctor['name']} - {selected_doctor.get('specialization', 'Current Doctor')}\n- Date: {preferred_date}\n- Time: {preferred_time}\n- Reason: {existing_appointment['reason']}\n\nPlease arrive 15 minutes early for your rescheduled appointment."]
+                                    else:
+                                        tool_result = [f"Please specify a valid department for rescheduling. Available departments: {', '.join(department_doctors.keys())}"]
+                                else:
+                                    tool_result = [f"Current Appointment Details:\n\nAppointment ID: {existing_appointment['id']}\nDepartment: {existing_appointment['department']}\nDoctor: {existing_appointment['doctor']}\nDate: {existing_appointment['date']}\nTime: {existing_appointment['time']}\nReason: {existing_appointment['reason']}\n\nWhat would you like to change? Please provide:\n- New preferred date (FIRST)\n- New preferred time (SECOND)\n- New department (if changing)\n- New doctor (if changing)"]
+                            else:
+                                tool_result = ["No existing appointments found to reschedule. Would you like to schedule a new appointment instead?"]
+                        
+                        elif action_type == "cancel":
+                            # Patient-specific existing appointments
+                            patient_appointments = {
+                                "PAT1001": [
+                                    {"id": "APT123456", "department": "Cardiology", "doctor": "Dr. Sarah Johnson", "date": "2025-10-15", "time": "10:00 AM", "reason": "Follow-up consultation"}
+                                ],
+                                "PAT1002": [
+                                    {"id": "APT123457", "department": "Obstetrics", "doctor": "Dr. Lisa Martinez", "date": "2025-11-20", "time": "2:00 PM", "reason": "Prenatal checkup"}
+                                ],
+                                "PAT1003": [
+                                    {"id": "APT123458", "department": "Orthopedics", "doctor": "Dr. Robert Kim", "date": "2025-10-30", "time": "11:30 AM", "reason": "Physical therapy session"}
+                                ],
+                                "PAT1004": [
+                                    {"id": "APT123459", "department": "Psychology", "doctor": "Dr. Jennifer Lee", "date": "2025-10-05", "time": "3:00 PM", "reason": "Therapy session"}
+                                ],
+                                "PAT1005": [
+                                    {"id": "APT123460", "department": "Neurology", "doctor": "Dr. Michael Chen", "date": "2025-11-15", "time": "9:00 AM", "reason": "Migraine follow-up"}
+                                ]
+                            }
+                            
+                            if patient_id in patient_appointments and patient_appointments[patient_id]:
+                                appointments = patient_appointments[patient_id]
+                                
+                                # Check if user has confirmed cancellation or provided specific appointment details
+                                user_confirmation = tool_input.get("reason", "").lower()  # Using reason field to capture user response
+                                user_confirms = any(phrase in user_confirmation for phrase in [
+                                    "yes", "yep", "yeah", "sure", "ok", "okay",
+                                    "cancel", "cancelled", "cancellation",
+                                    "confirm", "confirmed", "confirmation",
+                                    "i would like to", "i want to", "i'd like to",
+                                    "please cancel", "go ahead", "proceed"
+                                ])
+                                
+                                if (preferred_date and preferred_time) or user_confirms:
+                                    # User has confirmed cancellation or provided specific appointment details
+                                    appointment_to_cancel = None
+                                    
+                                    if preferred_date and preferred_time:
+                                        # User provided specific appointment details
+                                        for appointment in appointments:
+                                            if (appointment['date'] == preferred_date and 
+                                                appointment['time'] == preferred_time):
+                                                appointment_to_cancel = appointment
+                                                break
+                                    else:
+                                        # User confirmed cancellation - cancel the first/only appointment
+                                        appointment_to_cancel = appointments[0]
+                                    
+                                    if appointment_to_cancel:
+                                        tool_result = [f"Appointment Cancelled Successfully!\n\nCancelled Appointment Details:\n- Appointment ID: {appointment_to_cancel['id']}\n- Department: {appointment_to_cancel['department']}\n- Doctor: {appointment_to_cancel['doctor']}\n- Date: {appointment_to_cancel['date']}\n- Time: {appointment_to_cancel['time']}\n- Reason: {appointment_to_cancel['reason']}\n\nYour appointment has been cancelled. If you need to reschedule, please call our appointment line at (555) 123-4567 or use our online booking system.\n\nWe hope to serve you again soon!"]
+                                    else:
+                                        tool_result = [f"No appointment found matching {preferred_date} at {preferred_time}. Please check your appointment details and try again."]
+                                else:
+                                    # Show all appointments and ask which one to cancel
+                                    if len(appointments) == 1:
+                                        appointment = appointments[0]
+                                        tool_result = [f"Current Appointment Details:\n\nAppointment ID: {appointment['id']}\nDepartment: {appointment['department']}\nDoctor: {appointment['doctor']}\nDate: {appointment['date']}\nTime: {appointment['time']}\nReason: {appointment['reason']}\n\nWould you like to cancel this appointment? Please confirm by saying 'yes' or 'cancel'."]
+                                    else:
+                                        appointments_list = "\n".join([f"{i+1}. {apt['department']} - {apt['doctor']} - {apt['date']} at {apt['time']}" for i, apt in enumerate(appointments)])
+                                        tool_result = [f"Here are your current appointments:\n\n{appointments_list}\n\nWhich appointment would you like to cancel? Please specify the number (1, 2, etc.) or provide the department/doctor name."]
+                            else:
+                                tool_result = ["No existing appointments found to cancel. If you need to schedule a new appointment, I'd be happy to help you with that."]
+                        
+                        elif action_type == "get_doctor_times":
+                            if department and doctor_name and department in department_doctors:
+                                selected_doctor = None
+                                for doctor in department_doctors[department]:
+                                    if doctor_name.lower() in doctor['name'].lower():
+                                        selected_doctor = doctor
+                                        break
+                                
+                                if selected_doctor:
+                                    available_times = "\n".join([f"• {time}" for time in selected_doctor['available_times']])
+                                    tool_result = [f"Dr. {selected_doctor['name']} is available at the following times:\n\n{available_times}\n\nWhat date would you prefer for your appointment with Dr. {selected_doctor['name']}?"]
+                                else:
+                                    tool_result = [f"Doctor {doctor_name} not found in {department} department. Please select from the available doctors."]
+                            else:
+                                tool_result = ["Please specify both department and doctor name to check available times."]
+                        
+                        else:
+                            tool_result = ["Appointment action completed successfully."]
+                    else:
+                        tool_result = ["Invalid patient credentials. Please verify your Patient ID and Date of Birth."]
+                
+                
+                elif tool_name == 'patient_records':
+                    # Simulate patient records access
+                    patient_id = tool_input.get("patient_id", "")
+                    date_of_birth = tool_input.get("date_of_birth", "")
+                    record_type = tool_input.get("record_type", "all")
+                    
+                    # Validate patient credentials
+                    valid_patients = {
+                        "PAT1001": "1985-03-15",
+                        "PAT1002": "1990-07-22",
+                        "PAT1003": "1978-11-08", 
+                        "PAT1004": "1992-05-14",
+                        "PAT1005": "1983-09-30"
+                    }
+                    
+                    if patient_id in valid_patients and valid_patients[patient_id] == date_of_birth:
+                        # Patient-specific medical records
+                        patient_records = {
+                            "PAT1001": {  # John Smith, 39 years old
+                                "name": "John Smith",
+                                "age": 39,
+                                "recent_visits": [
+                                    "Cardiology consultation (2024-01-15) - Chest pain evaluation",
+                                    "General checkup (2023-12-10) - Annual physical",
+                                    "Lab tests (2023-11-20) - Cholesterol and blood sugar screening"
+                                ],
+                                "medications": [
+                                    "Lisinopril 10mg daily - Blood pressure management",
+                                    "Metformin 500mg twice daily - Diabetes management",
+                                    "Atorvastatin 20mg daily - Cholesterol control"
+                                ],
+                                "allergies": ["Penicillin", "Shellfish"],
+                                "conditions": ["Hypertension", "Type 2 Diabetes", "High Cholesterol"],
+                                "next_appointment": "Cardiology follow-up (2025-10-15)"
+                            },
+                            "PAT1002": {  # Sarah Johnson, 34 years old
+                                "name": "Sarah Johnson",
+                                "age": 34,
+                                "recent_visits": [
+                                    "Dermatology consultation (2024-02-10) - Skin check",
+                                    "Gynecology exam (2024-01-20) - Annual screening",
+                                    "Lab tests (2024-01-15) - Routine blood work"
+                                ],
+                                "medications": [
+                                    "Prenatal vitamins daily - Pregnancy support",
+                                    "Folic acid 400mcg daily - Pregnancy preparation"
+                                ],
+                                "allergies": ["Latex", "Iodine contrast"],
+                                "conditions": ["Pregnancy (12 weeks)", "Mild anemia"],
+                                "next_appointment": "Obstetrics follow-up (2025-11-20)"
+                            },
+                            "PAT1003": {  # Michael Brown, 46 years old
+                                "name": "Michael Brown",
+                                "age": 46,
+                                "recent_visits": [
+                                    "Orthopedics consultation (2024-02-05) - Knee pain evaluation",
+                                    "Physical therapy (2024-01-25) - Post-surgery rehabilitation",
+                                    "Surgery follow-up (2024-01-10) - ACL reconstruction"
+                                ],
+                                "medications": [
+                                    "Ibuprofen 400mg as needed - Pain management",
+                                    "Acetaminophen 500mg as needed - Pain relief"
+                                ],
+                                "allergies": ["Morphine", "Codeine"],
+                                "conditions": ["ACL tear (post-surgery)", "Osteoarthritis"],
+                                "next_appointment": "Physical therapy session (2025-10-30)"
+                            },
+                            "PAT1004": {  # Emily Davis, 32 years old
+                                "name": "Emily Davis",
+                                "age": 32,
+                                "recent_visits": [
+                                    "Psychology consultation (2024-02-12) - Anxiety management",
+                                    "Primary care visit (2024-01-30) - General health check",
+                                    "Lab tests (2024-01-25) - Thyroid function test"
+                                ],
+                                "medications": [
+                                    "Sertraline 50mg daily - Anxiety and depression",
+                                    "Lorazepam 0.5mg as needed - Anxiety relief"
+                                ],
+                                "allergies": ["Sulfa drugs", "Aspirin"],
+                                "conditions": ["Generalized Anxiety Disorder", "Mild Depression", "Hypothyroidism"],
+                                "next_appointment": "Psychology follow-up (2025-10-05)"
+                            },
+                            "PAT1005": {  # David Wilson, 41 years old
+                                "name": "David Wilson",
+                                "age": 41,
+                                "recent_visits": [
+                                    "Neurology consultation (2024-02-08) - Migraine evaluation",
+                                    "Emergency visit (2024-01-18) - Severe headache episode",
+                                    "MRI scan (2024-01-20) - Brain imaging"
+                                ],
+                                "medications": [
+                                    "Sumatriptan 50mg as needed - Migraine treatment",
+                                    "Propranolol 40mg twice daily - Migraine prevention",
+                                    "Magnesium 400mg daily - Migraine support"
+                                ],
+                                "allergies": ["NSAIDs", "Contrast dye"],
+                                "conditions": ["Chronic Migraine", "Tension Headaches"],
+                                "next_appointment": "Neurology follow-up (2025-11-15)"
+                            }
+                        }
+                        
+                        if patient_id in patient_records:
+                            patient = patient_records[patient_id]
+                            recent_visits = "\n".join([f"- {visit}" for visit in patient["recent_visits"]])
+                            medications = "\n".join([f"- {med}" for med in patient["medications"]])
+                            allergies = "\n".join([f"- {allergy}" for allergy in patient["allergies"]])
+                            conditions = "\n".join([f"- {condition}" for condition in patient["conditions"]])
+                            
+                            tool_result = [f"Patient Records for {patient_id} ({patient['name']}, Age {patient['age']}):\n\nRecent Visits:\n{recent_visits}\n\nCurrent Medications:\n{medications}\n\nMedical Conditions:\n{conditions}\n\nAllergies:\n{allergies}\n\nNext Appointment:\n- {patient['next_appointment']}"]
+                        else:
+                            tool_result = ["Patient records not found. Please contact the hospital directly."]
+                    else:
+                        tool_result = ["Invalid patient credentials. Please verify your Patient ID and Date of Birth."]
+                
+                elif tool_name == 'medication_tracker':
+                    # Simulate medication tracking
+                    patient_id = tool_input.get("patient_id", "")
+                    date_of_birth = tool_input.get("date_of_birth", "")
+                    action_type = tool_input.get("action", "get_medications")
+                    
+                    # Validate patient credentials
+                    valid_patients = {
+                        "PAT1001": "1985-03-15",
+                        "PAT1002": "1990-07-22",
+                        "PAT1003": "1978-11-08",
+                        "PAT1004": "1992-05-14", 
+                        "PAT1005": "1983-09-30"
+                    }
+                    
+                    if patient_id in valid_patients and valid_patients[patient_id] == date_of_birth:
+                        # Patient-specific medication information
+                        patient_medications = {
+                            "PAT1001": {  # John Smith
+                                "medications": [
+                                    "Lisinopril 10mg - Take once daily in the morning for blood pressure",
+                                    "Metformin 500mg - Take twice daily with meals for diabetes",
+                                    "Atorvastatin 20mg - Take once daily in the evening for cholesterol"
+                                ],
+                                "refill_dates": [
+                                    "Lisinopril: 2025-10-20",
+                                    "Metformin: 2025-10-18", 
+                                    "Atorvastatin: 2025-10-22"
+                                ]
+                            },
+                            "PAT1002": {  # Sarah Johnson
+                                "medications": [
+                                    "Prenatal vitamins - Take once daily with breakfast",
+                                    "Folic acid 400mcg - Take once daily for pregnancy support"
+                                ],
+                                "refill_dates": [
+                                    "Prenatal vitamins: 2025-11-15",
+                                    "Folic acid: 2025-11-10"
+                                ]
+                            },
+                            "PAT1003": {  # Michael Brown
+                                "medications": [
+                                    "Ibuprofen 400mg - Take as needed for pain (max 3 times daily)",
+                                    "Acetaminophen 500mg - Take as needed for pain relief"
+                                ],
+                                "refill_dates": [
+                                    "Ibuprofen: 2025-10-25",
+                                    "Acetaminophen: 2025-10-28"
+                                ]
+                            },
+                            "PAT1004": {  # Emily Davis
+                                "medications": [
+                                    "Sertraline 50mg - Take once daily in the morning for anxiety",
+                                    "Lorazepam 0.5mg - Take as needed for anxiety relief (max 2 times daily)"
+                                ],
+                                "refill_dates": [
+                                    "Sertraline: 2025-11-05",
+                                    "Lorazepam: 2025-10-20"
+                                ]
+                            },
+                            "PAT1005": {  # David Wilson
+                                "medications": [
+                                    "Sumatriptan 50mg - Take as needed for migraine treatment",
+                                    "Propranolol 40mg - Take twice daily for migraine prevention",
+                                    "Magnesium 400mg - Take once daily for migraine support"
+                                ],
+                                "refill_dates": [
+                                    "Sumatriptan: 2025-11-01",
+                                    "Propranolol: 2025-10-25",
+                                    "Magnesium: 2025-11-10"
+                                ]
+                            }
+                        }
+                        
+                        if action_type == "get_medications":
+                            if patient_id in patient_medications:
+                                patient_meds = patient_medications[patient_id]
+                                med_list = "\n".join([f"{i+1}. {med}" for i, med in enumerate(patient_meds["medications"])])
+                                refill_list = "\n".join([f"- {refill}" for refill in patient_meds["refill_dates"]])
+                                tool_result = [f"Current Medications:\n\n{med_list}\n\nNext refill dates:\n{refill_list}"]
+                            else:
+                                tool_result = ["No medications found for this patient."]
+                        elif action_type == "add_medication":
+                            medication_name = tool_input.get("medication_name", "")
+                            dosage = tool_input.get("dosage", "")
+                            schedule = tool_input.get("schedule", "")
+                            tool_result = [f"Medication added successfully: {medication_name} {dosage} - {schedule}"]
+                        elif action_type == "update_medication":
+                            medication_name = tool_input.get("medication_name", "")
+                            dosage = tool_input.get("dosage", "")
+                            schedule = tool_input.get("schedule", "")
+                            tool_result = [f"Medication updated successfully: {medication_name} {dosage} - {schedule}"]
+                        elif action_type == "remove_medication":
+                            medication_name = tool_input.get("medication_name", "")
+                            tool_result = [f"Medication {medication_name} has been removed from your list."]
+                        else:
+                            tool_result = ["Medication action completed successfully."]
+                    else:
+                        tool_result = ["Invalid patient credentials. Please verify your Patient ID and Date of Birth."]
+                
+                elif tool_name == 'emergency_response':
+                    # Handle emergency situations
+                    emergency_type = tool_input.get("emergency_type", "")
+                    severity = tool_input.get("severity", "")
+                    description = tool_input.get("description", "")
+                    location = tool_input.get("location", "")
+                    
+                    if severity in ["high", "critical"]:
+                        tool_result = [f"EMERGENCY ALERT: {severity.upper()} {emergency_type} emergency reported. Description: {description}. Location: {location}. Emergency services have been notified. Please call 911 immediately if this is a life-threatening emergency."]
+                    else:
+                        tool_result = [f"Emergency situation logged: {emergency_type} - {severity} severity. Description: {description}. Location: {location}. Please proceed to the emergency department or call our emergency line."]
+                
+                elif tool_name == 'symptom_checker':
+                    # Provide symptom analysis
+                    symptoms = tool_input.get("symptoms", "")
+                    duration = tool_input.get("duration", "")
+                    severity = tool_input.get("severity", "")
+                    additional_info = tool_input.get("additional_info", "")
+                    
+                    tool_result = [f"Based on your symptoms: {symptoms}\nDuration: {duration}\nSeverity: {severity}\n\nPreliminary Assessment:\nThis appears to be a {severity} condition that has been present for {duration}. Based on the symptoms described, I recommend:\n\n1. Monitor your symptoms closely\n2. Rest and stay hydrated\n3. If symptoms worsen or persist, please schedule an appointment with your doctor\n4. For severe symptoms, consider visiting the emergency department\n\nNote: This is preliminary guidance only. Please consult with a healthcare professional for proper diagnosis and treatment."]
+                
+                else:
+                    # Unknown tool
+                    tool_result = ["I'm here to help with your hospital needs. How can I assist you today?"]
+                
+                # Create tool result message
+                try:
+                    print(f"Tool result type: {type(tool_result)}")
+                    print(f"Tool result content: {tool_result}")
+                    
+                    tool_response_dict = {
+                        "type": "tool_result",
+                        "tool_use_id": response_item['id'],  # Use response_item, not action
+                        "content": [{"type": "text", "text": "\n".join(tool_result) if isinstance(tool_result, list) else str(tool_result)}]
+                    }
+                    tool_results.append(tool_response_dict)
+                    print(f"Tool response created successfully")
+                    
+                except Exception as e:
+                    print(f"Error creating tool response: {e}")
+                    print(f"Response item type: {type(response_item)}")
+                    print(f"Response item content: {response_item}")
+                    # Create a fallback tool result
+                    tool_response_dict = {
+                        "type": "tool_result", 
+                        "tool_use_id": response_item.get('id', 'unknown'),
+                        "content": [{"type": "text", "text": "Error processing tool request"}]
+                    }
+                    tool_results.append(tool_response_dict)
+        
+        # Validate tool_results before making second API call
+        if tools_used and tool_results:
+            print(f"Tool results to send: {tool_results}")
+            # Add tool results to chat history
+            chat_history.append({'role': 'user', 'content': tool_results})
+            
+            # Make second API call with tool results
+            try:
+                response = bedrock_client.invoke_model_with_response_stream(
+                    contentType='application/json',
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 4000,
+                        "temperature": 0,
+                        "system": prompt,
+                        "tools": hospital_tools,
+                        "messages": chat_history
+                    }),
+                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                )
+            except Exception as e:
+                print("ERROR IN SECOND API CALL:", e)
+                # Send error response via WebSocket
+                error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+                for word in error_response.split():
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    except:
+                        pass
+                stop_answer = {'type': 'content_block_stop', 'index': 0}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+                return {"answer": error_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+            
+            # Process second response
+            final_response = ""
+            for item in response['body']:
+                content = json.loads(item['chunk']['bytes'].decode())
+                if content['type'] == 'content_block_delta':
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - stop message (tool)")
+                    except Exception as e:
+                        print(f"WebSocket send error (stop): {e}")
+                    if 'delta' in content and isinstance(content['delta'], dict):
+                        if content['delta']['type'] == 'text_delta':
+                            final_response += content['delta']['text']
+                elif content['type'] == 'content_block_stop':
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - delta message (tool)")
+                    except Exception as e:
+                        print(f"WebSocket send error (delta): {e}")
+                elif content['type'] == 'message_stop':
+                    input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
+                    output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
+            
+            return {"answer": final_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+        else:
+            print("No valid tool results to process")
+            # Handle the case where no tools were successfully processed
+        
+        # If no tools were used, return the direct response
+        if assistant_response and assistant_response[0]['type'] == 'text':
+            return {"answer": assistant_response[0]['text'], "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+        
+        # Fallback response
+        return {"answer": "I'm here to help with your hospital needs. How can I assist you today?", "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        response = "An Unknown error occurred. Please try again after some time."
+        return {
+            "statusCode": "500",
+            "answer": response,
+            "question": chat,
+            "session_id": session_id,
+            "input_tokens": "0",
+            "output_tokens": "0"
+        }

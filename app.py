@@ -21,27 +21,34 @@ def create_cdk_app():
     # Create CDK app instance
     app = cdk.App()
     
+    # Get the selection from environment variable (set by deploy.py)
+    stack_selection = os.getenv('CDK_STACK_SELECTION', 'unknown')
+    print(f"🔧 CDK Stack Selection: {stack_selection}")
+    
     # Create Banking Stack
     BankingCdkStack(
         app,
         "GenAiFoundryBankingStack",
-         env=cdk.Environment(
+        stack_selection=stack_selection,  # Pass selection to stack
+        env=cdk.Environment(
             account=os.getenv('CDK_DEFAULT_ACCOUNT'),
             region=os.getenv('CDK_DEFAULT_REGION')
-             )
+        )
     )
     
     # Create Insurance Stack
     InsuranceCdkStack(
         app,
         "GenAiFoundryInsuranceStack",
-         env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION'))
+        stack_selection=stack_selection,  # Pass selection to stack
+        env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION'))
     )
     
     # Create Retail Stack
     RetailCdkStack(
         app,
         "GenAiFoundryRetailStack",
+        stack_selection=stack_selection,  # Pass selection to stack
         env=cdk.Environment(
             account=os.getenv('CDK_DEFAULT_ACCOUNT'),
             region=os.getenv('CDK_DEFAULT_REGION')
@@ -52,6 +59,7 @@ def create_cdk_app():
     HealthcareCdkStack(
         app,
         "GenAiFoundryHealthcareStack",
+        stack_selection=stack_selection,  # Pass selection to stack
         env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION'))
     )
     return app

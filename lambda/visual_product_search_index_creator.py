@@ -94,7 +94,7 @@ def handle_cfn_event(event, context):
                     'method': method,
                     'engine': engine,
                     'space_type': space_type,
-                    'vector_field': 'vsp',
+                    'vector_field': 'vspmod',
                     'metadata_fields': ['product_description', 's3_uri', 'type']
                 })
             }
@@ -207,7 +207,7 @@ def handle_direct_event(event, context):
                     'method': method,
                     'engine': engine,
                     'space_type': space_type,
-                    'vector_field': 'vsp',
+                    'vector_field': 'vspmod',
                     'metadata_fields': ['product_description', 's3_uri', 'type']
                 })
             }
@@ -289,57 +289,34 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
             print(f"Error type: {type(e)}")
             print(f"Error details: {str(e)}")
         
-        # Define the retail-specific index mapping and settings
-        # Based on the image configuration: vector field 'vsp', faiss engine, FP16 precision, 1024 dimensions, euclidean distance
+        # Define the retail-specific index mapping to match metadata_ingest_final structure
         request_body = {
             "settings": {
                 "index": {
-                    "knn": True,
-                    "knn.algo_param.ef_search": 512  # ✅ Only keep this valid setting
-                }
+                    "knn": True
+                    }
             },
             "mappings": {
-                "dynamic": True,
                 "properties": {
-                    # Vector field configuration as per image
-                    "vsp": {  # Vector field name as shown in image
+                    # Vector field configuration - using "vspmod" as per metadata_ingest_final
+                    "vspmod": {
                         "type": "knn_vector",
                         "dimension": dimension,
                         "method": {
                             "name": method,
                             "space_type": space_type,
-                            "engine": engine,
-                            "parameters": {
-                                "ef_construction": 512,  # ✅ CORRECT - Field level
-                                "m": 16  # ✅ CORRECT - Field level
-                            }
+                            "engine": engine
                         }
                     },
-                    # Metadata fields as per image
+                    # Metadata fields - matching metadata_ingest_final structure
                     "product_description": {
-                        "type": "text",
-                        "index": True,
-                        "analyzer": "standard"
+                        "type": "text"
                     },
                     "s3_uri": {
-                        "type": "text",
-                        "index": True,
-                        "analyzer": "standard"
+                        "type": "text"
                     },
                     "type": {
-                        "type": "keyword",
-                        "index": True
-                    },
-                    # Additional fields for retail use case
-                    "text": {
-                        "type": "text",
-                        "index": True,
-                        "analyzer": "standard"
-                    },
-                    "metadata": {
-                        "type": "text",
-                        "index": True,
-                        "analyzer": "standard"
+                        "type": "keyword"
                     }
                 }
             }
@@ -362,8 +339,8 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
                     
                     # Check if the index has the correct retail field names and types
                     has_correct_retail_fields = (
-                        'vsp' in properties and 
-                        properties.get('vsp', {}).get('type') == 'knn_vector' and
+                        'vspmod' in properties and 
+                        properties.get('vspmod', {}).get('type') == 'knn_vector' and
                         'product_description' in properties and
                         's3_uri' in properties and
                         'type' in properties
@@ -434,7 +411,7 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
             print(f"Error checking if index exists: {e}")
         
         # Create the retail index
-        print(f"Creating retail index '{index_name}' with vector field 'vsp'...")
+        print(f"Creating retail index '{index_name}' with vector field 'vspmod'...")
         response = client.indices.create(
             index=index_name,
             body=request_body
@@ -454,10 +431,10 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
             mappings = index_info.get(index_name, {}).get('mappings', {})
             properties = mappings.get('properties', {})
             
-            if 'vsp' in properties and properties['vsp']['type'] == 'knn_vector':
-                print("✅ Vector field 'vsp' created successfully with knn_vector type")
+            if 'vspmod' in properties and properties['vspmod']['type'] == 'knn_vector':
+                print("✅ Vector field 'vspmod' created successfully with knn_vector type")
             else:
-                print("❌ Vector field 'vsp' not found or incorrect type")
+                print("❌ Vector field 'vspmod' not found or incorrect type")
                 
             if 'product_description' in properties and 's3_uri' in properties and 'type' in properties:
                 print("✅ All required metadata fields created successfully")

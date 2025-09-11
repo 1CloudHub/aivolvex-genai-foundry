@@ -18,6 +18,8 @@ Navigate to the **Amazon Bedrock** service in the AWS Console.
   ```
   - Claude 3.7 Sonnet
   - Amazon Titan Embedding V2
+  - Amazon Nova Canvas
+  - Amazon Nova Reel
   ```
 > It may take a few minutes for the model access to be approved.
 ![Model Access Navigation](./assets/model_access_1.jpg)

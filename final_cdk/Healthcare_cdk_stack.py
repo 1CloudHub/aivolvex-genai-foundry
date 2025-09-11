@@ -285,8 +285,12 @@ class LambdaLayerUploader(Construct):
 s3_name = "genai-foundry-test"
 class HealthcareCdkStack(Stack):
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, stack_selection: str = "unknown", **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
+        
+        # Store the selection for use throughout the stack
+        self.stack_selection = stack_selection
+        print(f"🏗️ Building Healthcare Stack with selection: {self.stack_selection}")
 
         # Create VPC
         vpc = ec2.Vpc(
@@ -1023,6 +1027,7 @@ class HealthcareCdkStack(Stack):
     "export DB_PASSWORD=$(echo \"$SECRET_JSON\" | jq -r .password)",
     "export DB_NAME=$(echo \"$SECRET_JSON\" | jq -r .dbname)",
     f"export REGION={self.region}",
+    f"export STACK_SELECTION={self.stack_selection}",
     "",
     "echo 'Database connection details:'",
     "echo \"Host: $DB_HOST\"",
@@ -1652,6 +1657,7 @@ class HealthcareCdkStack(Stack):
             f"export TRANSCRIBE_API_NAME=\"{transcribe_api_name}\"",
             f"export BUCKET_NAME=\"{bucket_name}\"",
             f"export REGION=\"{region}\"",
+            f"export STACK_SELECTION=\"{self.stack_selection}\"",
             "",
             "# Helper function to check if a command exists",
             "command_exists() {",
@@ -1692,6 +1698,7 @@ class HealthcareCdkStack(Stack):
             "        echo \"  export TRANSCRIBE_API_NAME=\\\"your-transcribe-api-name\\\"\"",
             "        echo \"  export BUCKET_NAME=\\\"your-s3-bucket-name\\\"\"",
             "        echo \"  export REGION=\\\"your-aws-region\\\"\"",
+            "        echo \"  export STACK_SELECTION=\\\"your-stack-selection\\\"\"",
             "        exit 1",
             "    fi",
             "}",
@@ -1834,9 +1841,10 @@ class HealthcareCdkStack(Stack):
             "update_env_var \"VITE_WEBSOCKET_URL\" \"$VITE_WEBSOCKET_URL\"",
             "update_env_var \"VITE_WEBSOCKET_URL_VOICEOPS\" \"$VITE_WEBSOCKET_URL_VOICEOPS\"",
             "update_env_var \"VITE_TRANSCRIBE_API_URL\" \"$VITE_TRANSCRIBE_API_URL\"",
+            "update_env_var \"VITE_STACK_SELECTION\" \"$STACK_SELECTION\"",
             "",
             "echo \"✅ .env updated. Current values:\"",
-            "grep -E \"VITE_API_BASE_URL|VITE_WEBSOCKET_URL|VITE_WEBSOCKET_URL_VOICEOPS|VITE_TRANSCRIBE_API_URL\" \"$ENV_FILE\"",
+            "grep -E \"VITE_API_BASE_URL|VITE_WEBSOCKET_URL|VITE_WEBSOCKET_URL_VOICEOPS|VITE_TRANSCRIBE_API_URL|VITE_STACK_SELECTION\" \"$ENV_FILE\"",
             "",
             "# 🚧 Build the app",
             "echo \"⚙️ Running npm run build...\"",
