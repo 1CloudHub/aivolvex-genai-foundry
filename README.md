@@ -16,6 +16,7 @@ Navigate to the **Amazon Bedrock** service in the AWS Console.
 * Open the **Model access** tab.
 * Request access to the following models:
   ```
+  - Claude 3 Sonnet
   - Claude 3.7 Sonnet
   - Amazon Titan Embedding V2
   - Amazon Nova Canvas

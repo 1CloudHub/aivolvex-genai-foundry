@@ -82,7 +82,7 @@ def create_image_embedding(image_base64):
         image_input = {"inputImage": image_base64}
         response = bedrock.invoke_model(
             body=json.dumps(image_input),
-            modelId="amazon.titan-embed-text-v1",
+            modelId="amazon.titan-embed-text-v2",
             accept="application/json",
             contentType="application/json"
         )
