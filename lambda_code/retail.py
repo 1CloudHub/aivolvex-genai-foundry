@@ -3087,6 +3087,52 @@ def lambda_handler(event, context):
         )
         return client
 
+    def validate_opensearch_index():
+        """Validate that OpenSearch index exists and has data"""
+        try:
+            client = create_opensearch_client()
+            
+            # Check if index exists
+            if not client.indices.exists(index="visualproductsearchmod"):
+                print("❌ OpenSearch index 'visualproductsearchmod' does not exist")
+                return False, "OpenSearch index does not exist"
+            
+            # Check document count
+            index_stats = client.indices.stats(index="visualproductsearchmod")
+            doc_count = index_stats['indices']['visualproductsearchmod']['total']['docs']['count']
+            print(f"📊 OpenSearch index has {doc_count} documents")
+            
+            if doc_count == 0:
+                print("❌ OpenSearch index is empty")
+                return False, "OpenSearch index is empty - no products available"
+            
+            # Check if there are image embeddings
+            try:
+                sample_query = {
+                    "size": 1,
+                    "query": {
+                        "term": {
+                            "type": "image"
+                        }
+                    }
+                }
+                sample_response = client.search(index="visualproductsearchmod", body=sample_query)
+                image_count = sample_response['hits']['total']['value']
+                print(f"📊 Found {image_count} image embeddings in index")
+                
+                if image_count == 0:
+                    print("❌ No image embeddings found in index")
+                    return False, "No image embeddings found in index"
+                    
+            except Exception as e:
+                print(f"⚠️ Could not check image embeddings: {e}")
+            
+            return True, f"Index validated with {doc_count} documents"
+            
+        except Exception as e:
+            print(f"❌ Error validating OpenSearch index: {e}")
+            return False, f"Error validating index: {str(e)}"
+
     def get_text_embedding_bedrock(text):
         """Create text embedding using Bedrock Titan"""
         try:
@@ -3285,21 +3331,30 @@ def lambda_handler(event, context):
         - Better filtering with separate exact and similar match categories
         - Improved confidence thresholds for better result quality
         - Enhanced logging for debugging and monitoring
+        - Lower similarity thresholds for better results
+        - Index validation and fallback mechanisms
         """
         try:
             client = create_opensearch_client()
+            
+            # Validate OpenSearch index exists and has data
+            is_valid, validation_message = validate_opensearch_index()
+            if not is_valid:
+                print(f"❌ OpenSearch validation failed: {validation_message}")
+                return []
+            print(f"✅ {validation_message}")
             
             # Create image embedding
             print(f"Creating image embedding for image of size: {len(image_base64)} characters")
             search_vector = create_image_embedding(image_base64)
             if search_vector is None:
-                print("Error creating image embedding")
+                print("❌ Error creating image embedding - returning empty results")
                 return []
-            print(f"Image embedding created successfully, vector length: {len(search_vector)}")
+            print(f"✅ Image embedding created successfully, vector length: {len(search_vector)}")
             
             # Build search query for image search with improved filtering
             body = {
-                "size": limit * 10,  # Get more results to filter
+                "size": limit * 20,  # Get more results to filter (increased from 10)
                 "_source": {
                     "exclude": ["vspmod"]  # Exclude vector field from response
                 },
@@ -3309,7 +3364,7 @@ def lambda_handler(event, context):
                             "knn": {
                                 "vspmod": {
                                     "vector": search_vector,
-                                    "k": limit * 10
+                                    "k": limit * 20  # Increased from 10
                                 }
                             }
                         },
@@ -3323,24 +3378,21 @@ def lambda_handler(event, context):
                 "_source": ["product_description", "s3_uri", "type"]
             }
             
-            print("Searching OpenSearch for image query...")
+            print("🔍 Searching OpenSearch for image query...")
             response = client.search(index="visualproductsearchmod", body=body)
             
-            results = []
-            for hit in response['hits']['hits']:
-                score = hit['_score']
-                source = hit['_source']
-                
-                # Improved threshold for image-to-image search - higher threshold for better accuracy
-                if score < 0.5:  # Increased threshold for better image similarity
-                    continue
-                
-                results.append({
-                    "score": score,
-                    "product_description": source['product_description'],
-                    "s3_uri": format_s3_uri_with_bucket(source['s3_uri']),
-                    "type": source['type']
-                })
+            total_hits = response['hits']['total']['value']
+            print(f"📊 OpenSearch returned {total_hits} total hits")
+            
+            if total_hits == 0:
+                print("❌ No documents found in OpenSearch index")
+                return []
+            
+            # Log all scores for debugging
+            all_scores = [hit['_score'] for hit in response['hits']['hits']]
+            if all_scores:
+                print(f"📊 Score range: {min(all_scores):.4f} - {max(all_scores):.4f}")
+                print(f"📊 Top 5 scores: {sorted(all_scores, reverse=True)[:5]}")
             
             # Enhanced exact match detection
             exact_matches = []
@@ -3365,7 +3417,7 @@ def lambda_handler(event, context):
                         })
                         print(f"✅ Found exact match: {result_uri} with score: {score:.4f}")
             
-            # Collect similar matches with high confidence
+            # Collect similar matches with progressive thresholds
             for hit in response['hits']['hits']:
                 score = hit['_score']
                 source = hit['_source']
@@ -3375,8 +3427,8 @@ def lambda_handler(event, context):
                 if search_image_uri and result_uri == search_image_uri:
                     continue
                 
-                # High confidence threshold for similar matches
-                if score >= 0.6:
+                # Progressive thresholds for better results
+                if score >= 0.3:  # Lowered from 0.6 for better recall
                     similar_matches.append({
                         "score": score,
                         "product_description": source['product_description'],
@@ -3385,9 +3437,9 @@ def lambda_handler(event, context):
                         "match_type": "similar"
                     })
             
-            # If no high-confidence similar matches, try with lower threshold
+            # If still no matches, try even lower threshold
             if not similar_matches:
-                print("No high-confidence similar matches found, trying with lower threshold...")
+                print("⚠️ No matches found with 0.3 threshold, trying 0.2...")
                 for hit in response['hits']['hits']:
                     score = hit['_score']
                     source = hit['_source']
@@ -3397,7 +3449,28 @@ def lambda_handler(event, context):
                     if search_image_uri and result_uri == search_image_uri:
                         continue
                     
-                    if score >= 0.4:  # Lower threshold for similar matches
+                    if score >= 0.2:  # Even lower threshold
+                        similar_matches.append({
+                            "score": score,
+                            "product_description": source['product_description'],
+                            "s3_uri": format_s3_uri_with_bucket(source['s3_uri']),
+                            "type": source['type'],
+                            "match_type": "similar"
+                        })
+            
+            # If still no matches, try the lowest threshold
+            if not similar_matches:
+                print("⚠️ No matches found with 0.2 threshold, trying 0.1...")
+                for hit in response['hits']['hits']:
+                    score = hit['_score']
+                    source = hit['_source']
+                    result_uri = source['s3_uri']
+                    
+                    # Skip if this is already an exact match
+                    if search_image_uri and result_uri == search_image_uri:
+                        continue
+                    
+                    if score >= 0.1:  # Lowest threshold
                         similar_matches.append({
                             "score": score,
                             "product_description": source['product_description'],
@@ -3421,10 +3494,17 @@ def lambda_handler(event, context):
             print(f"   - Similar matches: {len(similar_matches)}")
             print(f"   - Final results: {len(final_results)}")
             
+            if final_results:
+                print(f"✅ Returning {len(final_results)} results with scores: {[r['score'] for r in final_results]}")
+            else:
+                print("❌ No results found even with lowest thresholds")
+            
             return final_results[:limit]
             
         except Exception as e:
-            print(f"Error during image search: {e}")
+            print(f"❌ Error during image search: {e}")
+            import traceback
+            print(f"❌ Full traceback: {traceback.format_exc()}")
             return []
 
     def validate_search_results_with_llm(search_query, search_results):
@@ -3840,7 +3920,94 @@ def lambda_handler(event, context):
                 print(f"Image base64 length: {len(image_base64)} characters")
                 results = search_products_image_opensearch(image_base64, limit=5, search_image_uri=image_s3_uri)
                 
-                # Validate search results using LLM for image search
+                # Enhanced fallback mechanisms for when no results found
+                if not results:
+                    print("⚠️ No results from OpenSearch, trying fallback mechanisms...")
+                    
+                    # Fallback 1: Try text-based search using image description
+                    try:
+                        print("🔄 Fallback 1: Generating image description and searching by text...")
+                        
+                        # Generate image description using Claude
+                        claude_model_id = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                        system_prompt = '''
+                        You are a product identification expert. Analyze this image and identify what type of product it is.
+                        Focus on identifying if it's a camera, shoe, or headphone/headset.
+                        Provide a brief description suitable for product search.
+                        '''
+                        
+                        response = bedrock_client.invoke_model(
+                            contentType='application/json',
+                            body=json.dumps({
+                                "anthropic_version": "bedrock-2023-05-31",
+                                "max_tokens": 100,
+                                "temperature": 0,
+                                "system": system_prompt,
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_base64}}
+                                        ]
+                                    }
+                                ],
+                            }),
+                            modelId=claude_model_id
+                        )
+                        
+                        response_body = json.loads(response['body'].read().decode('utf-8'))
+                        image_description = response_body['content'][0]['text']
+                        print(f"Generated image description: {image_description}")
+                        
+                        # Search using text description
+                        text_results = search_products_text_opensearch(image_description, limit=5)
+                        if text_results:
+                            print(f"✅ Fallback text search found {len(text_results)} results")
+                            results = text_results
+                            response_text = f"Found {len(results)} products using image description:\n\n"
+                            for i, result in enumerate(results, 1):
+                                response_text += f"{i}. Score: {result['score']:.4f}\n"
+                                response_text += f"   Description: {result['product_description'][:100]}...\n"
+                                response_text += f"   S3 URI: {result['s3_uri']}\n\n"
+                        else:
+                            print("❌ Fallback text search also returned no results")
+                            
+                    except Exception as fallback_error:
+                        print(f"❌ Fallback text search failed: {fallback_error}")
+                    
+                    # Fallback 2: Return generic category-based suggestions
+                    if not results:
+                        print("🔄 Fallback 2: Providing generic category suggestions...")
+                        
+                        # Try to determine category from image filename or URI
+                        search_image_uri = image_s3_uri if image_s3_uri else "unknown"
+                        suggested_category = None
+                        
+                        if "shoe" in search_image_uri.lower():
+                            suggested_category = "shoes"
+                        elif "camera" in search_image_uri.lower():
+                            suggested_category = "cameras"
+                        elif "headphone" in search_image_uri.lower() or "headset" in search_image_uri.lower():
+                            suggested_category = "headphones/headsets"
+                        
+                        if suggested_category:
+                            response_text = f"No similar products found for this image. However, this appears to be a {suggested_category} image. Please try searching for {suggested_category} in our product catalog."
+                        else:
+                            response_text = "No similar products found for this image. Please try searching for cameras, shoes, or headphones/headsets in our product catalog."
+                        
+                        # Try a generic search for the suggested category
+                        if suggested_category:
+                            try:
+                                generic_results = search_products_text_opensearch(suggested_category, limit=3)
+                                if generic_results:
+                                    results = generic_results
+                                    response_text += f"\n\nHere are some {suggested_category} products from our catalog:\n\n"
+                                    for i, result in enumerate(results, 1):
+                                        response_text += f"{i}. {result['product_description'][:100]}...\n"
+                            except Exception as e:
+                                print(f"❌ Generic category search failed: {e}")
+                
+                # Validate search results using LLM for image search (only if we have results)
                 if results:
                     print("🔍 Validating image search results with LLM...")
                     # For image search, we'll use a generic search query since we don't have text input
@@ -3894,37 +4061,40 @@ def lambda_handler(event, context):
                                 else:
                                     print(f"⚠️ No results found in expected category: {expected_category}, using all results")
                             
-                            # Additional score-based filtering
-                            if top_score > 0.6:  # High confidence threshold
-                                # Only include results that are very close to the top score
+                            # Additional score-based filtering (relaxed thresholds)
+                            if top_score > 0.4:  # Lowered from 0.6
+                                # Only include results that are reasonably close to the top score
                                 score_filtered = [filtered_results[0]]
                                 for result in filtered_results[1:]:
-                                    if top_score - result['score'] < 0.05:  # Very close scores
+                                    if top_score - result['score'] < 0.15:  # Relaxed from 0.05
                                         score_filtered.append(result)
                                 filtered_results = score_filtered
-                            elif top_score > 0.5:  # Medium confidence
-                                # Include results within 0.1 score difference
+                            elif top_score > 0.3:  # Lowered from 0.5
+                                # Include results within 0.2 score difference (relaxed from 0.1)
                                 score_filtered = [filtered_results[0]]
                                 for result in filtered_results[1:]:
-                                    if top_score - result['score'] < 0.1:
+                                    if top_score - result['score'] < 0.2:
                                         score_filtered.append(result)
                                 filtered_results = score_filtered
                         
-                        response_text = f"Found {len(filtered_results)} products:\n\n"
-                        for i, result in enumerate(filtered_results, 1):
-                            match_type = result.get('match_type', 'similar')
-                            match_icon = "🎯" if match_type == "exact" else "🔍"
-                            response_text += f"{i}. {match_icon} {match_type.upper()} MATCH - Score: {result['score']:.4f}\n"
-                            response_text += f"   Description: {result['product_description'][:100]}...\n"
-                            response_text += f"   S3 URI: {result['s3_uri']}\n\n"
+                        # Only update response_text if we haven't already set it in fallback
+                        if not response_text or "Found" not in response_text:
+                            response_text = f"Found {len(filtered_results)} products:\n\n"
+                            for i, result in enumerate(filtered_results, 1):
+                                match_type = result.get('match_type', 'similar')
+                                match_icon = "🎯" if match_type == "exact" else "🔍"
+                                response_text += f"{i}. {match_icon} {match_type.upper()} MATCH - Score: {result['score']:.4f}\n"
+                                response_text += f"   Description: {result['product_description'][:100]}...\n"
+                                response_text += f"   S3 URI: {result['s3_uri']}\n\n"
                         
                         # Update results to filtered results
                         results = filtered_results
                     else:
                         print(f"❌ LLM validation failed: {validation_result.get('reasoning')}")
-                        response_text = "No similar products found for this image. The image does not match available product categories (camera, shoe, headsets)."
+                        if not response_text:  # Only set if not already set by fallback
+                            response_text = "No similar products found for this image. The image does not match available product categories (camera, shoe, headsets)."
                         results = []  # Clear results since they don't match categories
-                else:
+                elif not response_text:  # Only set if not already set by fallback
                     response_text = "No similar products found for this image"
             else:
                 response_text = "Invalid search parameters. Please provide either 'search_type': 'text' with 'search_query' or 'search_type': 'image' with image file"
