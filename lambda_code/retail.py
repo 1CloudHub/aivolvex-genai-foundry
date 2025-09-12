@@ -5894,20 +5894,33 @@ User prompt: "{direct_text}"
                 try:
                     import boto3
                     
-                    # Parse S3 URI
+                    # Get bucket name from environment variable
+                    bucket_name = os.environ.get('S3_BUCKET')
+                    if not bucket_name:
+                        raise ValueError("S3_BUCKET environment variable is not set")
+                    
+                    # Extract image name from the original S3 URI
+                    # Example: "s3://genaifoundryc-y2t1oh/virtualtryon/person4.jpg" -> "person4.jpg"
                     if s3_uri.startswith('s3://'):
                         s3_uri = s3_uri[5:]  # Remove 's3://' prefix
                     
-                    bucket_name, key = s3_uri.split('/', 1)
+                    # Split and get the image name (last part after the last '/')
+                    image_name = s3_uri.split('/')[-1]
+                    
+                    # Construct new S3 key with virtualtryon prefix
+                    s3_key = f"virtualtryon/{image_name}"
+                    
+                    print(f"Downloading image from bucket: {bucket_name}, key: {s3_key}")
                     
                     # Create S3 client
                     s3_client = boto3.client(
                         's3',
                         region_name=AWS_REGION
                     )
+                    print(bucket_name)
                     
                     # Download image from S3
-                    response = s3_client.get_object(Bucket=bucket_name, Key=key)
+                    response = s3_client.get_object(Bucket=bucket_name, Key=s3_key)
                     image_bytes = response['Body'].read()
                     
                     # Convert to base64
