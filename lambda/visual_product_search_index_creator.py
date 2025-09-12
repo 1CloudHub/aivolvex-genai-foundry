@@ -23,9 +23,9 @@ def lambda_handler(event, context):
         "ResourceProperties": {
             "index_name": "retail-index-name",
             "dimension": 1024,
-            "method": "hnsw",
-            "engine": "faiss",
-            "space_type": "l2"
+            "method": "nmslib",
+            "engine": "nmslib",
+            "space_type": "cosine"
         }
     }
     """
@@ -53,9 +53,9 @@ def handle_cfn_event(event, context):
         properties = event['ResourceProperties']
         index_name = properties.get('index_name')
         dimension = properties.get('dimension', 1024)
-        method = properties.get('method', 'hnsw')
-        engine = properties.get('engine', 'faiss')
-        space_type = properties.get('space_type', 'l2')
+        method = properties.get('method', 'nmslib')
+        engine = properties.get('engine', 'nmslib')
+        space_type = properties.get('space_type', 'cosine')
         
         print(f"Creating retail index: {index_name}")
         print(f"Vector dimension: {dimension}")
@@ -177,9 +177,9 @@ def handle_direct_event(event, context):
         # Parse event parameters with defaults
         index_name = event.get('index_name', f'{collection_name}-retail-index')
         dimension = event.get('dimension', 1024)
-        method = event.get('method', 'hnsw')
-        engine = event.get('engine', 'faiss')
-        space_type = event.get('space_type', 'l2')
+        method = event.get('method', 'nmslib')
+        engine = event.get('engine', 'nmslib')
+        space_type = event.get('space_type', 'cosine')
         
         print(f"Creating retail index: {index_name}")
         print(f"Vector dimension: {dimension}")
@@ -221,20 +221,20 @@ def handle_direct_event(event, context):
 
 def create_retail_vector_index(opensearch_endpoint, collection_name, index_name, dimension, method, engine, space_type):
     """
-    Create retail-specific vector index in OpenSearch with exact configuration from the image.
+    Create retail-specific vector index in OpenSearch with exact configuration.
     
     Vector field configuration:
-    - Field name: 'vsp'
-    - Engine: 'faiss'
-    - Precision: 'FP16'
+    - Field name: 'vspmod'
+    - Engine: 'nmslib'
+    - Precision: 'FP32'
     - Dimensions: 1024
-    - Distance type: 'euclidean'
-    - ef_search: 512
+    - Distance type: 'cosine'
+    - ef_search: 100
     
     Metadata fields:
-    - product_description: text, not filterable
-    - s3_uri: text, not filterable
-    - type: text, filterable
+    - product_description: text, filterable
+    - s3_uri: keyword, filterable
+    - type: keyword, filterable
     """
     try:
         # Get credentials from the Lambda execution environment
@@ -293,8 +293,9 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
         request_body = {
             "settings": {
                 "index": {
-                    "knn": True
-                    }
+                    "knn": True,
+                    "knn.algo_param.ef_search": 100
+                }
             },
             "mappings": {
                 "properties": {
@@ -308,12 +309,12 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
                             "engine": engine
                         }
                     },
-                    # Metadata fields - matching metadata_ingest_final structure
+                    # Metadata fields - updated configuration
                     "product_description": {
                         "type": "text"
                     },
                     "s3_uri": {
-                        "type": "text"
+                        "type": "keyword"
                     },
                     "type": {
                         "type": "keyword"

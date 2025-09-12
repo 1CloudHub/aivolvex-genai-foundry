@@ -169,11 +169,12 @@ def check_and_create_index():
         else:
             print(f"❌ Index '{index_name}' does not exist. Creating it...")
             
-            # Create index with proper mapping - matching metadata_ingest_final structure
+            # Create index with proper mapping - matching visual product search configuration
             index_body = {
                     "settings": {
                         "index": {
-                            "knn": True
+                            "knn": True,
+                            "knn.algo_param.ef_search": 100
                         }
                     },
                     "mappings": {
@@ -182,16 +183,16 @@ def check_and_create_index():
                                 "type": "knn_vector",
                                 "dimension": 1024,
                                 "method": {
-                                    "name": "hnsw",
-                                    "space_type": "l2",
-                                    "engine": "faiss"
+                                    "name": "nmslib",
+                                    "space_type": "cosine",
+                                    "engine": "nmslib"
                                 }
                             },
                             "product_description": {
                                 "type": "text"
                             },
                             "s3_uri": {
-                                "type": "text"
+                                "type": "keyword"
                             },
                             "type": {
                                 "type": "keyword"
