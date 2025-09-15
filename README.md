@@ -91,8 +91,6 @@ python deploy.py
 ![Deployment Step](./assets/deployment_step.png)
 
 
-
-
 ---
 
 
@@ -102,7 +100,6 @@ python deploy.py
 Select the desired stack from the available options and press 'y' when prompted to confirm the deployment.
 
 > Deploys the defined CDK infrastructure into your AWS account. This may take several minutes. Wait until the deployment completes successfully.
-
 
 ### 9. Get the Application URL
 Navigate to the **CloudFront** service.
