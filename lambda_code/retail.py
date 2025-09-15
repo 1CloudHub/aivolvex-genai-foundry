@@ -62,6 +62,7 @@ CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']
 socket_endpoint = os.environ["socket_endpoint"]
 RETAIL_KB_ID=os.environ["RETAIL_KB_ID"]
 retail_chat_history_table=os.environ['chat_history_table']
+S3_BUCKET = os.environ['S3_BUCKET']
 # Use environment region instead of hardcoded regions
 retrieve_client = boto3.client('bedrock-agent-runtime', region_name=region_used)
 bedrock_client = boto3.client('bedrock-runtime', region_name=region_used)
@@ -7026,13 +7027,16 @@ def generate_video_from_image(event):
         prompt = event["prompt"]
         session_id = event["session_id"]
 
-        region = "us-east-1"
-        s3_region = "us-west-2"
+        region = region_used
+        s3_region = region_used
         model_id = "amazon.nova-reel-v1:1"
-        bucket = "genaifoundryc-y2t1oh"
+        bucket = S3_BUCKET
         prefix = f"videos/{session_id}"
         s3_uri = f"s3://{bucket}/{prefix}/"
         s3_key = f"{prefix}/output.mp4"
+
+        print(f"Generating video for session {session_id}")
+        print(bucket, prefix, s3_uri, s3_key)
 
         # Construct model input
         model_input = {
@@ -7131,9 +7135,9 @@ def generate_video_from_text(event):
         prompt = event["prompt"]
         session_id = event["session_id"]
 
-        region = "us-east-1"
+        region = region_used
         model_id = "amazon.nova-reel-v1:1"
-        bucket = "genaifoundryc-y2t1oh"
+        bucket = S3_BUCKET
         prefix = f"videos/{session_id}"
         s3_uri = f"s3://{bucket}/{prefix}/"
         s3_key = f"{prefix}/output.mp4"
@@ -11695,4 +11699,3 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
             "input_tokens": "0",
             "output_tokens": "0"
         }
-    
