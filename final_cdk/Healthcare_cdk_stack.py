@@ -814,7 +814,7 @@ class HealthcareCdkStack(Stack):
         initial_sync_function.node.add_dependency(healthcare_kb)
         initial_sync_function.node.add_dependency(s3deploy.BucketDeployment(
             self, "HealthcareKBDeployment",
-            sources=[s3deploy.Source.asset("assets/healthcare")],
+            sources=[s3deploy.Source.asset("genaifoundy-usecases/healthcare")],
             destination_bucket=self.data_bucket,
             destination_key_prefix="kb/healthcare/"
         ))
