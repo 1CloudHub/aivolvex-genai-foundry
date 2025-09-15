@@ -812,6 +812,7 @@ class HealthcareCdkStack(Stack):
 
         # Add dependencies to ensure Knowledge Bases are created before initial sync
         initial_sync_function.node.add_dependency(healthcare_kb)
+        initial_sync_function.node.add_dependency(healthcare_kb_deploy)
 
         # Create provider for initial sync
         initial_sync_provider = cr.Provider(

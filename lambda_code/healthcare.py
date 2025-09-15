@@ -2601,6 +2601,325 @@ these are the keys to be always used while returning response. Strictly do not a
             values = ('',None,'','','',session_id,'','','','','')            
             res = insert_db(insert_query,values)   
             return tool_response
+    
+    if event_type == "generate_summary":     
+        
+        print("SUMMARY GENERATION ")
+        session_id = event["session_id"]
+        chat_query = f'''
+        SELECT question,answer
+        FROM {schema}.{chat_history_table}    
+        WHERE session_id = '{session_id}';
+        '''
+    
+        chat_details = select_db(chat_query)
+        print("CHAT DETAILS : ",chat_details)
+        history = ""
+    
+        for chat in chat_details:
+            history1 = "Human: "+chat[0]
+            history2 = "Bot: "+chat[1]
+            history += "\n"+history1+"\n"+history2+"\n"
+        print("HISTORY : ",history)
+        prompt_query = f"SELECT analytics_prompt from {schema}.{prompt_metadata_table} where id = 1;"
+        prompt_template = f'''
+        <Instruction>
+        Based on the conversation above, please provide the output in the following format:
+        Topic:
+		- Identify the main topic of the conversation, it should be a single word topic
+        Conversation Type:
+        - Identify if the conversation is an Enquiry or a Complaint. If both are present, classify it as (Enquiry/Complaint).
+        - Consider the emotional tone and context to determine the type.
+        
+        Conversation Summary Explanation:
+        - Explain why you labelled the conversation as Enquiry, Complaint, or both.
+        - Highlight the key questions, concerns, or issues raised by the customer.
+	-IMPORTANT: keep the summary in 2-3 lines
+        
+        Detailed Summary:
+        - Provide a clear summary of the conversation, capturing the customer’s needs, questions, and any recurring themes.
+	- IMPORTANT: keep the summary in 2-3 lines keep it short
+
+        
+	
+        Conversation Sentiment:
+        - Analyse overall sentiment of conversation carried out by the user with the agent.
+		- Analyse the tone and feelings associated within the conversation.
+		- possible values are (Positive/Neutral/Negative)
+     	- Only provide the final sentiment here in this key. 
+        Conversation Sentiment Generated Details:
+        - Explain why you labelled the Lead as Positive/Neutral/Negative.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        
+        Lead Sentiment:
+        - Indicate if potential leads are generated from the conversation (Yes/No).
+        
+        Leads Generated Details:
+        - Explain why you labelled the Lead as Yes/No.
+        - List potential leads, noting any interest in products/services.
+        - Highlight specific customer questions or preferences that could lead to sales.
+        - Suggest approaches to engage each lead based on their needs.
+        
+        Action to be Taken:
+        - Outline next steps for the sales representative to follow up on the opportunities identified.
+        - Include any necessary follow-up actions, information to provide, or solutions to offer.
+        
+        WhatsApp Followup Creation:
+		- Craft a highly personalized follow-up WhatsApp message to engage the customer effectively as a customer sales representative.
+		- Ensure to provide a concise response and make it as brief as possible. Maximum 2-3 lines as it should be shown in the whatsapp mobile screen, so make the response brief.
+        - Incorporate key details from the conversation script to show understanding and attentiveness(Do not hallucinate or add any details that are ecplicitely there in the conversation).
+        - Tailor the WhatsApp message to address specific concerns, provide solutions, and include a compelling call-to-action.
+        - Infuse a sense of urgency or exclusivity to prompt customer response.
+		- Format the WhatsApp message with real line breaks for each paragraph (not the string n). Use actual newlines to separate the greeting, body, call-to-action, and closing. 
+	
+	Follow the structure of the sample WhatsApp message below:
+	<format_for_whatsapp_message>
+
+Hi, Thanks for reaching out to AnyBank! 
+
+You had a query about [Inquiry Topic]. Here’s what you can do next:
+
+1. [Step 1]  
+2. [Step 2]
+
+If you’d like, I can personally help you with [Offer/Action]. Just share your [Details Needed].
+
+Looking forward to hearing from you soon.
+
+</format_for_whatsapp_message>
+	- Before providing the whatsapp response, it is very critical that you double check if its in the provided format
+
+
+<language_constraints>
+
+If the conversation history (user questions and bot answers) is primarily in Tagalog, then provide the values for all JSON keys in Tagalog. Otherwise, provide the values strictly in English.
+If the conversation history is dominantly in Tagalog, provide the value for "Topic" in Tagalog; otherwise, provide it in English.
+Always keep the JSON keys in English exactly as specified below:
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+
+Only the **values** for each key should switch between English or Tagalog based on the dominant language in the conversation. Never translate or modify the keys. 
+
+</language_constraints>
+
+
+	
+        
+</Instruction> 
+return output in JSON in a consistent manner
+"Topic":
+"Conversation Type":  
+"Conversation Summary Explanation":
+"Detailed Summary": 
+"Conversation Sentiment":
+"Conversation Sentiment Generated Details":
+"Lead Sentiment":
+"Leads Generated Details": 
+"Action to be Taken": 
+"Whatsapp Creation":   
+these are the keys to be always used while returning response. Strictly do not add key values of your own.
+
+## WHATSAPP MESSAGE FORMATTING:
+- Write WhatsApp messages as natural, conversational text
+- Use proper paragraph spacing instead of \n characters
+- Avoid any escape sequences or formatting codes
+- Keep messages clean and readable without technical formatting
+- Use natural line breaks and spacing for readability
+- **NEVER** include literal \n characters in WhatsApp messages
+- Use actual line breaks and proper spacing for message formatting
+- Ensure WhatsApp messages are formatted naturally without escape sequences
+- **CRITICAL**: When generating WhatsApp messages, use actual line breaks and spacing, NOT escape sequences
+- Format messages with natural paragraph breaks and proper spacing
+- Write messages exactly as they should appear to the user, without any technical formatting codes
+        '''
+        # prompt_template = prompt_response[0][0]
+        print("PROMPT : ",prompt_template)
+        template = f'''
+        <Conversation>
+        {history}
+        </Conversation>
+        {prompt_template}
+        '''
+    
+        # - Ensure the email content is formatted correctly with new lines. USE ONLY "\n" for new lines. 
+        #         - Ensure the email content is formatted correctly for new lines instead of using new line characters.
+        response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",  
+            "max_tokens": 4000,     
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": template},
+                    ]
+                }
+            ],
+        }), modelId=model_id)                                                                                                                       
+    
+        inference_result = response['body'].read().decode('utf-8')
+        final = json.loads(inference_result)
+        out=final['content'][0]['text']
+        print(out)
+        llm_out = extract_sections(out)
+        
+    
+        topic = "" 
+        conversation_type = ""
+        conversation_summary_explanation = ""
+        detailed_summary = ""
+        conversation_sentiment = ""
+        conversation_sentiment_generated_details = ""
+        lead_sentiment = ""
+        leads_generated_details = ""
+        action_to_be_taken = ""
+        email_creation = ""
+        
+        try:
+            if "Topic" in llm_out:
+                topic = llm_out['Topic']
+        except:
+            topic = ""
+        
+        try:
+            
+            if 'Conversation Type' in llm_out:
+                conversation_type = llm_out['Conversation Type']
+                if conversation_type == "N/A":
+                    enquiry, complaint = (0, 0)
+                else:
+                    enquiry, complaint = (1, 0) if conversation_type == "Enquiry" else (0, 1)
+        except:
+            enquiry , complaint = 0,0
+            
+        try:
+            if 'Conversation Summary Explanation' in llm_out:
+                conversation_summary_explanation = llm_out['Conversation Summary Explanation']
+        except:
+            conversation_summary_explanation= ""
+        
+        try:
+            if 'Detailed Summary' in llm_out:
+                detailed_summary = llm_out['Detailed Summary']
+        except:
+            detailed_summary = ""
+        
+        try:
+            if 'Conversation Sentiment' in llm_out:
+                conversation_sentiment = llm_out['Conversation Sentiment']
+        except:
+            conversation_sentiment = ""
+        
+        try:
+            if 'Conversation Sentiment Generated Details' in llm_out:
+                conversation_sentiment_generated_details = llm_out['Conversation Sentiment Generated Details']
+        except:
+            conversation_generated_details = ""
+            
+        try:
+            if 'Lead Sentiment' in llm_out:
+                lead_sentiment = llm_out['Lead Sentiment']
+                lead = 1 if lead_sentiment == "Hot" else 0
+        except:
+            lead = 0
+        
+        try:
+            if 'Leads Generated Details' in llm_out:
+                leads_generated_details = llm_out['Leads Generated Details']
+        except:
+            leads_generated_details = ""
+        
+        try:
+            if 'Action to be Taken' in llm_out:   
+                action_to_be_taken = llm_out['Action to be Taken']
+        except:
+            action_to_be_taken = ""
+        
+        try:
+            if 'Whatsapp Creation' in llm_out:
+                email_creation = llm_out['Whatsapp Creation']
+        except:
+            email_creation = ""
+        detailed_summary = detailed_summary.replace("'", "''")
+        email_creation = email_creation.replace("'", "''")
+        action_to_be_taken = action_to_be_taken.replace("'", "''")
+        leads_generated_details = leads_generated_details.replace("'", "''")
+        conversation_sentiment_generated_details = conversation_sentiment_generated_details.replace("'", "''")        
+        
+        print("LEAD : ",lead)
+        print("ENQUIRY : ",enquiry)
+        print("COMPLAINT : ",complaint)
+        print("conversation_type:", conversation_type)
+        print("Topic: ",topic)
+        print("Sentiment Explanation:", conversation_summary_explanation)
+        print("Detailed summary:", detailed_summary)
+        print("CONVERSATION SENTIMENT :",conversation_sentiment)
+        print("CONVERSATION SENTIMENT DETAILS:",conversation_sentiment_generated_details)
+        print("lead Sentiment:", lead_sentiment)
+        print("lead explanation:", leads_generated_details)
+        print("next_best_action:",action_to_be_taken)
+        print("email_content:",email_creation)
+        session_time = datetime.now()
+        update_query = f'''UPDATE {schema}.{CHAT_LOG_TABLE}
+        SET 
+            lead = {lead},
+            lead_explanation = '{leads_generated_details}',
+            sentiment = '{conversation_sentiment}',
+            sentiment_explanation = '{conversation_sentiment_generated_details}',
+            session_time = '{session_time}',
+            enquiry = {enquiry},
+            complaint = {complaint},
+            summary = '{detailed_summary}',
+            whatsapp_content = '{email_creation}',
+            next_best_action = '{action_to_be_taken}',
+            topic = '{topic}'
+        WHERE 
+            session_id = '{session_id}' 
+            '''
+        update_db(update_query)
+        return {
+                "statusCode" : 200,
+                "message" : "Summary Successfully Generated"
+            }
+    # get_risk_out(body)
+    if event_type == 'list_chat_summary':
+        session_id = event['session_id']
+        chat_query = f'''
+        SELECT question,answer
+        FROM {schema}.{chat_history_table}    
+        WHERE session_id = '{session_id}';
+        '''
+    
+        chat_details = select_db(chat_query)
+        print("CHAT DETAILS : ",chat_details)
+        history = []
+    
+        for chat in chat_details:
+            history.append({"Human":chat[0],"Bot":chat[1]})
+        print("HISTORY : ",history)  
+        select_query = f'''select summary, whatsapp_content, sentiment, topic  from genaifoundry.ce_cexp_logs ccl where session_id = '{session_id}';'''
+        summary_details = select_db(select_query)
+        final_summary = {}
+        for i in summary_details:  
+            # print("i:",i)  
+            final_summary['summary'] = i[0]
+            final_summary['whatsapp_content'] = i[1]
+            final_summary['sentiment'] = i[2]
+            final_summary['Topic'] = i[3]   
+            
+        # print(summary_details) 
+        # print(final_summary)   
+        return {"transcript":history,"final_summary":final_summary}
 
 def clean_preliminary_messages(text):
     """
