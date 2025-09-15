@@ -919,7 +919,15 @@ def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prom
         full_query = chat_history_context + query if chat_history_context else query
         
         # Use retrieve and generate with the knowledge base
-        model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+        # Construct proper model ARN for the region
+        model_arn = f"arn:aws:bedrock:{region}::foundation-model/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+        
+        # Debug logging
+        print(f"🔍 DEBUG: Using region: {region}")
+        print(f"🔍 DEBUG: Knowledge Base ID: {kb_id}")
+        print(f"🔍 DEBUG: Model ARN: {model_arn}")
+        print(f"🔍 DEBUG: Prompt template: {prompt_template[:100] if prompt_template else 'None'}...")
+        
         response = retrieve_client.retrieve_and_generate(
             input={
                 'text': full_query
@@ -928,8 +936,7 @@ def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prom
                 'type': 'KNOWLEDGE_BASE',
                 'knowledgeBaseConfiguration': {
                     'knowledgeBaseId': kb_id,
-                    # 'modelArn': 'arn:aws:bedrock:us-east-1:455389024925:inference-profile/us.anthropic.claude-3-7-sonnet-20250219-v1:0',
-                    'modelArn':model_id,
+                    'modelArn': model_arn,
                     'retrievalConfiguration': {
                         'vectorSearchConfiguration': {
                             'numberOfResults': 10,
@@ -945,7 +952,7 @@ def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prom
                             }
                         },
                         'promptTemplate': {
-                            'textPromptTemplate': prompt_template
+                            'textPromptTemplate': prompt_template if prompt_template else "You are a helpful assistant. Answer the user's question based on the provided context."
                         }
                     }
                 }
