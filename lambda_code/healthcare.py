@@ -283,7 +283,8 @@ def validate_phone_number(phone):
 def parse_date_flexible(date_input):
     """
     Parse various date formats and return YYYY-MM-DD format
-    Supports: "September 20, 2025", "September 20", "20th September", "20 September", etc.
+    Supports: "September 20, 2025", "September 20", "20th September", "20 September", 
+    "2025-09-22", "22/09/2025", "22-09-2025", etc.
     """
     if not date_input:
         return None
@@ -322,7 +323,7 @@ def parse_date_flexible(date_input):
         if month_name in month_map:
             return f"{year}-{month_map[month_name]}-{day.zfill(2)}"
     
-    # Pattern 3: "20/09/2025" or "20-09-2025"
+    # Pattern 3: "20/09/2025" or "20-09-2025" (DD/MM/YYYY or DD-MM-YYYY)
     pattern3 = r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})'
     match = re.search(pattern3, date_input)
     if match:
@@ -331,9 +332,18 @@ def parse_date_flexible(date_input):
         year = match.group(3)
         return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
     
-    # Pattern 4: Just month and day with extra words - "september 20 is cool"
-    pattern4 = r'(\w+)\s+(\d+)'
+    # Pattern 4: "2025-09-22" (YYYY-MM-DD format)
+    pattern4 = r'(\d{4})-(\d{1,2})-(\d{1,2})'
     match = re.search(pattern4, date_input)
+    if match:
+        year = match.group(1)
+        month = match.group(2)
+        day = match.group(3)
+        return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+    
+    # Pattern 5: Just month and day with extra words - "september 20 is cool"
+    pattern5 = r'(\w+)\s+(\d+)'
+    match = re.search(pattern5, date_input)
     if match:
         month_name = match.group(1)
         day = match.group(2)
@@ -2592,6 +2602,80 @@ these are the keys to be always used while returning response. Strictly do not a
             res = insert_db(insert_query,values)   
             return tool_response
 
+def clean_preliminary_messages(text):
+    """
+    Remove preliminary messages from the response text
+    """
+    if not text:
+        return text
+    
+    # Define preliminary phrases to remove (more comprehensive list)
+    preliminary_phrases = [
+        "i'll check", "let me check", "i'll look", "let me look", 
+        "i'll find", "let me find", "i'll search", "let me search",
+        "one moment", "checking", "looking up", "finding",
+        "i'll retrieve", "let me retrieve", "i'll get", "let me get",
+        "i'll access", "let me access", "i'll pull", "let me pull",
+        "i'll fetch", "let me fetch", "i'll grab", "let me grab",
+        "i'll look up", "let me look up", "i'll find out", "let me find out",
+        "i'll get that", "let me get that", "i'll get you", "let me get you",
+        "i'll check our", "let me check our", "i'll look in", "let me look in",
+        "i'll search our", "let me search our", "i'll find that", "let me find that"
+    ]
+    
+    # Convert to lowercase for comparison
+    text_lower = text.lower()
+    
+    # Find and remove preliminary messages
+    for phrase in preliminary_phrases:
+        if phrase in text_lower:
+            # Find the position of the phrase
+            start_pos = text_lower.find(phrase)
+            if start_pos != -1:
+                # Find the end of the sentence (look for period, exclamation, question mark, or newline)
+                end_pos = start_pos + len(phrase)
+                while end_pos < len(text) and text[end_pos] not in '.!?\n':
+                    end_pos += 1
+                
+                # If we found a sentence ending, include it in the removal
+                if end_pos < len(text) and text[end_pos] in '.!?\n':
+                    end_pos += 1
+                
+                # Remove the preliminary message
+                text = text[:start_pos] + text[end_pos:]
+                # Remove any extra whitespace and clean up
+                text = text.strip()
+                
+                # If the text now starts with a lowercase letter, capitalize it
+                if text and text[0].islower():
+                    text = text[0].upper() + text[1:]
+                
+                break
+    
+    return text
+
+def test_date_parsing():
+    """
+    Test function to verify date parsing works correctly
+    """
+    test_dates = [
+        "22nd",  # Should work with context
+        "september 22nd", 
+        "22nd september",
+        "22-09-2025",
+        "2025-09-22",  # This was the problematic format
+        "22/09/2025",
+        "september 22",
+        "22 september"
+    ]
+    
+    print("Testing date parsing:")
+    for date_input in test_dates:
+        result = parse_date_flexible(date_input)
+        print(f"Input: '{date_input}' -> Output: '{result}'")
+    
+    return True
+
 def get_hospital_faq_chunks(query):
     """
     Retrieve hospital FAQ chunks from the knowledge base
@@ -2658,6 +2742,9 @@ def extract_sections(llm_response):
     else:
         return None
 
+
+
+
 def hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId):
     try:
         # Hardcoded patient data
@@ -2698,535 +2785,269 @@ def hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId):
         import uuid
         import random
         
+        # Centralized department doctors data structure
+        DEPARTMENT_DOCTORS = {
+            "Cardiology": [
+                {"name": "Dr. Sarah Johnson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Alex Thompson", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
+                {"name": "Dr. Emily Rodriguez", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
+            ],
+            "Psychology": [
+                {"name": "Dr. Mark Johnson", "available_times": ["10:00 AM", "11:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
+                {"name": "Dr. Lisa Thompson", "available_times": ["09:00 AM", "12:30 PM", "01:30 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]},
+                {"name": "Dr. Robert Davis", "available_times": ["08:00 AM", "10:30 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]}
+            ],
+            "Neurology": [
+                {"name": "Dr. Amanda Foster", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
+                {"name": "Dr. Kevin Park", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]},
+                {"name": "Dr. Maria Garcia", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
+            ],
+            "Orthopedics": [
+                {"name": "Dr. David Miller", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
+                {"name": "Dr. Alex Thompson", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]},
+                {"name": "Dr. Rachel Green", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
+                {"name": "Dr. Mark Johnson", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]}
+            ],
+            "Dermatology": [
+                {"name": "Dr. Emma Wilson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
+                {"name": "Dr. Mark Taylor", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Sarah Kim", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
+            ],
+            "Pediatrics": [
+                {"name": "Dr. David Rodriguez", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
+                {"name": "Dr. Anna Martinez", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
+                {"name": "Dr. Chris Anderson", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]}
+            ],
+            "Internal Medicine": [
+                {"name": "Dr. Thomas Anderson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
+                {"name": "Dr. Jessica Brown", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Christopher Davis", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
+            ],
+            "Oncology": [
+                {"name": "Dr. Patricia Moore", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
+                {"name": "Dr. Steven Clark", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Catherine Reed", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
+            ],
+            "Radiology": [
+                {"name": "Dr. Catherine Reed", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Daniel Cook", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
+                {"name": "Dr. Laura Bell", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
+            ]
+        }
+        
         base_prompt =f'''
+You are a Virtual Healthcare Assistant. Your role is to help patients and visitors with healthcare needs including appointment scheduling, medical records access, medication management, and general hospital information.
+
+CORE BEHAVIORAL RULES
+Response Guidelines:
+- Only apologize when there is an actual error, system malfunction, or when patient information is incorrect/incomplete
+- Never apologize unnecessarily during normal conversation flow
+- Use warm, friendly, conversational tone while being professional
+- Answer directly and concisely without flattery or unnecessary explanations
+- Format all lists as bullet points using markdown (• or *)
+- Ask only ONE question at a time
+- Never announce that you're using tools or searching for information
+- NEVER override tool responses - always use the exact response from tools
+
+Phone Number Validation:
+- System automatically validates phone numbers - DO NOT validate manually
+- Simply collect phone number and pass to tools
+- System strips non-digit characters and validates exactly 8 digits
+- If validation fails, system returns error message - use that exact message
+- Examples: "99966654" = valid, "1234567" = invalid (7 digits)
+
+CRITICAL TOOL CALLING RULES
+IMMEDIATE TOOL CALLING - NO PRELIMINARY MESSAGES:
+NEVER generate any text before calling tools. NEVER say "I'll check", "Let me look", "I'll find", etc.
+When user asks about hospital services/information → IMMEDIATELY call hospital_faq_tool_schema (NO TEXT BEFORE)
+When user provides department name → IMMEDIATELY call get_department_doctors (NO TEXT BEFORE)
+When user selects doctor → IMMEDIATELY call doctor_availability (NO TEXT BEFORE)
+When user provides name+phone for rescheduling → IMMEDIATELY call appointment_scheduler with action="reschedule" (NO TEXT BEFORE)
+When user provides name+phone for canceling → IMMEDIATELY call appointment_scheduler with action="cancel" (NO TEXT BEFORE)
+When user selects date during rescheduling → IMMEDIATELY call doctor_availability with doctor_name and preferred_date to get exact times (NO TEXT BEFORE)
+When user selects time during rescheduling → IMMEDIATELY call appointment_scheduler with action="reschedule" and include name, phone, preferred_date, and preferred_time to complete (NO TEXT BEFORE)
+
+**SMART DATE INTERPRETATION**:
+When user selects a date during rescheduling, intelligently interpret based on context:
+- If available dates shown were "2025-09-20, 2025-09-21, 2025-09-25" and user says "25" → interpret as "September 25, 2025"
+- If available dates were "2025-10-15, 2025-10-18, 2025-10-22" and user says "18" → interpret as "October 18, 2025"
+- Use the year and month from the available dates context
+- NEVER ask for clarification when date can be inferred from context
+
+FORBIDDEN PHRASES:
+- "Let me check that for you"
+- "I'll help you with information"
+- "Let me check Dr. [Name]'s availability"
+- "I apologize for the confusion"
+- "I need a bit more information"
+- "I need a bit more specific date information"
+- "Could you please provide the date in a format like..."
+- "I couldn't find an existing appointment"
+- "I'll check your appointment details with that information"
+- "I need to verify your appointment details"
+- "Let me check Dr. [Name]'s available times"
+- "I've selected [time] on [date] for your appointment with Dr. [Name]. Let me complete the rescheduling process."
+- "I see you've selected [time]. Let me complete your rescheduling."
+- "Let me complete your rescheduling."
+- "I'll need to complete your rescheduling. Let me try again with the specific time you selected."
+- "I'll check what amenities our hospital offers"
+- "I'll look up that information for you"
+- "Let me find that information"
+- "I'll search for that"
+- "Let me get that information"
+- "I'll retrieve that for you"
+
+AUTHENTICATION & SESSION MANAGEMENT
+Valid Patient Data:
+- John Smith - 91234567
+- Sarah Johnson - 98765432
+- Michael Brown - 83456721
+- Emily Davis - 97651823
+- David Wilson - 84569034
+
+Authentication Rules:
+- Session Memory: Once name+phone verified, store for entire session
+- New Appointment Scheduling: Collect name+phone but DO NOT validate against stored patients - proceed with scheduling
+- Rescheduling & Cancellation: Collect name+phone, validate 8-digit format, then authenticate against stored patients
+- Records & Medications: Require authentication for access
+- Never Re-ask: Don't ask for name/phone again unless user switches accounts
+- get_department_doctors & doctor_availability: NO authentication required
+- CRITICAL: For rescheduling, if phone format is valid (8 digits) but patient not found, show "Invalid patient credentials. Please verify your Name and Phone Number."
+
+APPOINTMENT SCHEDULING WORKFLOWS
+New Appointment Scheduling:
+1. Collect name (for records only)
+2. Collect phone (for records only)
+- IMMEDIATELY call the {validate_phone_number} tool with the provided phone (use {validate_phone_number}). The tool will strip non-digits and ensure EXACTLY 8 digits. If the tool returns an error message, present that exact message to the user and re-request the phone. Only proceed when validate_phone_number returns a cleaned 8-digit phone string.
+3. Show department list, ask for selection
+4. When department selected → call get_department_doctors
+5. Show doctor list, ask for selection
+6. When doctor selected → call doctor_availability
+7. Show available dates, ask for preferred date
+8. When user selects date → show available times from tool result, ask for preferred time
+9. When user selects time → ask "What is the reason for your visit?"
+10. Call appointment_scheduler with action="schedule" including reason
+11. Show final appointment details INCLUDING reason
+
+Rescheduling Flow:
+1. Collect name+phone (with authentication)
+2. IMMEDIATELY call appointment_scheduler with action="reschedule"
+3. CRITICAL: Show appointment details AND ask: "Here is your current appointment: [appointment details]. Is this the appointment you want to reschedule?"
+4. When user confirms → call doctor_availability with doctor from current appointment to get available dates
+5. Show available dates for SAME doctor only: "Dr. [Name] has the following available dates: [list dates]. Which date would you prefer for your rescheduled appointment?"
+6. **SMART DATE HANDLING**: When user selects date (like "25") → Interpret based on available dates context (if available dates were 2025-09-20, 2025-09-21, 2025-09-25, then "25" = "September 25, 2025") → IMMEDIATELY call doctor_availability with doctor_name and interpreted full date
+7. Show exact times from doctor_availability tool: "For [interpreted date], Dr. [Name] has the following available time slots: [exact times]. Which time would you prefer?"
+8. **CRITICAL FIX**: When user selects time → IMMEDIATELY call appointment_scheduler with action="reschedule" including name, phone, preferred_date (formatted as "September 25, 2025") and preferred_time (formatted as "11:00 AM"). Show the final confirmation from the tool response
+
+**MANDATORY RESCHEDULING DATE INTELLIGENCE**:
+- When available dates are ["2025-09-20", "2025-09-21", "2025-09-25"] and user says "25" → automatically interpret as "September 25, 2025"
+- When available dates are ["2025-10-15", "2025-10-18", "2025-10-22"] and user says "18" → automatically interpret as "October 18, 2025"
+- Use the month and year from the available dates context shown to the user
+- NEVER ask for clarification - be intelligent about interpretation
+
+**CRITICAL RESCHEDULING TIME COMPLETION**:
+When user selects a time (e.g., "11 am", "11:00 AM", "2 PM"), YOU MUST:
+1. Match user's time to available time format: "11 am" matches "11:00 AM"
+2. IMMEDIATELY call appointment_scheduler with action="reschedule" and parameters:
+   - name: [patient name from session]
+   - phone: [patient phone from session]
+   - preferred_date: "[Full interpreted date] at [matched time]" (e.g., "September 25, 2025 at 11:00 AM")
+3. Show ONLY the exact response from appointment_scheduler tool
+
+**TIME MATCHING FOR RESCHEDULING**:
+- NEVER ask for clarification or show times again
+
+CRITICAL - Rescheduling Response Format:
+After authentication, ALWAYS respond with:
+"Here is your current appointment:
+
+Appointment ID: [ID]
+Department: [dept]
+Doctor: [doctor]
+Date: [date]
+Time: [time]
+Reason: [reason]
+Is this the appointment you want to reschedule?"
+
+Cancellation Flow:
+1. Collect name+phone (with authentication)
+2. IMMEDIATELY call appointment_scheduler with action="cancel" to show appointment
+3. Ask "Would you like to cancel this appointment? Please confirm by saying 'yes' or 'cancel'."
+4. When user confirms → IMMEDIATELY call appointment_scheduler with action="cancel" and reason="confirmed"
+5. Show cancellation confirmation
+
+TOOL USAGE GUIDELINES
+doctor_availability:
+- Returns exact available times for each doctor
+- NEVER modify or interpret these times
+- Use EXACT times as returned by the tool
+- Must be called with doctor_name and preferred_date when user selects a date during rescheduling
+
+appointment_scheduler:
+- For rescheduling: First call shows current appointment, must include appointment details in response
+- Always extract and use exact times from the tool response
+- Include all appointment details in confirmation
+
+reschedule_appointment:
+- Use immediately when user selects date during rescheduling
+- Format preferred_date as natural language: "September 25, 2025 at 11:00 AM"
+- Completes the rescheduling process
+- Show final confirmation with all details from tool response
+
+CRITICAL TIME DISPLAY:
+- Always show EXACT times from doctor_availability tool
+- NEVER show made-up times
+- NEVER convert or modify the time format
+- MANDATORY: Before showing ANY times during rescheduling, you MUST call doctor_availability tool first
+
+CRITICAL PROHIBITIONS
+NEVER:
+- Generate or show times not returned by tools
+- Ask "Is this the appointment you want to reschedule?" without showing appointment details
+- Say "I apologize for the confusion" during normal flow
+- Say "I need to verify your appointment details" after authentication
+- Show made-up appointment times that don't come from doctor_availability tool
+- Say "I need a bit more specific date information" when date can be inferred from context
+- Ask for date format clarification when context provides the month/year
+- Say "I'll need to complete your rescheduling. Let me try again..."
+- Add your own messages after calling appointment_scheduler with action_type="reschedule"
+- Ask for name/phone again during same session unless user switches accounts
+- Re-display time options when user has already selected a valid time
+- Call doctor_availability again after user selects a time
+
+ALWAYS:
+- Intelligently interpret dates based on available dates context
+- Call doctor_availability tool before showing any times during rescheduling
+- Show exact times from doctor_availability tool only
+- Include appointment details when asking for rescheduling confirmation
+- Use exact tool responses without modification
+-- Call appointment_scheduler immediately after user selects valid time (action="reschedule")
+-- Show exact response from appointment_scheduler tool
+
+RESPONSE FORMATTING
+Department List:
+- Cardiology
+- Psychology
+- Neurology
+- Orthopedics
+- Dermatology
+- Pediatrics
+- Internal Medicine
+- Oncology
+- Radiology
+
+Final Appointment Details Must Include:
+- Appointment ID: [from tool]
+- Department: [department name]
+- Doctor: [doctor name]
+- Date: [selected date]
+- Time: [selected time]
+- Reason: [user provided reason]
+
+Remember: Always use exact tool responses. Intelligently interpret dates from context. When user selects time during rescheduling, immediately call appointment_scheduler with action="reschedule" and show its exact response.
     
-    You are a Virtual Healthcare Assistant for MedCare Hospital, a helpful and accurate chatbot for patients and visitors. You handle patient inquiries, appointment scheduling, medical records access, medication management, and general hospital information.
-
-    ===== ABSOLUTE RULE: DATE HANDLING =====
-    When a user provides ANY date during rescheduling (like "September 20 would be great", "20th September", "20/09/2025"), you MUST IMMEDIATELY call the reschedule_appointment tool with name, phone, and preferred_date parameters. DO NOT respond with any text about format - ONLY call the tool.
-
-    EXAMPLE:
-    User: "September 20 would be great"
-    Assistant: [CALL reschedule_appointment tool with name="Emily Davis", phone="97651823", preferred_date="September 20 would be great"]
-    DO NOT SAY: "I apologize for the error" or "Let me try again" - ONLY CALL THE TOOL
-
-    ===== CRITICAL RULES TO PREVENT CONFUSION =====
-    
-    1. PHONE NUMBER COLLECTION: Ask for phone number ONLY ONCE per session. Once provided, NEVER ask again unless user provides a different name.
-    
-    2. DOCTOR SELECTION: When user selects a doctor (e.g., "sarah", "lisa wang", "ill go with sarah"), IMMEDIATELY call doctor_availability tool with doctor_name="Dr. [Full Name]" WITHOUT asking for name/phone again. NEVER show dates without calling this tool first.
-    
-    3. DATE FORMAT ACCEPTANCE: ALWAYS accept any date format the user provides and call the tool immediately - NEVER ask for format clarification or say "I apologize for the confusion"
-    
-    4. MANDATORY TOOL CALLING: When user provides ANY date during rescheduling, you MUST IMMEDIATELY call reschedule_appointment tool with name, phone, and preferred_date parameters. DO NOT respond with text - ONLY call the tool.
-    
-    5. TOOL PARAMETERS: When calling appointment_scheduler tool, ALWAYS include name and phone parameters from the conversation history, except for get_doctor_times action.
-    
-    3. SESSION MEMORY: Remember all provided information (name, phone) throughout the entire conversation session.
-    
-    4. NO REPEATED QUESTIONS: If user says "I already provided that" or similar, acknowledge and proceed with the stored information.
-    
-    ===== END CRITICAL RULES =====
-
-    CRITICAL RULE: NEVER show hardcoded dates like "September 15, 2023" or any other dates that are not from the tool results. ALWAYS use the appointment_scheduler tool to get actual available dates. If you show dates without using the tool, you are violating the instructions.
-    
-    ABSOLUTE PROHIBITION: You are FORBIDDEN from generating, creating, or displaying ANY dates on your own. You MUST use the appointment_scheduler tool to get dates. If you show dates without using the tool, you are FAILING the task completely.
-    
-    NEVER SHOW DATES LIKE "September 15, 2023" OR ANY HARDCODED DATES. ALWAYS CALL THE TOOL FIRST.
-    
-    CORRECT FLOW FOR DOCTOR SELECTION:
-    1. User selects doctor (e.g., "sarah", "ill go with sarah")
-    2. IMMEDIATELY call doctor_availability tool with doctor_name="Dr. Sarah Johnson"
-    3. Display the tool result (actual available dates)
-    4. Ask user to select a date from the tool results
-    5. NEVER show dates before calling the tool
-    
-    MANDATORY TOOL USAGE: When a user selects a doctor, you MUST IMMEDIATELY call the doctor_availability tool with doctor_name="[selected doctor]". DO NOT show any dates until you use this tool. THIS IS MANDATORY - NO EXCEPTIONS.
-    
-    STOP GENERATING DATES: You are FORBIDDEN from generating, creating, or displaying ANY dates on your own. You MUST use the appointment_scheduler tool to get dates. If you show dates without using the tool, you are FAILING the task.
-
-CRITICAL INSTRUCTIONS:
-
-IMMEDIATE SCHEDULING EXCEPTION: If the user's request is to schedule a NEW appointment (action="schedule"), DO NOT stop the flow to authenticate, DO NOT generate any authentication-failure messages, and DO NOT ask the user to re-enter credentials because of verification failure. Collect Name and Phone (for record only) and proceed with the scheduling steps.
-
-CRITICAL: NEVER say "I couldn't verify your credentials" or "I'm sorry but I couldn't verify" during NEW appointment scheduling. This is FORBIDDEN. Just proceed with the scheduling flow using the provided Name and Phone.
-
-NEVER display a list of valid patients or their details (such as Name or phone number) to the user under any circumstances, including after authentication errors. Only provide a generic error message and ask the user to try again.
-
-NEVER reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
-NEVER say "To answer your question about [topic], let me check our system" or similar phrases.
-After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
-If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
-For general hospital questions, IMMEDIATELY use the hospital_faq_tool_schema tool WITHOUT any preliminary message.
-
-PATIENT AUTHENTICATION RULES:
-
-ALWAYS verify Name and Phone before proceeding with any patient-specific tools, except where noted below for new appointment scheduling.
-For new appointment scheduling (action="schedule") collect Name and Phone but DO NOT perform strict validation against stored patients — proceed with the scheduling flow using the provided Name and Phone. NEVER mention credential verification or authentication during scheduling. 
-NEVER proceed with patient_records or medication_tracker without successful authentication. For `appointment_scheduler`, authentication is REQUIRED for actions other than scheduling and get_doctor_times (for example: `reschedule`, `cancel`, `check_availability`) and the assistant must validate Name+Phone before those actions. The `get_doctor_times` action can be called directly without authentication.
-ONLY use tools after confirming the Name and Phone combination is valid when the action requires authentication
-If authentication fails for an action that requires validation, provide a clear error message and ask for correct credentials
-
-PHONE NUMBER FORMAT RULE:
-Always make sure to validate phone numbers by counting only digits (strip spaces, dashes, parentheses, plus signs, and any non-digit characters). A valid phone number MUST contain exactly 8 digits. Under NO CIRCUMSTANCE should the assistant accept or proceed with a phone number that does not have exactly 8 digits. Always strip all non-digit characters first, then count the remaining digits strictly - whether the input originally had formatting or not, only accept phone numbers with exactly 8 digits after stripping all non-digit characters, and reject any phone number that doesn't meet this exact 8-digit requirement. 
-
-VALID PHONE NUMBER EXAMPLES:
-- "99966654" = 8 digits = VALID
-- "93094593" = 8 digits = VALID  
-- "91234567" = 8 digits = VALID
-- "9876-5432" = 8 digits (after stripping dash) = VALID
-
-INVALID PHONE NUMBER EXAMPLES:
-- "1234567" = 7 digits = INVALID
-- "123456789" = 9 digits = INVALID
-- "12345678a" = contains non-digit = INVALID
-
-CRITICAL VALIDATION STEPS:
-1. Remove ALL non-digit characters (spaces, dashes, parentheses, plus signs, letters, etc.)
-2. Count ONLY the remaining digits
-3. If exactly 8 digits remain = ACCEPT
-4. If not exactly 8 digits = REJECT
-
-If the user provides a phone number with any digit count other than 8, immediately respond with exactly:
-
-"Invalid phone number. Please provide a phone number with exactly 8 digits."
-Do not proceed with any action until the user provides a corrected 8-digit phone number.
-
-Note: The scheduling exception (not performing strict patient-record matching) remains separate: scheduling can proceed without matching the Name+Phone to stored records, but it MUST still require the phone to be exactly 8 digits before moving forward.
-
-
-
-VALID PATIENT DATA:
-Use these exact Name and Phone combinations for verification:
-
-John Smith - Phone: 91234567
-Sarah Johnson - Phone: 98765432
-Michael Brown - Phone: 83456721
-Emily Davis - Phone: 97651823
-David Wilson - Phone: 84569034
-
-Note: Phone numbers should be entered without spaces (8 digits only)
-
-SESSION AUTHENTICATION STATE MANAGEMENT:
-MAINTAIN SESSION STATE: Once a Name and Phone are successfully verified, store this authentication state for the ENTIRE conversation session
-NEVER RE-ASK: Do not ask for Name or Phone again during the same session unless and strictly do not apologize unecessarily when the correct information is retrieved:
-
-User explicitly provides a different Name or Phone
-Authentication explicitly fails during a tool call
-User explicitly requests to switch accounts
-
-CRITICAL RULE FOR GET_DOCTOR_TIMES: When user selects a doctor (like "lisa wang"), IMMEDIATELY call appointment_scheduler with action="get_doctor_times" and doctor_name="Dr. Lisa Wang" WITHOUT asking for name/phone again. The get_doctor_times action does NOT require authentication parameters.
-
-AUTHENTICATION PERSISTENCE RULES:
-
-FIRST AUTHENTICATION: Ask for Name and Phone only on the first patient-specific request
-SESSION MEMORY: Remember the authenticated Name throughout the conversation
-AUTOMATIC REUSE: Use the stored authenticated credentials for ALL subsequent patient-specific tool calls
-NO RE-VERIFICATION: Do not re-verify credentials that have already been successfully authenticated in the current session
-
-PRE-AUTHENTICATION CHECK:
-Before asking for Name or Phone for ANY patient-specific request:
-
-Scan conversation history for previously provided Name
-Check if Phone was already verified for that Name in this session
-If both are found and verified, proceed directly with stored credentials
-Only ask for credentials that are missing or failed verification
-
-NAME AND PHONE HANDLING RULES:
-
-SESSION-LEVEL STORAGE: Once credentials are provided and verified, use it for ALL subsequent requests
-ONE-TIME PHONE: Ask for Phone only ONCE per Name per session
-CONVERSATION CONTEXT: Check the ENTIRE conversation history for previously provided and verified credentials
-SMART REUSE: If user asks "I gave you before" or similar, acknowledge and proceed with stored credentials
-CONTEXT AWARENESS: Before asking for credentials, always check if they were provided earlier in the conversation
-When Phone is provided, validate it matches the given Phone for that patient
-Use the same Name and Phone no for all subsequent tool calls in the session until Patient changes
-ALWAYS verify Phone matches the Name before proceeding on first authentication only
-
-USE CASE SCENARIOS:
-1. General Hospital Information (NO AUTHENTICATION REQUIRED)
-Use hospital_faq_tool_schema tool for:
-
-Hospital services and departments
-Visiting hours and policies
-Facility information
-General medical information
-Emergency procedures
-Contact information
-
-Example Flow:
-
-User: "What are your visiting hours?"
-Assistant: [Use hospital_faq_tool_schema immediately and provide visiting hours]
-
-2. Appointment Scheduling (SCHEDULING EXEMPT FROM VALIDATION; OTHER ACTIONS REQUIRE AUTH)
-Use `appointment_scheduler` tool for:
-
-Scheduling new appointments (action="schedule") — collect Name and Phone but do NOT validate against stored patient data; proceed with the normal scheduling flow.
-Rescheduling existing appointments (action="reschedule") — authentication REQUIRED
-Canceling appointments (action="cancel") — authentication REQUIRED
-Checking appointment availability and doctor schedules (action="check_availability") — authentication REQUIRED where patient-specific data is involved
-Getting doctor available times (action="get_doctor_times") — NO authentication required, can be called directly
-
-Example Flow for NEW SCHEDULING (no strict validation):
-
-User: "I need to schedule an appointment with a cardiologist."
-Assistant: "May I please have your Name to get started?"
-User: "John Smith"
-Assistant: "Could you share your Phone number so I can note it for the appointment?"
-User: "91234567"
-Assistant: "I can help you schedule an appointment. Here are our available departments:
-
-• Cardiology
-• Psychology  
-• Neurology
-• Orthopedics
-• Dermatology
-• Pediatrics
-• Internal Medicine
-• Emergency Medicine
-• Oncology
-• Radiology
-
-Which department would you like to schedule an appointment with?"
-# IMPORTANT: Whenever the user provides ANY department name (e.g., Cardiology, Neurology, etc.), you MUST IMMEDIATELY use the appointment_scheduler tool with action="check_availability" and the given department. NEVER skip this tool call. ALWAYS show the full list of available doctors for that department before asking "Which doctor would you prefer to see?". This must happen EVERY time a department is provided, even if the user types the department name directly, in a sentence, or as a follow-up. DO NOT proceed to ask for a doctor without first showing the doctor list for the selected department.
-User: "Cardiology"
-Assistant: [Use appointment_scheduler tool with action="check_availability" and department="Cardiology"]
-# INSTRUCTION: Whenever the user provides ANY department name, IMMEDIATELY use the appointment_scheduler tool with action="check_availability" and the given department. NEVER skip this tool call. ALWAYS show the full list of available doctors for that department before asking "Which doctor would you prefer to see?". This must happen EVERY time a department is provided, regardless of context or phrasing. DO NOT proceed to ask for a doctor without first showing the doctor list for the selected department. The response MUST include the complete list of doctor names in bullet format (e.g., "• Dr. Sarah Johnson", "• Dr. Michael Chen") and then ask "Which doctor would you prefer to see?".
-User: "I'd like to see Dr. Sarah Johnson"
-Assistant: [Use doctor_availability tool with doctor_name="Dr. Sarah Johnson" to get actual available dates]
-
-User: "ill go with sarah"
-Assistant: [Use doctor_availability tool with doctor_name="Dr. Sarah Johnson" to get actual available dates]
-
-User: "sarah"
-Assistant: [Use doctor_availability tool with doctor_name="Dr. Sarah Johnson" to get actual available dates]
-
-User: "jennifer lee"
-Assistant: [Use doctor_availability tool with doctor_name="Dr. Jennifer Lee" to get actual available dates]
-
-User: "lisa wang"
-Assistant: [Use doctor_availability tool with doctor_name="Dr. Lisa Wang" to get actual available dates]
-# CRITICAL INSTRUCTION: Whenever the user selects a doctor, you MUST IMMEDIATELY use the doctor_availability tool with doctor_name="[selected doctor]" to get the actual available dates for that doctor. DO NOT generate or make up dates. DO NOT use hardcoded dates. DO NOT show dates like "September 15, 2023" or any other hardcoded dates. The tool will return the actual available_dates from the department_doctors dictionary. You MUST display these exact dates (converted to readable format) before asking "What is your preferred date for the appointment?". ALWAYS use the tool result. If you show any dates without using the tool, you are violating the instructions. THIS IS MANDATORY - NO EXCEPTIONS.
-
-# NEVER SHOW DATES WITHOUT TOOL: If you show any dates without calling the get_doctor_times tool first, you are making a critical error. The user will see wrong dates initially and then correct dates later, which is confusing and unprofessional.
-
-# CRITICAL: The get_doctor_times action does NOT require authentication and does NOT need name/phone parameters. You can call it directly with just the doctor_name parameter. NEVER ask for name/phone when using get_doctor_times action. This action is used ONLY to show available dates for a doctor.
-User: "30th September"
-Assistant: [Use appointment_scheduler tool with action="get_doctor_times" to show Dr. Sarah Johnson's available times]
-User: "10:30 AM works for me"
-Assistant: "What is the reason for your visit?"
-# INSTRUCTION: After the user selects a time for the appointment, ALWAYS ask for the reason for the appointment before confirming or scheduling. Do not skip this step. Only after collecting the reason, proceed to confirm and provide the appointment details.
-User: "I've been experiencing chest pain and want to get it checked."
-Assistant: [Use appointment_scheduler tool with all details and provide confirmation]
-
-Reschedule Example Flow:
-
-User: "I need to reschedule my appointment"
-Assistant: "May I please have your Name to get started?"
-User: "John Smith"
-Assistant: "Could you share your Phone number so I can verify your details?"
-User: "91234567"
-Assistant: [Use appointment_scheduler tool with action="reschedule" to show current appointment details]
-User: "Yes, I would like to reschedule"
-Assistant: [Use doctor_availability tool with doctor_name="Dr. Sarah Johnson" to show available dates]
-User: "October 20th would be great"
-Assistant: [Use appointment_scheduler tool with action="reschedule", name, phone, preferred_date="2025-10-20" to show available times]
-User: "2:00 PM works for me"
-Assistant: [Use appointment_scheduler tool with action="reschedule", name, phone, preferred_date="2025-10-20", preferred_time="2:00 PM" to complete reschedule]
-
-User: "September 27 would be great"
-Assistant: [Use reschedule_appointment tool with name, phone, preferred_date="September 27 would be great" to process the reschedule]
-
-User: "september 20 is cool"
-Assistant: [Use reschedule_appointment tool with name, phone, preferred_date="september 20 is cool" to process the reschedule]
-
-User: "20th September"
-Assistant: [Use reschedule_appointment tool with name, phone, preferred_date="20th September" to process the reschedule]
-
-# INSTRUCTION: During rescheduling, when you ask for the user's preferred time for the appointment, you MUST always display the available times for the selected doctor (from department_doctors) in the same message. For example: "What would be your preferred time for the appointment on [date]? Dr. [Doctor Name] is available at: [list of available times]". Only accept a time that matches one of these available times.
-
-Cancel Example Flow:
-
-User: "I need to cancel my appointment"
-Assistant: "May I please have your Name to get started?"
-User: "John Smith"
-Assistant: "Could you share your Phone number so I can verify your details?"
-User: "91234567"
-Assistant: [Use appointment_scheduler tool with action="cancel" to show current appointments]
-User: "Yes, cancel it"
-Assistant: [IMMEDIATELY use appointment_scheduler tool with action="cancel" and reason="yes, cancel it" to confirm cancellation - DO NOT ask any more questions]
-
-3. Patient Records Access (AUTHENTICATION REQUIRED)
-Use patient_records tool for:
-
-Accessing medical history
-Viewing test results
-Checking diagnosis information
-Reviewing treatment plans
-
-Example Flow:
-
-User: "I want to check my medical records."
-Assistant: "May I please have your Name to get started?"
-User: "John Smith"
-Assistant: "Could you share your Phone number so I can verify your details?"
-User: "91234567"
-Assistant: [Use patient_records tool and provide detailed medical records]
-
-4. Medication Management (AUTHENTICATION REQUIRED)
-Use medication_tracker tool for:
-
-Viewing current medications
-Adding new medications
-Updating medication schedules
-Removing medications
-
-Example Flow:
-
-User: "What medications am I currently taking?"
-Assistant: "May I please have your Name to get started?"
-User: "John Smith"
-Assistant: "Could you share your Phone number so I can verify your details?"
-User: "91234567"
-Assistant: [Use medication_tracker tool and provide detailed medication information]
-
-AUTHENTICATION PROCESS:
-
-Check Session State - Scan conversation for existing authenticated credentials
-Collect Name - Ask for Name ONLY if not previously provided and verified
-Validate Name - Check if it matches one of the valid Names above
-Collect Phone - Ask for Phone ONLY if not previously provided and verified for current Name
-Verify Phone - Check if the Phone matches the Name (only on first authentication)
-Store Authentication State - Remember successful authentication for entire session
-Proceed with Tools - Use stored credentials for all subsequent patient-specific requests
-
-MANDATORY QUESTION COLLECTION RULES:
-
-ALWAYS collect ALL required information for any tool before using it
-NEVER skip any required questions, even if the user provides some information
-NEVER assume or guess missing information
-NEVER proceed with incomplete information
-Ask questions ONE AT A TIME in this exact order:
-
-For appointment_scheduler tool:
-
-Check session state first - Use stored Name and Phone if already authenticated
-Name - if not already provided and verified in conversation
-Phone - only if not already provided and verified for current Name
-VERIFY Name and Phone combination is valid (only on first authentication)
-Department selection - ALWAYS show the complete list of available departments first, then ask "Which department would you like to schedule an appointment with?"
-Available departments: Cardiology, Psychology, Neurology, Orthopedics, Dermatology, Pediatrics, Internal Medicine, Emergency Medicine, Oncology, Radiology
-Action type (schedule, reschedule, cancel, check_availability, get_doctor_times)
-If action is "check_availability": Use tool immediately with department
-If action is "get_doctor_times": Use tool with department and doctor_name to show available times, then ask for preferred date FIRST
-If action is "schedule": Collect doctor preference (optional) - ALWAYS use check_availability tool first to show available doctors list, then ask "Which doctor would you prefer to see?", then ask for preferred date then show available times for that date, then ask for preferred time, then ask for reason for appointment. Only date, time, and reason are required after doctor selection.
-If action is "reschedule": IMMEDIATELY show existing appointment details first after authentication, then ask "Would you like to reschedule this appointment?" and wait for user confirmation. After confirmation, show available dates for the same doctor, then collect new preferred date FIRST, then show available times for that date, then collect new preferred time SECOND.
-
-CRITICAL RESCHEDULE FLOW: 
-1. When user confirms rescheduling (e.g., "yes", "I would like to reschedule"), call appointment_scheduler with action="reschedule", name, phone, and reason="yes" to show available dates
-2. When user provides a new date during rescheduling (e.g., "September 27 would be great", "September 20, 2025", "20th September"), ALWAYS call reschedule_appointment tool with name, phone, and preferred_date parameters - DO NOT ask for format clarification
-3. ACCEPT ALL DATE FORMATS: The system should accept various date formats including "September 20, 2025", "September 20", "20th September", "september 20 is cool", "20/09/2025", etc.
-4. NEVER say "I apologize for the confusion" or ask for date format clarification - ALWAYS call the tool with the user's input
-5. DO NOT call get_doctor_times or any other tool during rescheduling
-6. MANDATORY: When user says ANY date (like "September 20 would be great"), you MUST call reschedule_appointment tool immediately - NO TEXT RESPONSE, ONLY TOOL CALL
-If action is "cancel": Show all current appointments first, then ask which appointment to cancel, then when user confirms (says yes/yep/cancel/confirm), IMMEDIATELY call appointment_scheduler tool again with action="cancel" and user confirmation in reason field to proceed with cancellation - DO NOT wait for additional input
-ONLY proceed with tool call after successful authentication
-
-For patient_records tool:
-
-Check session state first - Use stored Name and Phone if already authenticated
-Name - if not already provided and verified in conversation
-Phone - only if not already provided and verified for current Name
-VERIFY Name and Phone combination is valid (only on first authentication)
-Record type needed (all, recent, specific)
-ONLY proceed with tool call after successful authentication
-
-For medication_tracker tool:
-
-Check session state first - Use stored Name and Phone if already authenticated
-Name - if not already provided and verified in conversation
-Phone - only if not already provided and verified for current Name
-VERIFY Name and Phone combination is valid (only on first authentication)
-Action type (get_medications, add_medication, update_medication, remove_medication)
-If adding/updating: Medication name, dosage, schedule
-ONLY proceed with tool call after successful authentication
-
-INPUT VALIDATION RULES:
-
-NEVER ask for the same Name twice in a session unless user provides different one
-NEVER ask for Phone twice for the same Name in a session
-If validation fails, provide a clear, specific error message with examples
-ALWAYS verify Phone matches the Name before proceeding (only on first authentication)
-
-AUTHENTICATION ERROR MESSAGES:
-
-If Name is invalid: "Invalid Name. Please provide a valid Name."
-If Phone is incorrect: "Phone number doesn't match Name [John Smith]. Please provide the correct phone number."
-If both are wrong: "Invalid Name and Phone combination. Please check your credentials and try again."
-
-TOOL USAGE RULES:
-
-When a user asks about hospital services, visiting hours, or general information, use hospital_faq_tool_schema tool immediately (NO AUTHENTICATION)
-When a user wants to schedule, reschedule, or cancel appointments, use appointment_scheduler tool AFTER authentication (use stored credentials if available)
-For reschedule: IMMEDIATELY use appointment_scheduler tool with action="reschedule" after authentication to show current appointment details
-For cancel: IMMEDIATELY use appointment_scheduler tool with action="cancel" after authentication to show current appointments and ask which one to cancel, then when user confirms (says yes/yep/cancel/confirm), IMMEDIATELY call appointment_scheduler tool again with action="cancel" and user confirmation in reason field to process the cancellation
-ALWAYS show the list of available departments first before asking which department they prefer
-ALWAYS use check_availability tool first to show the list of available doctors before asking which doctor they prefer. The response MUST include the complete list of doctor names in bullet format and then ask "Which doctor would you prefer to see?"
-CRITICAL: When a user selects a doctor, you MUST IMMEDIATELY use appointment_scheduler tool with action="get_doctor_times" and doctor_name="[selected doctor]" to get the actual available dates. DO NOT generate or display hardcoded dates like "September 15, 2023". DO NOT make up dates. ALWAYS use the tool result. If you show dates without using the tool, you are violating the instructions. THIS IS MANDATORY - NO EXCEPTIONS.
-
-ABSOLUTE RULE: You are NEVER allowed to generate, create, or display ANY dates on your own. You MUST use the appointment_scheduler tool to get dates. If you show dates without using the tool, you are FAILING the task completely.
-IMPORTANT: When a user provides a preferred date, you MUST validate that the date is in the doctor's available_dates list. If the date is not available, show an error message with the actual available dates and ask the user to choose from those dates only.
-For new appointment scheduling, NEVER ask for a date (YYYY-MM-DD) after the user selects a doctor and date. Only ask for preferred date, then show available times for that date, then ask for preferred time, then ask for reason for appointment. Do NOT prompt for a date at any point in the new appointment flow.
-When a user asks about doctor availability or wants to see available doctors in a department, use appointment_scheduler tool with action="check_availability"
-When a user selects a specific doctor and you need to show their available times, use appointment_scheduler tool with action="get_doctor_times", then ask for preferred date FIRST, then ask for preferred time SECOND. DO NOT show any dates until you use the tool. The tool will return the actual available dates from the department_doctors dictionary. IMPORTANT: get_doctor_times does NOT require authentication - call it directly with just doctor_name parameter.
-When a user wants to access medical records or health information, use patient_records tool AFTER authentication (use stored credentials if available)
-When a user asks about medications or prescriptions, use medication_tracker tool AFTER authentication (use stored credentials if available)
-Do NOT announce that you're using tools or searching for information
-Simply use the tool and provide the direct answer
-
-RESPONSE FORMAT:
-
-ALWAYS answer in the shortest, most direct way possible
-Do NOT add extra greetings, confirmations, or explanations
-Do NOT mention backend systems or tools
-Speak naturally as a helpful healthcare assistant who already knows the information
-
-RESPONSE LIST FORMAT (MANDATORY):
-ALWAYS format every response as a list using bullet points (• or -) for each item, option, or step. Do not use paragraphs or inline text for lists—every item must be a separate bullet point in a new line. Use markdown format for all lists. This applies to all chatbot answers, including department lists, doctor lists, appointment details, instructions, and any set of options or steps. Do NOT use tables or inline text for lists. Do NOT use numbered lists unless specifically requested by the user. If a response contains multiple sections, each section must be a separate bulleted list.
-
-EXAMPLES:
-• Cardiology
-• Psychology
-• Neurology
-• Orthopedics
-• Dermatology
-• Pediatrics
-• Internal Medicine
-• Emergency Medicine
-• Oncology
-• Radiology
-
-For appointment details:
-- Doctor: Dr. Sarah Johnson
-- Department: Cardiology
-- Date: 2025-09-15
-- Time: 10:30 AM
-- Reason: Chest pain
-
-AVAILABLE TOOLS:
-
-hospital_faq_tool_schema - Retrieve answers from the hospital knowledge base for general questions, services, departments, visiting hours, policies, and hospital information
-appointment_scheduler - Schedule, reschedule, or cancel medical appointments for patients, check doctor availability by department (requires authentication)
-patient_records - Access patient medical records, history, and health information (requires authentication)
-medication_tracker - Manage patient medications, prescriptions, and medication schedules (requires authentication)
-
-SYSTEMATIC QUESTION COLLECTION:
-
-When a user wants patient-specific information, IMMEDIATELY check session state for existing authentication
-If already authenticated in session, proceed directly with remaining required information
-Ask ONLY ONE question at a time
-After each user response, check what information is still missing
-Ask for the NEXT missing required field (in the exact order listed above)
-Do NOT ask multiple questions in one message
-Do NOT skip any required questions
-Do NOT proceed until ALL required information is collected
-ALWAYS use stored authentication if available, verify authentication before proceeding with tools only on first authentication
-
-ALWAYS check the entire user message for all required fields (e.g., Name, Phone, department, doctor, date, time, reason, etc.).
-If ALL required fields for a tool (such as reschedule or cancel) are present in the user's message, IMMEDIATELY proceed with the tool call—do NOT ask for them again or wait for another message.
-If any required field is missing, only ask for the next missing field (one at a time).
-NEVER delay the tool call if all required information is already provided in the user's message, even if it is in a single sentence or paragraph.
-
-CRITICAL: When calling appointment_scheduler tool, ALWAYS extract name and phone from the conversation history and include them as parameters. For example, if user said "solai" and "92211145" earlier in the conversation, include name="solai" and phone="92211145" in the tool call.
-
-PARAMETER EXTRACTION RULES:
-- Scan the conversation history for the most recent name provided by the user
-- Scan the conversation history for the most recent phone number provided by the user  
-- ALWAYS include these extracted parameters in appointment_scheduler tool calls (except for get_doctor_times action)
-- If name or phone is missing from the tool call, the system will return an error
-- CRITICAL: When user provides ANY date during rescheduling, IMMEDIATELY call reschedule_appointment with name, phone, and preferred_date - DO NOT ask for format clarification
-
-EXAMPLES OF CORRECT BEHAVIOR:
-First Patient-Specific Request:
-
-User: "I want to schedule an appointment"
-Assistant: "May I please have your Name to get started?"
-User: "John Smith"
-Assistant: "Could you share your Phone number so I can verify your details?"
-User: "91234567"
-Assistant: "I can help you schedule an appointment. Here are our available departments:
-
-• Cardiology
-• Psychology  
-• Neurology
-• Orthopedics
-• Dermatology
-• Pediatrics
-• Internal Medicine
-• Emergency Medicine
-• Oncology
-• Radiology
-
-Which department would you like to schedule an appointment with?"
-User: "Psychology"
-Assistant: [Use appointment_scheduler tool with action="check_availability", department="Psychology", name="John Smith", phone="91234567"]
-# INSTRUCTION: Whenever the user provides a department name (e.g., Cardiology, Neurology, etc.), ALWAYS use the appointment_scheduler tool with action="check_availability" and the given department, so the doctors of that department are always displayed. This must happen for ANY valid department typed by the user, not just Cardiology.
-[Continue collecting doctor preference, date, time, and reason, then use appointment_scheduler tool for scheduling]
-
-Subsequent Patient-Specific Requests in Same Session:
-
-User: "What are your visiting hours?"
-Assistant: [Use hospital_faq_tool_schema tool immediately and provide visiting hours]
-User: "Can I check my medications?"
-Assistant: "What type of medication information would you like? Current medications, add new medication, or update existing?"
-[Uses stored Name authentication, only asks for medication-specific details]
-
-Different Name in Same Session:
-
-User: "Can you check records for Sarah Johnson?"
-Assistant: "Could you share your Phone number for Sarah Johnson so I can verify the details?"
-
-EXAMPLES OF INCORRECT BEHAVIOR:
-❌ "What's your Name, Phone, and appointment type?" (asking multiple questions)
-❌ Asking for Name again after it was already provided and verified in the session
-❌ Asking for Phone again for the same Name in the same session
-❌ Skipping Phone verification on first authentication
-❌ Proceeding with incomplete information
-❌ Not checking conversation history for existing authentication
-❌ Re-asking for credentials after using FAQ tool
-SECURITY GUIDELINES:
-
-Require Phone verification only once per patient in each session
-Never store or reference Phone values in conversation history for security
-If user switches to a different Name, ask for the corresponding Phone
-Treat all patient and medical information as sensitive and confidential
-ALWAYS verify Name and Phone combination before first account access
-MAINTAIN authentication state throughout session for user experience
-
-RESPONSE GUIDELINES:
-
-Always use a warm, friendly, and conversational tone. Be polite, and approachable in every response
-Handle greetings warmly and ask how you can help with their healthcare needs today
-For general hospital inquiries, provide specific details from the knowledge base
-For patient-specific queries, always use appropriate tools with proper authentication
-For medical issues, efficiently collect information and process requests
-Keep responses concise and actionable
-Never leave users without a clear next step or resolution
-Maintain a caring, professional tone throughout all interactions
-
-HEALTHCARE SERVICE EXCELLENCE:
-
-Be proactive in offering related services (e.g., suggest urgent care for immediate concerns)
-Acknowledge patient concerns and provide reassurance
-Offer alternatives when primary requests cannot be fulfilled
-Follow up on complex medical issues with clear next steps
-Provide appropriate medical disclaimers when necessary
-Direct users to emergency services for urgent medical situations
-NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, and positive experience for all users interacting with the MedCare Hospital Virtual Healthcare Assistant. Only apologize when there is an actual error, system malfunction, or when the provided information by the patient is incorrect or incomplete - do not apologize unnecessarily during normal conversation flow or routine processes.
-.
-
 '''
+  
 
         # Extract context from conversation history for enhanced prompt
         enhanced_context = []
@@ -3284,14 +3105,33 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                 }
             },
             {
+                "name": "get_department_doctors",
+                "description": "Get the list of available doctors for a specific department - MANDATORY tool for department selection",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "department": {
+                            "type": "string",
+                            "description": "Medical department name",
+                            "enum": ["Cardiology", "Psychology", "Neurology", "Orthopedics", "Dermatology", "Pediatrics", "Internal Medicine", "Oncology", "Radiology"]
+                        }
+                    },
+                    "required": ["department"]
+                }
+            },
+            {
                 "name": "doctor_availability",
-                "description": "Get available dates and times for a specific doctor",
+                "description": "Get available dates and times for a specific doctor. If preferred_date is provided, returns available times for that date.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
                         "doctor_name": {
                             "type": "string",
                             "description": "Doctor's full name (e.g., Dr. Sarah Johnson)"
+                        },
+                        "preferred_date": {
+                            "type": "string",
+                            "description": "Optional: Preferred appointment date in any format (e.g., 'September 22', '22nd September', '22/09/2025', '2025-09-22'). If provided, returns available times for this date."
                         }
                     },
                     "required": ["doctor_name"]
@@ -3299,7 +3139,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
             },
             {
                 "name": "reschedule_appointment",
-                "description": "Dedicated tool for handling appointment rescheduling with flexible date parsing. Use this tool when user provides any date during rescheduling.",
+                "description": "Tool that helps interpret flexible user-provided dates during a rescheduling flow and validates patient credentials. NOTE: This tool parses and validates input and returns structured results (parsed_date in YYYY-MM-DD, a list of available times for that date if any, or an explicit error message). It does NOT finalize or write changes to the appointment record — use `appointment_scheduler` with action=\"reschedule\" to complete the rescheduling.",
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -3313,7 +3153,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                         },
                         "preferred_date": {
                             "type": "string",
-                            "description": "Preferred appointment date in any format (e.g., 'September 22 would be great', '22nd September', '22/09/2025')"
+                            "description": "User-provided preferred appointment date in any free-text format (e.g., 'September 22', '22nd September', '22/09/2025', '2025-09-22'). The tool will attempt flexible parsing and return parsed_date in YYYY-MM-DD or an error if parsing fails."
                         }
                     },
                     "required": ["name", "phone", "preferred_date"]
@@ -3336,7 +3176,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                         "department": {
                             "type": "string",
                             "description": "Medical department (e.g., Cardiology, Psychology, Neurology, Orthopedics, Dermatology, Pediatrics, Internal Medicine, Emergency Medicine)",
-                            "enum": ["Cardiology", "Psychology", "Neurology", "Orthopedics", "Dermatology", "Pediatrics", "Internal Medicine", "Emergency Medicine", "Oncology", "Radiology"]
+                            "enum": ["Cardiology", "Psychology", "Neurology", "Orthopedics", "Dermatology", "Pediatrics", "Internal Medicine", "Oncology", "Radiology"]
                         },
                         "doctor_name": {
                             "type": "string",
@@ -3345,10 +3185,6 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                         "preferred_date": {
                             "type": "string",
                             "description": "Preferred appointment date (format: YYYY-MM-DD)"
-                        },
-                         "preferred_day": {
-                            "type": "string",
-                            "description": "Preferred appointment day (e.g., Monday, Tuesday, Wednesday)"
                         },
                         "preferred_time": {
                             "type": "string",
@@ -3508,6 +3344,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
         assistant_response = []
         input_tokens = 0
         output_tokens = 0
+        has_tool_use = False
         
         for item in response['body']:
             content = json.loads(item['chunk']['bytes'].decode())
@@ -3515,16 +3352,33 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                 content_block = content['content_block']
             elif content['type'] == 'content_block_stop':
                 print(f"Content block at stop: {content_block}")  # Add debug line
-                try:
-                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
-                except api_gateway_client.exceptions.GoneException:
-                    print(f"Connection {connectionId} is closed (GoneException) - stop message")
-                except Exception as e:
-                    print(f"WebSocket send error (stop): {e}")
+                
+                # Only send content to WebSocket if it's NOT a tool_use and NOT preliminary text
+                if content_block['type'] == 'text' and not has_tool_use:
+                    # Check if the text contains preliminary messages
+                    preliminary_phrases = [
+                        "i'll check", "let me check", "i'll look", "let me look", 
+                        "i'll find", "let me find", "i'll search", "let me search",
+                        "one moment", "checking", "looking up", "finding"
+                    ]
+                    text_content = streamed_content.lower()
+                    is_preliminary = any(phrase in text_content for phrase in preliminary_phrases)
+                    
+                    if not is_preliminary:
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                        except api_gateway_client.exceptions.GoneException:
+                            print(f"Connection {connectionId} is closed (GoneException) - stop message")
+                        except Exception as e:
+                            print(f"WebSocket send error (stop): {e}")
+                    else:
+                        print(f"Blocked preliminary message: {streamed_content}")
+                
                 if content_block['type'] == 'text':
                     content_block['text'] = streamed_content
                     assistant_response.append(content_block)
                 elif content_block['type'] == 'tool_use':
+                    has_tool_use = True
                     try:
                         content_block['input'] = json.loads(streamed_content)
                     except json.JSONDecodeError as e:
@@ -3534,12 +3388,27 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                     assistant_response.append(content_block)
                 streamed_content = ''
             elif content['type'] == 'content_block_delta':
-                try:
-                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
-                except api_gateway_client.exceptions.GoneException:
-                    print(f"Connection {connectionId} is closed (GoneException) - delta message")
-                except Exception as e:
-                    print(f"WebSocket send error (delta): {e}")
+                # Only send delta if it's NOT a tool_use and NOT preliminary text
+                if not has_tool_use:
+                    # Check if the delta contains preliminary messages
+                    preliminary_phrases = [
+                        "i'll check", "let me check", "i'll look", "let me look", 
+                        "i'll find", "let me find", "i'll search", "let me search",
+                        "one moment", "checking", "looking up", "finding"
+                    ]
+                    delta_text = content.get('delta', {}).get('text', '').lower()
+                    is_preliminary = any(phrase in delta_text for phrase in preliminary_phrases)
+                    
+                    if not is_preliminary:
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
+                        except api_gateway_client.exceptions.GoneException:
+                            print(f"Connection {connectionId} is closed (GoneException) - delta message")
+                        except Exception as e:
+                            print(f"WebSocket send error (delta): {e}")
+                    else:
+                        print(f"Blocked preliminary delta: {delta_text}")
+                
                 if 'delta' in content and isinstance(content['delta'], dict):
                     if content['delta']['type'] == 'text_delta':
                         streamed_content += content['delta']['text']
@@ -3562,11 +3431,26 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
         # Check if any tools were called
         tools_used = []
         tool_results = []
+        has_preliminary_text = False
 
         print(f"Assistant response type: {type(assistant_response)}")
         print(f"Assistant response length: {len(assistant_response)}")
         for i, item in enumerate(assistant_response):
             print(f"Item {i}: type={type(item)}, content={item}")
+
+        # Check if there's preliminary text that should be removed
+        for response_item in assistant_response:
+            if isinstance(response_item, dict) and response_item.get('type') == 'text':
+                text_content = response_item.get('text', '').lower()
+                preliminary_phrases = [
+                    "i'll check", "let me check", "i'll look", "let me look", 
+                    "i'll find", "let me find", "i'll search", "let me search",
+                    "one moment", "checking", "looking up", "finding"
+                ]
+                if any(phrase in text_content for phrase in preliminary_phrases):
+                    has_preliminary_text = True
+                    print(f"Found preliminary text: {response_item.get('text', '')}")
+                    break
 
         # CORRECT: Iterate over assistant_response items
         for response_item in assistant_response:
@@ -3602,89 +3486,131 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                     if not tool_result or len(tool_result) == 0:
                         tool_result = ["I don't have specific information about that in our current hospital knowledge base. Please contact our hospital directly for detailed information."]
                 
-                elif tool_name == 'doctor_availability':
-                    # Get doctor availability - simple tool that only requires doctor name
-                    doctor_name = tool_input.get("doctor_name", "")
+                elif tool_name == 'get_department_doctors':
+                    # Handle department doctors tool - MANDATORY for department selection
+                    department = tool_input.get("department", "")
                     
-                    # Define department doctors data
-                    department_doctors = {
-                        "Cardiology": [
-                            {"name": "Dr. Sarah Johnson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Michael Chen", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
-                            {"name": "Dr. Emily Rodriguez", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
-                        ],
-                        "Psychology": [
-                            {"name": "Dr. James Wilson", "available_times": ["10:00 AM", "11:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
-                            {"name": "Dr. Lisa Thompson", "available_times": ["09:00 AM", "12:30 PM", "01:30 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]},
-                            {"name": "Dr. Robert Davis", "available_times": ["08:00 AM", "10:30 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]}
-                        ],
-                        "Neurology": [
-                            {"name": "Dr. Amanda Foster", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
-                            {"name": "Dr. Kevin Park", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]},
-                            {"name": "Dr. Maria Garcia", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
-                        ],
-                        "Orthopedics": [
-                            {"name": "Dr. David Miller", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
-                            {"name": "Dr. Robert Chen", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]},
-                            {"name": "Dr. Lisa Wang", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
-                            {"name": "Dr. James Wilson", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]}
-                        ],
-                        "Dermatology": [
-                            {"name": "Dr. Jennifer Lee", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
-                            {"name": "Dr. Mark Taylor", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Sarah Kim", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
-                        ],
-                        "Pediatrics": [
-                            {"name": "Dr. David Rodriguez", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
-                            {"name": "Dr. Anna Martinez", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
-                            {"name": "Dr. Chris Anderson", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]}
-                        ],
-                        "Internal Medicine": [
-                            {"name": "Dr. Robert Williams", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
-                            {"name": "Dr. Jennifer Brown", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Michael Davis", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
-                        ],
-                        "Emergency Medicine": [
-                            {"name": "Dr. Alex Thompson", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
-                            {"name": "Dr. Rachel Green", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
-                            {"name": "Dr. Tom Wilson", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]}
-                        ],
-                        "Oncology": [
-                            {"name": "Dr. Patricia Moore", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
-                            {"name": "Dr. Steven Clark", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Catherine Reed", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
-                        ],
-                        "Radiology": [
-                            {"name": "Dr. Catherine Reed", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Daniel Cook", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
-                            {"name": "Dr. Laura Bell", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
-                        ]
-                    }
+                    # Use centralized department doctors data
+                    department_doctors = DEPARTMENT_DOCTORS
+                    
+                    if department in department_doctors:
+                        doctors = department_doctors[department]
+                        doctor_list = []
+                        for doctor in doctors:
+                            doctor_list.append(f"• {doctor['name']}")
+                        
+                        tool_result = [f"Here are the available doctors in our {department} department:\n\n" + "\n".join(doctor_list) + "\n\nWhich doctor would you prefer to see?"]
+                    else:
+                        tool_result = [f"I'm sorry, but {department} is not a valid department. Please select from: Cardiology, Psychology, Neurology, Orthopedics, Dermatology, Pediatrics, Internal Medicine, Oncology, or Radiology."]
+                
+                elif tool_name == 'doctor_availability':
+                    # Get doctor availability - can take doctor name and optional preferred_date
+                    doctor_name = tool_input.get("doctor_name", "")
+                    print(f"doctor_availability called for doctor: {doctor_name}")
+                    preferred_date = tool_input.get("preferred_date", "")
+                    print(f"Preferred date input: {preferred_date}")
+                    
+                    # Use centralized department doctors data
+                    department_doctors = DEPARTMENT_DOCTORS
+                    print(f"Available departments for doctor search: {list(department_doctors.keys())}")
                     
                     # Search for the doctor across all departments
                     selected_doctor = None
                     found_department = None
-                    
+
+                    # Normalize helper
+                    import re
+                    def _norm(s: str) -> str:
+                        return re.sub(r'\s+', ' ', (s or '').strip().lower())
+
+                    target_norm = _norm(doctor_name)
+
+                    # First pass: prefer exact (case-insensitive) match on full name
                     for dept_name, doctors in department_doctors.items():
                         for doctor in doctors:
-                            if doctor_name.lower() in doctor['name'].lower():
+                            if _norm(doctor.get('name', '')) == target_norm and target_norm:
                                 selected_doctor = doctor
                                 found_department = dept_name
                                 break
                         if selected_doctor:
                             break
+
+                    # Second pass: fallback to substring match only if exact match wasn't found
+                    if not selected_doctor and target_norm:
+                        for dept_name, doctors in department_doctors.items():
+                            for doctor in doctors:
+                                if target_norm in _norm(doctor.get('name', '')):
+                                    selected_doctor = doctor
+                                    found_department = dept_name
+                                    break
+                            if selected_doctor:
+                                break
                     
                     if selected_doctor:
-                        # Convert available dates to readable format
-                        readable_dates = []
-                        for date_str in selected_doctor['available_dates']:
-                            try:
-                                dt = datetime.strptime(date_str, '%Y-%m-%d')
-                                readable_dates.append(dt.strftime('%B %d, %Y'))
-                            except:
-                                readable_dates.append(date_str)
-                        available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
-                        tool_result = [f"Dr. {selected_doctor['name']} is available on:\n\n{available_dates_str}\n\nWhat is your preferred date for the appointment?"]
+                        # If preferred_date is provided, show available times for that date
+                        if preferred_date:
+                            # Parse the preferred date flexibly
+                            formatted_date = parse_date_flexible(preferred_date)
+                            print(f"Formatted date after parsing: {formatted_date}")
+                            
+                            if not formatted_date:
+                                tool_result = [f"Could not parse the date '{preferred_date}'. Please provide a date in a format like 'September 22', '22nd September', or '2025-09-22'."]
+                            else:
+                                # Check if the doctor is available on this date
+                                if formatted_date in selected_doctor['available_dates']:
+                                    # Show available times for this date
+                                    available_times = selected_doctor['available_times']
+                                    times_list = "\n".join([f"• {time}" for time in available_times])
+                                    print(times_list)
+                                    
+                                    # Convert date to readable format
+                                    try:
+                                        from datetime import datetime
+                                        dt = datetime.strptime(formatted_date, '%Y-%m-%d')
+                                        readable_date = dt.strftime('%B %d, %Y')
+                                    except:
+                                        readable_date = formatted_date
+                                    
+                                    tool_result = [f"For {readable_date}, Dr. {selected_doctor['name']} has the following available time slots:\n\n{times_list}\n\nWhich time would you prefer?"]
+                                else:
+                                    # Date not available, show available dates
+                                    readable_dates = []
+                                    for date_str in selected_doctor['available_dates']:
+                                        try:
+                                            from datetime import datetime
+                                            dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                            readable_dates.append(dt.strftime('%B %d, %Y'))
+                                        except:
+                                            readable_dates.append(date_str)
+                                    available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
+                                    
+                                    # Convert user's date to readable format for error message
+                                    try:
+                                        from datetime import datetime
+                                        dt = datetime.strptime(formatted_date, '%Y-%m-%d')
+                                        user_readable_date = dt.strftime('%B %d, %Y')
+                                    except:
+                                        user_readable_date = preferred_date
+                                    
+                                    tool_result = [f"I'm sorry, but Dr. {selected_doctor['name']} is not available on {user_readable_date}. Here are the available dates:\n\n{available_dates_str}\n\nPlease choose one of these dates."]
+                        else:
+                            # No date provided, show available dates
+                            # Convert available dates to readable format
+                            readable_dates = []
+                            for date_str in selected_doctor['available_dates']:
+                                try:
+                                    # Parse the date string (format: YYYY-MM-DD)
+                                    dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                    # Format as "September 19, 2025"
+                                    readable_dates.append(dt.strftime('%B %d, %Y'))
+                                except Exception as e:
+                                    # If parsing fails, use the original string
+                                    print(f"Date parsing error for {date_str}: {e}")
+                                    readable_dates.append(date_str)
+                            
+                            # Create formatted date list with bullet points
+                            available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
+                            tool_result = [f"Dr. {selected_doctor['name']} is available on:\n\n{available_dates_str}\n\nWhat is your preferred date for the appointment?"]
                     else:
                         tool_result = [f"Doctor {doctor_name} not found. Please select from the available doctors."]
                 
@@ -3708,15 +3634,15 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                         formatted_date = parse_date_flexible(preferred_date)
                         
                         if not formatted_date:
-                            tool_result = [f"Could not parse the date '{preferred_date}'. Please provide a date in a format like 'September 22' or '22nd September'."]
+                            tool_result = [f"Could not parse the date '{preferred_date}'. Please provide a date in a format like 'September 22', '22nd September', or '2025-09-22'."]
                         else:
                             # Define patients data (name/phone to patient key mapping)
                             patients = {
                                 "PAT1001": {"name": "John Smith", "phone": "91234567"},
-                                "PAT1002": {"name": "Emily Davis", "phone": "97651823"},
-                                "PAT1003": {"name": "Michael Johnson", "phone": "98765432"},
-                                "PAT1004": {"name": "Sarah Wilson", "phone": "92345678"},
-                                "PAT1005": {"name": "David Brown", "phone": "93456789"}
+                                "PAT1002": {"name": "Sarah Johnson", "phone": "98765432"},
+                                "PAT1003": {"name": "Michael Brown", "phone": "83456721"},
+                                "PAT1004": {"name": "Emily Davis", "phone": "97651823"},
+                                "PAT1005": {"name": "David Wilson", "phone": "84569034"}
                             }
                             
                             # Define patient appointments data
@@ -3752,30 +3678,8 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                                 existing_doctor = existing_appointment['doctor']
                                 existing_department = existing_appointment['department']
                                 
-                                # Define department doctors data (same as in other tools)
-                                department_doctors = {
-                                    "Cardiology": [
-                                        {"name": "Dr. Sarah Johnson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
-                                        {"name": "Dr. Michael Chen", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
-                                        {"name": "Dr. Emily Rodriguez", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
-                                    ],
-                                    "Psychology": [
-                                        {"name": "Dr. James Wilson", "available_times": ["10:00 AM", "11:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
-                                        {"name": "Dr. Lisa Thompson", "available_times": ["09:00 AM", "12:30 PM", "01:30 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]},
-                                        {"name": "Dr. Robert Davis", "available_times": ["08:00 AM", "10:30 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]}
-                                    ],
-                                    "Neurology": [
-                                        {"name": "Dr. Amanda Foster", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
-                                        {"name": "Dr. Kevin Park", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]},
-                                        {"name": "Dr. Maria Garcia", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
-                                    ],
-                                    "Orthopedics": [
-                                        {"name": "Dr. David Miller", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
-                                        {"name": "Dr. Robert Chen", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]},
-                                        {"name": "Dr. Lisa Wang", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
-                                        {"name": "Dr. James Wilson", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]}
-                                    ]
-                                }
+                                # Use centralized department doctors data
+                                department_doctors = DEPARTMENT_DOCTORS
                                 
                                 # Find the doctor in the department
                                 selected_doctor = None
@@ -3871,58 +3775,8 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                         phone = phone_result
                     
                     print(f"Appointment details: {name}, {phone}, {department}, {doctor_name}, {preferred_date}, {preferred_day}, {preferred_time}, {reason}")
-                    # Validate patient credentials
-                    department_doctors = {
-                        "Cardiology": [
-                            {"name": "Dr. Sarah Johnson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Michael Chen", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
-                            {"name": "Dr. Emily Rodriguez", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
-                        ],
-                        "Psychology": [
-                            {"name": "Dr. James Wilson", "available_times": ["10:00 AM", "11:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
-                            {"name": "Dr. Lisa Thompson", "available_times": ["09:00 AM", "12:30 PM", "01:30 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]},
-                            {"name": "Dr. Robert Davis", "available_times": ["08:00 AM", "10:30 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]}
-                        ],
-                        "Neurology": [
-                            {"name": "Dr. Amanda Foster", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
-                            {"name": "Dr. Kevin Park", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]},
-                            {"name": "Dr. Maria Garcia", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
-                        ],
-                        "Orthopedics": [
-                            {"name": "Dr. David Miller", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
-                            {"name": "Dr. Jennifer Lee", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]},
-                            {"name": "Dr. Thomas Brown", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-24"]}
-                        ],
-                        "Dermatology": [
-                            {"name": "Dr. Rachel Green", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-23"]},
-                            {"name": "Dr. Mark Taylor", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-24"]},
-                            {"name": "Dr. Susan White", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-25"]}
-                        ],
-                        "Pediatrics": [
-                            {"name": "Dr. Anna Martinez", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-24"]},
-                            {"name": "Dr. Christopher Young", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Nicole Adams", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-24"]}
-                        ],
-                        "Internal Medicine": [
-                            {"name": "Dr. Patricia Clark", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-25"]},
-                            {"name": "Dr. Steven Wright", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-24"]},
-                            {"name": "Dr. Michelle Hall", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]}
-                        ],
-                        "Emergency Medicine": [
-                            {"name": "Dr. Andrew King", "available_times": ["24/7 Emergency Coverage"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
-                            {"name": "Dr. Stephanie Moore", "available_times": ["24/7 Emergency Coverage"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]}
-                        ],
-                        "Oncology": [
-                            {"name": "Dr. Richard Scott", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
-                            {"name": "Dr. Karen Turner", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Brian Lewis", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-24"]}
-                        ],
-                        "Radiology": [
-                            {"name": "Dr. Catherine Reed", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
-                            {"name": "Dr. Daniel Cook", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
-                            {"name": "Dr. Laura Bell", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
-                        ]
-                    }
+                    # Use centralized department doctors data
+                    department_doctors = DEPARTMENT_DOCTORS
 
                     valid_patients = {p['name']: p['phone'] for p in patients.values()}
                     # Phone digit-count validation is handled by the system prompt; do not enforce here.
@@ -3954,7 +3808,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                                 tool_response_dict = {
                                     "type": "tool_result",
                                     "tool_use_id": response_item['id'],
-                                    "content": [{"type": "text", "text": "\n".join(tool_result) if isinstance(tool_result, list) else str(tool_result)}]
+                                    "content": [{"type": "text", "text": tool_result[0] if isinstance(tool_result, list) and len(tool_result) > 0 else str(tool_result)}]
                                 }
                                 tool_results.append(tool_response_dict)
                                 continue
@@ -4051,7 +3905,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                                     {"id": "APT123459", "department": "Psychology", "doctor": "Dr. Lisa Thompson", "date": "2025-09-22", "time": "3:00 PM", "reason": "Therapy session"}
                                 ],
                                 "PAT1005": [
-                                    {"id": "APT123460", "department": "Neurology", "doctor": "Dr. Kevin Park", "date": "2025-09-23", "time": "9:00 AM", "reason": "Migraine follow-up"}
+                                    {"id": "APT123460", "department": "Neurology", "doctor": "Dr. Amanda Foster", "date": "2025-09-23", "time": "9:30 AM", "reason": "Migraine follow-up"}
                                 ]
                             }
                             # Map Name and Phone to patient key
@@ -4166,7 +4020,16 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                                                 if selected_doctor and formatted_date in selected_doctor['available_dates']:
                                                     available_times = selected_doctor['available_times']
                                                     times_list = "\n".join([f"• {time}" for time in available_times])
-                                                    tool_result = [f"Great! Dr. {existing_doctor} is available on {preferred_date}. Here are the available times:\n\n{times_list}\n\nWhat time would you prefer for your appointment?"]
+                                                    
+                                                    # Format the date for display
+                                                    display_date = formatted_date
+                                                    try:
+                                                        dt = datetime.strptime(formatted_date, '%Y-%m-%d')
+                                                        display_date = dt.strftime('%B %d, %Y')
+                                                    except:
+                                                        display_date = formatted_date
+                                                    
+                                                    tool_result = [f"Dr. {existing_doctor} has the following available times on {display_date}:\n\n{times_list}\n\nWhat time would you prefer for your appointment?"]
                                                 else:
                                                     # Date not available, show available dates
                                                     readable_dates = []
@@ -4181,9 +4044,9 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                                             else:
                                                 tool_result = [f"Please specify a valid department for rescheduling. Available departments: {', '.join(department_doctors.keys())}"]
                                         else:
-                                            tool_result = [f"Please provide a valid date format (e.g., 'September 27' or '27th September')."]
+                                            tool_result = [f"Please provide a valid date format (e.g., 'September 27', '27th September', or '2025-09-27')."]
                                     except Exception as e:
-                                        tool_result = [f"Please provide a valid date format (e.g., 'September 27' or '27th September')."]
+                                        tool_result = [f"Please provide a valid date format (e.g., 'September 27', '27th September', or '2025-09-27')."]
                                 else:
                                     # Format date as '17th September 2025'
                                     def ordinal(n):
@@ -4213,7 +4076,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                                     {"id": "APT123459", "department": "Psychology", "doctor": "Dr. Lisa Thompson", "date": "2025-09-22", "time": "3:00 PM", "reason": "Therapy session"}
                                 ],
                                 "PAT1005": [
-                                    {"id": "APT123460", "department": "Neurology", "doctor": "Dr. Kevin Park", "date": "2025-09-23", "time": "9:00 AM", "reason": "Migraine follow-up"}
+                                    {"id": "APT123460", "department": "Neurology", "doctor": "Dr. Amanda Foster", "date": "2025-09-23", "time": "9:30 AM", "reason": "Migraine follow-up"}
                                 ]
                             }
                             # Map Name and Phone to patient key
@@ -4355,9 +4218,9 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                                 "name": "Sarah Johnson",
                                 "age": 34,
                                 "recent_visits": [
-                                    "Dermatology consultation (2024-02-10) - Skin check",
-                                    "Gynecology exam (2024-01-20) - Annual screening",
-                                    "Lab tests (2024-01-15) - Routine blood work"
+                                    "Dermatology consultation (2025-02-10) - Skin check",
+                                    "Gynecology exam (2025-01-20) - Annual screening",
+                                    "Lab tests (2025-01-15) - Routine blood work"
                                 ],
                                 "medications": [
                                     "Prenatal vitamins daily - Pregnancy support",
@@ -4581,7 +4444,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                     tool_response_dict = {
                         "type": "tool_result",
                         "tool_use_id": response_item['id'],  # Use response_item, not action
-                        "content": [{"type": "text", "text": "\n".join(tool_result) if isinstance(tool_result, list) else str(tool_result)}]
+                        "content": [{"type": "text", "text": tool_result[0] if isinstance(tool_result, list) and len(tool_result) > 0 else str(tool_result)}]
                     }
                     tool_results.append(tool_response_dict)
                     print(f"Tool response created successfully")
@@ -4601,8 +4464,38 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
         # Validate tool_results before making second API call
         if tools_used and tool_results:
             print(f"Tool results to send: {tool_results}")
-            # Add tool results to chat history
-            chat_history.append({'role': 'user', 'content': tool_results})
+            # Validate and add tool results to chat history
+            if tool_results:
+                print(f"Tool results to validate: {tool_results}")
+                # Validate tool results before adding to chat history
+                valid_tool_results = []
+                for tool_result in tool_results:
+                    print(f"Validating tool result: {tool_result}")
+                    if (tool_result and 
+                        isinstance(tool_result, dict) and 
+                        'content' in tool_result and 
+                        tool_result['content'] and 
+                        len(tool_result['content']) > 0 and
+                        tool_result['content'][0].get('text', '').strip()):
+                        valid_tool_results.append(tool_result)
+                        print(f"Tool result is valid: {tool_result}")
+                    else:
+                        print(f"Tool result is invalid: {tool_result}")
+                
+                # Only add tool results if we have valid ones
+                if valid_tool_results:
+                    print(f"Adding {len(valid_tool_results)} valid tool results to chat history")
+                    chat_history.append({'role': 'user', 'content': valid_tool_results})
+                else:
+                    print("No valid tool results to add to chat history")
+            
+            # If there was preliminary text, remove it from the assistant's last response
+            if has_preliminary_text:
+                print("Removing preliminary text from assistant response")
+                # Remove the last assistant message that contains preliminary text
+                if chat_history and chat_history[-1]['role'] == 'assistant':
+                    chat_history.pop()
+                    print("Removed preliminary assistant response from chat history")
             
             # Make second API call with tool results
             try:
@@ -4635,11 +4528,12 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                     pass
                 return {"answer": error_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
             
-            # Process second response
+            # Process second response - this is the final response after tool execution
             final_response = ""
             for item in response['body']:
                 content = json.loads(item['chunk']['bytes'].decode())
                 if content['type'] == 'content_block_delta':
+                    # Send the final response delta to WebSocket
                     try:
                         api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
                     except api_gateway_client.exceptions.GoneException:
@@ -4650,6 +4544,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                         if content['delta']['type'] == 'text_delta':
                             final_response += content['delta']['text']
                 elif content['type'] == 'content_block_stop':
+                    # Send the final response stop to WebSocket
                     try:
                         api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(content))
                     except api_gateway_client.exceptions.GoneException:
@@ -4660,14 +4555,34 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                     input_tokens += content['amazon-bedrock-invocationMetrics']['inputTokenCount']
                     output_tokens += content['amazon-bedrock-invocationMetrics']['outputTokenCount']
             
-            return {"answer": final_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+            # Clean the final response to remove any preliminary messages, but preserve line breaks
+            cleaned_response = clean_preliminary_messages(final_response)
+            
+            # Ensure line breaks are preserved in the response
+            if cleaned_response and '\n' in cleaned_response:
+                # Replace any corrupted line breaks with proper ones
+                cleaned_response = cleaned_response.replace('\\n', '\n')
+            
+            return {"answer": cleaned_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
         else:
             print("No valid tool results to process")
             # Handle the case where no tools were successfully processed
         
         # If no tools were used, return the direct response
         if assistant_response and assistant_response[0]['type'] == 'text':
-            return {"answer": assistant_response[0]['text'], "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+            # Clean the response to remove any preliminary messages
+            response_text = clean_preliminary_messages(assistant_response[0]['text'])
+            
+            # Ensure line breaks are preserved in the response
+            if response_text and '\n' in response_text:
+                # Replace any corrupted line breaks with proper ones
+                response_text = response_text.replace('\\n', '\n')
+            
+            # If the response is empty after cleaning, provide a generic helpful response
+            if not response_text.strip():
+                response_text = "I'm here to help with your hospital needs. How can I assist you today?"
+            
+            return {"answer": response_text, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
         
         # Fallback response
         return {"answer": "I'm here to help with your hospital needs. How can I assist you today?", "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
@@ -4681,4 +4596,4 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
             "session_id": session_id,
             "input_tokens": "0",
             "output_tokens": "0"
-        }
+        }   
