@@ -86,11 +86,11 @@ cdk bootstrap
 ---
 ### 7. Deploy the Stack
 ```bash
-cdk deploy GenAiFoundryStack
+python deploy.py
 ```
-![confirmation](./assets/confirmation_img.png)
+![Deployment Step](./assets/deployment_step.png)
 
-Press 'y' to confirm the deployment.
+Select the desired stack from the available options and press 'y' when prompted to confirm the deployment.
 
 > Deploys the defined CDK infrastructure into your AWS account. This may take several minutes. Wait until the deployment completes successfully.
 
@@ -98,7 +98,12 @@ Press 'y' to confirm the deployment.
 ---
 
 
-### 8. Get the Application URL
+### 8. Confirm Deployment
+![Deployment Confirmation](./assets/deployment_confirmation.png)
+
+Press 'Y' when prompted with the proceed message to confirm the deployment.
+
+### 9. Get the Application URL
 Navigate to the **CloudFront** service.
 * Select the newly created distribution.
 * Copy the **Domain Name** listed under **General settings**.
