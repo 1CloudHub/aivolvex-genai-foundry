@@ -812,7 +812,12 @@ class HealthcareCdkStack(Stack):
 
         # Add dependencies to ensure Knowledge Bases are created before initial sync
         initial_sync_function.node.add_dependency(healthcare_kb)
-        initial_sync_function.node.add_dependency(healthcare_kb_deploy)
+        initial_sync_function.node.add_dependency(s3deploy.BucketDeployment(
+            self, "HealthcareKBDeployment",
+            sources=[s3deploy.Source.asset("assets/healthcare")],
+            destination_bucket=self.data_bucket,
+            destination_key_prefix="kb/healthcare/"
+        ))
 
         # Create provider for initial sync
         initial_sync_provider = cr.Provider(
