@@ -920,7 +920,7 @@ def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prom
         
         # Use retrieve and generate with the knowledge base
         # Construct proper model ARN for the region
-        model_arn = f"arn:aws:bedrock:{region}::foundation-model/us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+        model_arn = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
         
         # Debug logging
         print(f"🔍 DEBUG: Using region: {region}")
