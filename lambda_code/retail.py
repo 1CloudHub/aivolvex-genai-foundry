@@ -3148,8 +3148,8 @@ def lambda_handler(event, context):
     # OpenSearch Visual Product Search Functions (defined inside lambda_handler)
     def create_opensearch_client():
         """Create and return OpenSearch client with AWS authentication"""
-        region = "us-west-2"
-        HOST = OPENSEARCH_HOST
+        region = region_used
+        HOST = OPENSEARCH_HOST.replace('https://', '').replace('http://', '')
         INDEX_NAME = OPENSEARCH_INDEX
         from opensearchpy import OpenSearch, RequestsHttpConnection
         from requests_aws4auth import AWS4Auth
@@ -3353,7 +3353,7 @@ def lambda_handler(event, context):
             }
             
             print("Searching OpenSearch for text query...")
-            response = client.search(index="visualproductsearchmod", body=body)
+            response = client.search(index=OPENSEARCH_INDEX, body=body)
             
             results = []
             for hit in response['hits']['hits']:
@@ -3422,7 +3422,7 @@ def lambda_handler(event, context):
             }
             
             print("Searching OpenSearch for image query...")
-            response = client.search(index="visualproductsearchmod", body=body)
+            response = client.search(index=OPENSEARCH_INDEX, body=body)
             
             results = []
             for hit in response['hits']['hits']:
