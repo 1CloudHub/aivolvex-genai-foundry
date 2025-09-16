@@ -686,9 +686,7 @@ class HealthcareCdkStack(Stack):
         )
 
         # Add dependencies for data access policy
-        healthcare_data_access_policy.add_dependency(bedrock_kb_role)
-        healthcare_data_access_policy.add_dependency(lambda_role)
-        healthcare_data_access_policy.add_dependency(auto_sync_lambda_role)
+
         healthcare_collection.add_dependency(healthcare_data_access_policy)
 
         # Create Lambda function to create OpenSearch indices
@@ -740,8 +738,6 @@ class HealthcareCdkStack(Stack):
             on_event_handler=healthcare_index_creator_function
         )
         
-        # Add dependency to ensure Lambda function is ready before provider is created
-        healthcare_provider.node.add_dependency(healthcare_index_creator_function)
 
         # Create custom resource to create healthcare index
         healthcare_index_creator = CustomResource(
@@ -760,8 +756,6 @@ class HealthcareCdkStack(Stack):
         healthcare_index_creator.node.add_dependency(healthcare_collection)
         # Add dependency to ensure Lambda function is ready before index creation
         healthcare_index_creator.node.add_dependency(healthcare_index_creator_function)
-        # Add dependency to ensure provider is ready before index creation
-        healthcare_index_creator.node.add_dependency(healthcare_provider)
 
         # Create both knowledge bases - POSITIONED LAST IN THE FLOW
 
@@ -784,8 +778,6 @@ class HealthcareCdkStack(Stack):
         healthcare_kb.node.add_dependency(healthcare_index_creator)
         healthcare_kb.node.add_dependency(healthcare_index_creator_function)
         healthcare_kb.node.add_dependency(healthcare_provider)
-        healthcare_kb.node.add_dependency(bedrock_kb_role)
-        healthcare_kb.node.add_dependency(healthcare_collection)
 
         # Create Auto-Sync Lambda function AFTER knowledge bases are created
         auto_sync_function = lambda_.Function(
@@ -803,7 +795,6 @@ class HealthcareCdkStack(Stack):
 
         # Add dependencies to ensure Knowledge Bases are created before Lambda
         auto_sync_function.node.add_dependency(healthcare_kb)
-        auto_sync_function.node.add_dependency(healthcare_data_access_policy)
 
         # Create a custom resource to trigger initial sync after Knowledge Base creation
         initial_sync_function = lambda_.Function(
@@ -834,8 +825,6 @@ class HealthcareCdkStack(Stack):
             on_event_handler=initial_sync_function
         )
         
-        # Add dependency to ensure initial sync function is ready before provider is created
-        initial_sync_provider.node.add_dependency(initial_sync_function)
 
         # Create custom resource to trigger initial sync
         initial_sync = CustomResource(
@@ -850,7 +839,6 @@ class HealthcareCdkStack(Stack):
         # Add dependencies for initial sync
         initial_sync.node.add_dependency(healthcare_kb)
         initial_sync.node.add_dependency(initial_sync_function)
-        initial_sync.node.add_dependency(initial_sync_provider)
 
         # Add S3 event notification to trigger auto-sync Lambda
         # Note: This is optional and will be skipped if the bucket doesn't exist or isn't accessible
@@ -867,8 +855,6 @@ class HealthcareCdkStack(Stack):
                     s3.NotificationKeyFilter(prefix="kb/healthcare/")
                 )
                 
-                # Add dependency to ensure auto-sync function is ready before S3 event notification
-                self.data_bucket.node.add_dependency(auto_sync_function)
                 print("S3 event notifications added successfully")
             except s3_client.exceptions.NoSuchBucket:
                 print(f"Warning: Bucket {s3_bucket_name} does not exist. Skipping S3 event notifications.")
