@@ -1223,7 +1223,7 @@ class RetailCdkStack(Stack):
                 "dimension": 1024,
                 "method": "nmslib",
                 "engine": "nmslib",
-                "space_type": "cosine"
+                "space_type": "cosinesmil"
             }
         )
 
