@@ -58,6 +58,8 @@ chat_history_table = os.environ['chat_history_table']
 prompt_metadata_table = os.environ['prompt_metadata_table']
 model_id = os.environ['model_id']
 KB_ID = os.environ['KB_ID']
+OPENSEARCH_HOST =os.environ['OPENSEARCH_HOST']
+OPENSEARCH_INDEX = os.environ['OPENSEARCH_INDEX']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
 RETAIL_KB_ID=os.environ["RETAIL_KB_ID"]
@@ -3147,9 +3149,10 @@ def lambda_handler(event, context):
     def create_opensearch_client():
         """Create and return OpenSearch client with AWS authentication"""
         region = "us-west-2"
-        HOST = "of7eg8ly1gkaw3uv9527.us-west-2.aoss.amazonaws.com"
-        INDEX_NAME = "visualproductsearchmod"
-        
+        HOST = OPENSEARCH_HOST
+        INDEX_NAME = OPENSEARCH_INDEX
+        from opensearchpy import OpenSearch, RequestsHttpConnection
+        from requests_aws4auth import AWS4Auth
         # Use IAM role authentication for Lambda
         import boto3
         
