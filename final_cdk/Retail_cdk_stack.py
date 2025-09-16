@@ -1624,7 +1624,7 @@ class RetailCdkStack(Stack):
             role=ec2_role,
             instance_type=ec2.InstanceType.of(
                 ec2.InstanceClass.T3,
-                ec2.InstanceSize.SMALL
+                ec2.InstanceSize.MEDIUM
             ),
             machine_image=ec2.MachineImage.latest_amazon_linux2023(),
             vpc=vpc,
