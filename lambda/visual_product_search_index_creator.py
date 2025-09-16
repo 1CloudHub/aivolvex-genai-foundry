@@ -8,6 +8,10 @@ from opensearchpy.exceptions import RequestError
 
 
 def lambda_handler(event, context):
+    dimension = 1024
+    method = 'hnsw'
+    engine = 'nmslib'
+    space_type = 'cosinesimil' 
     """
     Lambda function specifically for creating retail vector indices in OpenSearch Serverless.
     This function creates indices with the exact configuration needed for retail use cases.
