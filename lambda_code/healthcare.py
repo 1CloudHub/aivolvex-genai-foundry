@@ -849,91 +849,99 @@ def generate_retail_summary_handler(event):
         
         chat_query = f'''
         SELECT question,answer
-        FROM {schema}.{hospital_chat_history_table}    
+        FROM {schema}.{chat_history_table}    
         WHERE session_id = '{session_id}';
         '''
 
         chat_details = select_db(chat_query)
-        print("RETAIL CHAT DETAILS : ", chat_details)
+        print("HEALTHCARE CHAT DETAILS : ", chat_details)
         history = ""
+
+        if not chat_details:
+            print("No chat history found for session_id:", session_id)
+            return {
+                'statusCode': 404,
+                'error': 'No chat history found for this session',
+                'session_id': session_id
+            }
 
         for chat in chat_details:
             history1 = "Human: " + chat[0]
             history2 = "Bot: " + chat[1]
             history += "\n" + history1 + "\n" + history2 + "\n"
         
-        print("RETAIL HISTORY : ", history)
+        print("HEALTHCARE HISTORY : ", history)
         
         prompt_query = f"SELECT analytics_prompt from {schema}.{prompt_metadata_table} where id = 5;"
         prompt_response = select_db(prompt_query)
         
         prompt_template = f''' <Instruction>
-        Based on the conversation above, please provide the output in the following format:
+        Based on the healthcare conversation above, please provide the output in the following format:
         Topic:
-		- Identify the main topic of the conversation, it should be a single word topic
+		- Identify the main topic of the conversation, it should be a single word topic (e.g., Appointment, Medical, Emergency, etc.)
         Conversation Type:
         - Identify if the conversation is an Enquiry or a Complaint. If both are present, classify it as (Enquiry/Complaint).
         - Consider the emotional tone and context to determine the type.
         
         Conversation Summary Explanation:
         - Explain why you labelled the conversation as Enquiry, Complaint, or both.
-        - Highlight the key questions, concerns, or issues raised by the customer.
+        - Highlight the key questions, concerns, or issues raised by the patient/visitor.
 	-IMPORTANT: keep the summary in 2-3 lines
         
         Detailed Summary:
-        - Provide a clear summary of the conversation, capturing the customer's needs, questions, and any recurring themes.
+        - Provide a clear summary of the conversation, capturing the patient's needs, questions, and any recurring themes.
 	- IMPORTANT: keep the summary in 2-3 lines keep it short
 
         
 	
         Conversation Sentiment:
-        - Analyse overall sentiment of conversation carried out by the customer with the sales representative.
+        - Analyse overall sentiment of conversation carried out by the patient/visitor with the healthcare assistant.
 		- Analyse the tone and feelings associated within the conversation.
 		- possible values are (Positive/Neutral/Negative)
      	- Only provide the final sentiment here in this key. 
         Conversation Sentiment Generated Details:
         - Explain why you labelled the conversation sentiment as Positive/Neutral/Negative.
-        - Consider customer satisfaction, tone, and overall interaction quality.
-        - Note any frustrations, appreciation, or neutral responses expressed by the customer.
+        - Consider patient satisfaction, tone, and overall interaction quality.
+        - Note any frustrations, appreciation, or neutral responses expressed by the patient.
         
         
         Lead Sentiment:
-        - Indicate if potential sales leads are generated from the conversation (Yes/No).
+        - Indicate if potential healthcare service opportunities are generated from the conversation (Yes/No).
         
         Leads Generated Details:
         - Explain why you labelled the Lead as Yes/No.
-        - List potential leads, noting any interest in products, services, or purchases.
-        - Highlight specific customer questions, preferences, or purchase intentions that could lead to sales.
-        - Include details about product categories, price ranges, or specific items mentioned.
-        - Suggest retail-specific approaches to engage each lead based on their shopping needs and preferences.
+        - List potential healthcare service opportunities, noting any interest in appointments, treatments, or services.
+        - Highlight specific patient questions, preferences, or healthcare needs that could lead to service engagement.
+        - Include details about medical departments, appointment types, or specific healthcare services mentioned.
+        - Suggest healthcare-specific approaches to engage each lead based on their medical needs and preferences.
         
         Action to be Taken:
-        - Outline next steps for the sales representative to follow up on the retail opportunities identified.
-        - Include any necessary follow-up actions such as: product recommendations, size/color availability checks, price quotes, store visit scheduling, or promotional offers.
-        - Suggest specific retail solutions like product demonstrations, size consultations, or exclusive deals.
+        - Outline next steps for the healthcare staff to follow up on the healthcare opportunities identified.
+        - Include any necessary follow-up actions such as: appointment scheduling, medical record access, specialist referrals, or service information.
+        - Suggest specific healthcare solutions like consultation scheduling, treatment planning, or care coordination.
         
         WhatsApp Followup Creation:
-		- Craft a highly personalized follow-up WhatsApp message to engage the customer effectively as a retail sales representative.
+		- Craft a highly personalized follow-up WhatsApp message to engage the patient/visitor effectively as a healthcare representative.
 		- Ensure to provide a concise response and make it as brief as possible. Maximum 2-3 lines as it should be shown in the whatsapp mobile screen, so make the response brief.
         - Incorporate key details from the conversation script to show understanding and attentiveness (VERY IMPORTANT: ONLY INCLUDE DETAILS FROM THE CONVERSATION DO NOT HALLUCINATE ANY DETAILS).
-        - Tailor the WhatsApp message to address specific retail concerns, provide product solutions, and include a compelling call-to-action.
-        - Include retail-specific elements like product availability, special offers, store promotions, or exclusive deals.
-        - Infuse a sense of urgency or exclusivity to prompt customer response (limited stock, seasonal sales, etc.).
+        - Tailor the WhatsApp message to address specific healthcare concerns, provide medical solutions, and include a compelling call-to-action.
+        - Include healthcare-specific elements like appointment availability, medical services, health check-ups, or care coordination.
+        - Infuse a sense of care and urgency to prompt patient response (limited appointment slots, health priority, etc.).
 		- Format the WhatsApp message with real line breaks for each paragraph (not the string n). Use actual newlines to separate the greeting, body, call-to-action, and closing. 
 	
 	Follow the structure of the sample WhatsApp message below:
 	<format_for_whatsapp_message>
 
-Hi! Thanks for your interest in AnyRetail! 
+Hi! Thanks for reaching out to our Healthcare Services! 
 
-You were looking for [Product/Category]. Here's what I can offer:
+You were asking about [Healthcare Topic/Service]. Here's what we can offer:
 
-1. [Product/Offer 1]  
-2. [Product/Offer 2]
+1. [Service/Appointment 1]  
+2. [Service/Appointment 2]
 
-I can help you with [Specific Assistance - size check, availability, discount]. Just let me know your [Preference/Requirement].
+I can help you with [Specific Healthcare Assistance - appointment booking, medical records, specialist referral]. Just let me know your [Preference/Medical Requirement].
 
-Limited stock available - reach out soon!
+Your health is our priority - reach out soon!
 
 </format_for_whatsapp_message>
 	- Before providing the whatsapp response, it is very critical that you double check if its in the provided format
@@ -941,7 +949,7 @@ Limited stock available - reach out soon!
 
 <language_constraints>
 
-If the conversation history (customer questions and sales rep answers) is primarily in Tagalog, then provide the values for all JSON keys in Tagalog. Otherwise, provide the values strictly in English.
+If the conversation history (patient questions and healthcare assistant answers) is primarily in Tagalog, then provide the values for all JSON keys in Tagalog. Otherwise, provide the values strictly in English.
 If the conversation history is dominantly in Tagalog, provide the value for "Topic" in Tagalog; otherwise, provide it in English.
 Always keep the JSON keys in English exactly as specified below:
 "Topic":
@@ -1119,20 +1127,23 @@ these are the keys to be always used while returning response. Strictly do not a
         WHERE 
             session_id = '{session_id}' 
             '''
-        update_db(update_query)
+        print("HEALTHCARE UPDATE QUERY: ", update_query)
+        update_result = update_db(update_query)
+        print("HEALTHCARE UPDATE RESULT: ", update_result)
         
         return {
             "statusCode": 200,
-            "message": "Retail Summary Successfully Generated"
+            "message": "Healthcare Summary Successfully Generated",
+            "session_id": session_id
         }
         
     except Exception as e:
+        print(f"HEALTHCARE SUMMARY GENERATION ERROR: {e}")
         logger.error(f"Error in generate_retail_summary_handler: {e}")
         return {
             'statusCode': 500,
-            'body': json.dumps({
-                'error': f'Retail summary generation error: {str(e)}'
-            })
+            'error': f'Healthcare summary generation error: {str(e)}',
+            'session_id': session_id if 'session_id' in locals() else 'unknown'
         }
 
 def list_retail_summary_handler(event):
@@ -1152,7 +1163,7 @@ def list_retail_summary_handler(event):
         
         chat_query = f'''
         SELECT question,answer
-        FROM {schema}.{hospital_chat_history_table}    
+        FROM {schema}.{chat_history_table}    
         WHERE session_id = '{session_id}';
         '''
 
@@ -1167,29 +1178,38 @@ def list_retail_summary_handler(event):
         
         select_query = f'''select summary, whatsapp_content, sentiment, topic from {schema}.{CHAT_LOG_TABLE} ccl where session_id = '{session_id}';'''
         summary_details = select_db(select_query)
+        print("HEALTHCARE SUMMARY DETAILS FROM DB: ", summary_details)
         final_summary = {}
         
-        for i in summary_details:  
-            final_summary['summary'] = i[0]
-            final_summary['whatsapp_content'] = i[1]
-            final_summary['sentiment'] = i[2]
-            final_summary['Topic'] = i[3]   
+        if summary_details and len(summary_details) > 0:
+            for i in summary_details:  
+                final_summary['summary'] = i[0] if i[0] else ""
+                final_summary['whatsapp_content'] = i[1] if i[1] else ""
+                final_summary['sentiment'] = i[2] if i[2] else ""
+                final_summary['Topic'] = i[3] if i[3] else ""
+        else:
+            print("No summary details found for session_id:", session_id)
+            final_summary = {
+                'summary': 'Summary not available',
+                'whatsapp_content': 'WhatsApp content not available',
+                'sentiment': 'Neutral',
+                'Topic': 'Healthcare'
+            }
             
+        print("HEALTHCARE FINAL SUMMARY: ", final_summary)
         return {
             "statusCode": 200,
-            "body": json.dumps({
-                "transcript": history,
-                "final_summary": final_summary
-            })
+            "transcript": history,
+            "final_summary": final_summary
         }
         
     except Exception as e:
+        print(f"HEALTHCARE SUMMARY LISTING ERROR: {e}")
         logger.error(f"Error in list_retail_summary_handler: {e}")
         return {
             'statusCode': 500,
-            'body': json.dumps({
-                'error': f'Retail summary listing error: {str(e)}'
-            })
+            'error': f'Healthcare summary listing error: {str(e)}',
+            'session_id': session_id if 'session_id' in locals() else 'unknown'
         }
 
 def healthcare_chat_tool_handler(event):
@@ -1220,7 +1240,7 @@ def healthcare_chat_tool_handler(event):
         else:
             # Retrieve chat history from database
             query = f'''select question,answer 
-                    from {schema}.{hospital_chat_history_table} 
+                    from {schema}.{chat_history_table} 
                     where session_id = '{session_id}' 
                     order by created_on desc limit 20;'''
             history_response = select_db(query)
@@ -1242,7 +1262,7 @@ def healthcare_chat_tool_handler(event):
         
         # Insert into hospital_chat_history_table
         query = f'''
-                INSERT INTO {schema}.{hospital_chat_history_table}
+                INSERT INTO {schema}.{chat_history_table}
                 (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                 VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                 '''
@@ -2276,7 +2296,7 @@ Format as numbered list."""
             print("TOOL RESPONSE: ", tool_response)  
             #insert into hospital_chat_history_table
             query = f'''
-                    INSERT INTO {schema}.{hospital_chat_history_table}
+                    INSERT INTO {schema}.{chat_history_table}
                     (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                     VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                     '''
@@ -2300,7 +2320,7 @@ Format as numbered list."""
         session_id = event["session_id"]
         chat_query = f'''
         SELECT question,answer
-        FROM {schema}.{hospital_chat_history_table}    
+        FROM {schema}.{chat_history_table}    
         WHERE session_id = '{session_id}';
         '''
     
@@ -2588,7 +2608,7 @@ these are the keys to be always used while returning response. Strictly do not a
         session_id = event['session_id']
         chat_query = f'''
         SELECT question,answer
-        FROM {schema}.{hospital_chat_history_table}    
+        FROM {schema}.{chat_history_table}    
         WHERE session_id = '{session_id}';
         '''
     

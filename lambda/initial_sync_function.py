@@ -29,12 +29,14 @@ def handler(event, context):
         banking_kb_id = properties.get('banking_kb_id') or os.environ.get('BANKING_KB_ID')
         insurance_kb_id = properties.get('insurance_kb_id') or os.environ.get('INSURANCE_KB_ID')
         retail_kb_id = properties.get('retail_kb_id') or os.environ.get('RETAIL_KB_ID')
+        healthcare_kb_id = properties.get('healthcare_kb_id') or os.environ.get('HEALTHCARE_KB_ID')
         banking_ds_id = properties.get('banking_ds_id') or os.environ.get('BANKING_DS_ID')
         insurance_ds_id = properties.get('insurance_ds_id') or os.environ.get('INSURANCE_DS_ID')
         retail_ds_id = properties.get('retail_ds_id') or os.environ.get('RETAIL_DS_ID')
+        healthcare_ds_id = properties.get('healthcare_ds_id') or os.environ.get('HEALTHCARE_DS_ID')
         
-        print(f"Initial sync - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}")
-        print(f"Initial sync - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}")
+        print(f"Initial sync - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}, Healthcare KB: {healthcare_kb_id}")
+        print(f"Initial sync - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}, Healthcare DS: {healthcare_ds_id}")
         
         # Sync both knowledge bases
         sync_results = {}
@@ -71,6 +73,17 @@ def handler(event, context):
             except Exception as e:
                 print(f"Error syncing Retail Knowledge Base: {str(e)}")
                 sync_results['retail'] = {'error': str(e)}
+
+        # Sync Healthcare Knowledge Base
+        if healthcare_kb_id and healthcare_ds_id:
+            try:
+                print(f"Starting initial sync for Healthcare Knowledge Base...")
+                sync_results['healthcare'] = sync_knowledge_base(
+                    bedrock_agent, healthcare_kb_id, healthcare_ds_id, "Healthcare"
+                )
+            except Exception as e:
+                print(f"Error syncing Healthcare Knowledge Base: {str(e)}")
+                sync_results['healthcare'] = {'error': str(e)}
         
         print(f"Initial sync completed: {json.dumps(sync_results)}")
         
