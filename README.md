@@ -1,12 +1,12 @@
 # GenAI Foundry CDK Deployment Guide
 ## Overview
 **GenAI Foundry** is an AI-powered sandbox platform for banking and insurance. Powered by Generative AI with RAG-enabled conversational capabilities, it delivers intelligent virtual assistants, voice-enabled chatbots, automated document processing, and advanced risk assessment. It enables post-call analysis, underwriting decision support, and multi-channel customer engagement—driving faster decisions, greater efficiency, and exceptional customer experiences.
-> **Disclaimer**: This CDK setup is strictly designed and tested for the `us-west-2` region (Oregon). Please ensure that all resources are deployed only within this region to avoid compatibility issues.
+> **Disclaimer**: This CDK setup is strictly designed and tested for the `us-east-1` region (N. Virginia). Please ensure that all resources are deployed only within this region to avoid compatibility issues.
 ---
 ## Prerequisites
 Before beginning the deployment process:
 * Ensure you have access to the correct AWS account.
-* You must be using the **`us-west-2`** AWS region.
+* You must be using the **`us-east-1`** AWS region.
 ---
 ## Pre Deployment Steps
 ### Login to the AWS Console
@@ -33,10 +33,10 @@ Navigate to the **Amazon Bedrock** service in the AWS Console.
 ---
 ## Deployment Steps
 
-### 1. Set Region to `us-west-2`
-Navigate to the region selector in the AWS Console and ensure that **`US West (Oregon) - us-west-2`** is selected.
+### 1. Set Region to `us-east-1`
+Navigate to the region selector in the AWS Console and ensure that **`US East (N. Virginia) - us-east-1`** is selected.
 > This is critical, as all the CDK resources are scoped and supported only in this region.
-![Region Navigation](./assets/region.jpg)
+![Region Navigation](./assets/region.png)
 ---
 ### 2. Open AWS CloudShell
 Launch the AWS CloudShell service from the AWS Console.
