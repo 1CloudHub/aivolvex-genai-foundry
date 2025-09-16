@@ -262,7 +262,7 @@ def process_metadata_files(metadata_files):
             
             # Get corresponding image S3 URI
             base_name = os.path.basename(metadata_file).replace('-metadata.json', '')
-            s3_uri = f"s3://{bucket_name}/{prefix}{base_name}.jpg"  # Assuming jpg extension
+            s3_uri = f"s3://{bucket_name}/{prefix}/{base_name}.jpg"  # Assuming jpg extension
             
             # Prepare document for OpenSearch
             document = {

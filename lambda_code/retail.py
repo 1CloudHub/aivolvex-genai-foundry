@@ -3794,12 +3794,14 @@ def lambda_handler(event, context):
                         s3_client = boto3.client('s3',
                                                  region_name=region_used)
                         
-                        # Extract bucket and key from S3 URI
+                        # Extract key from S3 URI and use current bucket from environment
                         if image_s3_uri.startswith('s3://'):
                             # Remove 's3://' and split by '/'
                             path_parts = image_s3_uri[5:].split('/', 1)
                             if len(path_parts) == 2:
-                                bucket_name = path_parts[0]
+                                # Use current S3 bucket from environment instead of old bucket from URI
+                                bucket_name = S3_BUCKET
+                                # Extract the key part (everything after the first '/')
                                 image_key = path_parts[1]
                             else:
                                 return {
