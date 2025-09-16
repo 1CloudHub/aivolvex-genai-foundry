@@ -3846,7 +3846,7 @@ Remember: Always use exact tool responses. Intelligently interpret dates from co
                     valid_patients = {p['name']: p['phone'] for p in patients.values()}
                     # For scheduling (action_type == 'schedule') we accept Name+Phone but do NOT authenticate.
                     is_authenticated = (name in valid_patients and valid_patients[name] == phone)
-                    if action_type == "schedule":
+                    if action_type == "schedule" or action_type == "reschedule":
                         is_authenticated = True
                     if is_authenticated:
                         # proactive Always ask for department (scheduling skips strict auth)
