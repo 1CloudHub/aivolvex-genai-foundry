@@ -183,7 +183,7 @@ def check_and_create_index():
                                 "type": "knn_vector",
                                 "dimension": 1024,
                                 "method": {
-                                    "name": "nmslib",
+                                    "name": "hnsw",
                                     "space_type": "cosine",
                                     "engine": "nmslib"
                                 }

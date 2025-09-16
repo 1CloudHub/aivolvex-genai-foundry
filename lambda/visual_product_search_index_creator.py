@@ -50,7 +50,7 @@ def handle_cfn_event(event, context):
         index_name = properties.get('index_name')
         # Hardcoded configuration for OpenSearch Serverless compatibility
         dimension = 1024
-        method = 'nmslib'
+        method = 'hnsw'
         engine = 'nmslib'
         space_type = 'cosine'
         
@@ -175,7 +175,7 @@ def handle_direct_event(event, context):
         index_name = event.get('index_name', f'{collection_name}-retail-index')
         # Hardcoded configuration for OpenSearch Serverless compatibility
         dimension = 1024
-        method = 'nmslib'
+        method = 'hnsw'
         engine = 'nmslib'
         space_type = 'cosine'
         
