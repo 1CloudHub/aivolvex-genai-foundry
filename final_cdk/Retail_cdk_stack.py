@@ -1221,9 +1221,9 @@ class RetailCdkStack(Stack):
             properties={
                 "index_name": f"visualproductsearchmod-{name_key}",
                 "dimension": 1024,
-                "method": "hnsw",
-                "engine": "faiss",
-                "space_type": "l2"
+                "method": "nmslib",
+                "engine": "nmslib",
+                "space_type": "cosine"
             }
         )
 
@@ -1509,9 +1509,9 @@ class RetailCdkStack(Stack):
             properties={
                 "index_name": f"visualproductsearchmod-{name_key}",
                 "dimension": 1024,
-                "method": "hnsw",
-                "engine": "faiss",
-                "space_type": "l2"
+                "method": "nmslib",
+                "engine": "nmslib",
+                "space_type": "cosine"
             }
         )
 
