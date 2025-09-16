@@ -184,7 +184,7 @@ def check_and_create_index():
                                 "dimension": 1024,
                                 "method": {
                                     "name": "hnsw",
-                                    "space_type": "cosine",
+                                    "space_type": "cosinesimil",  # changed from "cosine"
                                     "engine": "nmslib"
                                 }
                             },

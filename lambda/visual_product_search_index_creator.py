@@ -52,7 +52,7 @@ def handle_cfn_event(event, context):
         dimension = 1024
         method = 'hnsw'
         engine = 'nmslib'
-        space_type = 'cosine'
+        space_type = 'cosinesimil'  # changed from 'cosine'
         
         print(f"Creating retail index: {index_name}")
         print(f"Vector dimension: {dimension}")
@@ -177,7 +177,7 @@ def handle_direct_event(event, context):
         dimension = 1024
         method = 'hnsw'
         engine = 'nmslib'
-        space_type = 'cosine'
+        space_type = 'cosinesimil'  # changed from 'cosine'
         
         print(f"Creating retail index: {index_name}")
         print(f"Vector dimension: {dimension}")
@@ -226,7 +226,7 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
     - Engine: 'nmslib'
     - Precision: 'FP32'
     - Dimensions: 1024
-    - Distance type: 'cosine'
+    - Distance type: 'cosinesimil'
     - ef_search: 100
     
     Metadata fields:
@@ -303,7 +303,7 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
                         "dimension": dimension,
                         "method": {
                             "name": method,
-                            "space_type": space_type,
+                            "space_type": space_type,  # will be 'cosinesimil'
                             "engine": engine
                         }
                     },
