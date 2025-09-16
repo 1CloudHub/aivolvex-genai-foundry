@@ -21,11 +21,7 @@ def lambda_handler(event, context):
     {
         "RequestType": "Create|Update|Delete",
         "ResourceProperties": {
-            "index_name": "retail-index-name",
-            "dimension": 1024,
-            "method": "nmslib",
-            "engine": "nmslib",
-            "space_type": "cosinesimil"
+            "index_name": "retail-index-name"
         }
     }
     """
@@ -52,10 +48,11 @@ def handle_cfn_event(event, context):
         
         properties = event['ResourceProperties']
         index_name = properties.get('index_name')
-        dimension = properties.get('dimension', 1024)
-        method = properties.get('method', 'nmslib')
-        engine = properties.get('engine', 'nmslib')
-        space_type = properties.get('space_type', 'cosinesimil')
+        # Hardcoded configuration for OpenSearch Serverless compatibility
+        dimension = 1024
+        method = 'nmslib'
+        engine = 'nmslib'
+        space_type = 'cosine'
         
         print(f"Creating retail index: {index_name}")
         print(f"Vector dimension: {dimension}")
@@ -174,12 +171,13 @@ def handle_direct_event(event, context):
             print(f"Error type: {type(e)}")
             print(f"Error details: {str(e)}")
         
-        # Parse event parameters with defaults
+        # Parse event parameters with hardcoded defaults
         index_name = event.get('index_name', f'{collection_name}-retail-index')
-        dimension = event.get('dimension', 1024)
-        method = event.get('method', 'nmslib')
-        engine = event.get('engine', 'nmslib')
-        space_type = event.get('space_type', 'cosinesimil')
+        # Hardcoded configuration for OpenSearch Serverless compatibility
+        dimension = 1024
+        method = 'nmslib'
+        engine = 'nmslib'
+        space_type = 'cosine'
         
         print(f"Creating retail index: {index_name}")
         print(f"Vector dimension: {dimension}")
@@ -228,7 +226,7 @@ def create_retail_vector_index(opensearch_endpoint, collection_name, index_name,
     - Engine: 'nmslib'
     - Precision: 'FP32'
     - Dimensions: 1024
-    - Distance type: 'cosinesimil'
+    - Distance type: 'cosine'
     - ef_search: 100
     
     Metadata fields:

@@ -1219,11 +1219,7 @@ class RetailCdkStack(Stack):
             self, "VisualSearchIndexCreator",
             service_token=visual_search_provider.service_token,
             properties={
-                "index_name": f"visualproductsearchmod-{name_key}",
-                "dimension": 1024,
-                "method": "nmslib",
-                "engine": "nmslib",
-                "space_type": "cosinesimil"
+                "index_name": f"visualproductsearchmod-{name_key}"
             }
         )
 
@@ -1507,11 +1503,7 @@ class RetailCdkStack(Stack):
             self, "DataIngestionResource",
             service_token=data_ingestion_provider.service_token,
             properties={
-                "index_name": f"visualproductsearchmod-{name_key}",
-                "dimension": 1024,
-                "method": "nmslib",
-                "engine": "nmslib",
-                "space_type": "cosinesimil"
+                "index_name": f"visualproductsearchmod-{name_key}"
             }
         )
 
