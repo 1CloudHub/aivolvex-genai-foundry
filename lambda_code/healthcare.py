@@ -2837,7 +2837,7 @@ def hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId):
                 {"name": "Dr. David Miller", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
                 {"name": "Dr. Alex Thompson", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]},
                 {"name": "Dr. Rachel Green", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
-                {"name": "Dr. Mark Johnson", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]}
+                {"name": "Dr. Jacob Stratham", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]}
             ],
             "Dermatology": [
                 {"name": "Dr. Emma Wilson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
