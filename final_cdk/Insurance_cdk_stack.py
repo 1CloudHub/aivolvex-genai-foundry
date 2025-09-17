@@ -1925,110 +1925,110 @@ class InsuranceCdkStack(Stack):
            
         )
 
-        # Outputs
-        CfnOutput(
-            self, "VPCId",
-            value=vpc.vpc_id,
-            description="VPC ID"
-        )
-        CfnOutput(
-            self, "LambdaFunctionARN",
-            value=lambda_function.function_arn,
-            description="ARN of the Lambda function"
-        )
-        CfnOutput(
-            self, "LambdaFunctionName",
-            value=lambda_function.function_name,
-            description="Name of the Lambda function"
-        )
-        CfnOutput(
-            self, "APIGatewayURL",
-            value=api.url,
-            description="API Gateway URL"
-        )
+        # # Outputs
+        # CfnOutput(
+        #     self, "VPCId",
+        #     value=vpc.vpc_id,
+        #     description="VPC ID"
+        # )
+        # CfnOutput(
+        #     self, "LambdaFunctionARN",
+        #     value=lambda_function.function_arn,
+        #     description="ARN of the Lambda function"
+        # )
+        # CfnOutput(
+        #     self, "LambdaFunctionName",
+        #     value=lambda_function.function_name,
+        #     description="Name of the Lambda function"
+        # )
+        # CfnOutput(
+        #     self, "APIGatewayURL",
+        #     value=api.url,
+        #     description="API Gateway URL"
+        # )
 
-        CfnOutput(
-            self, "APIGatewayID",
-            value=api.rest_api_id,
-            description="API Gateway ID"
-        )
+        # CfnOutput(
+        #     self, "APIGatewayID",
+        #     value=api.rest_api_id,
+        #     description="API Gateway ID"
+        # )
 
-        CfnOutput(
-            self, "WebSocketAPIGatewayURL",
-            value=websocket_stage.url,
-            description="WebSocket API Gateway URL"
-        )
+        # CfnOutput(
+        #     self, "WebSocketAPIGatewayURL",
+        #     value=websocket_stage.url,
+        #     description="WebSocket API Gateway URL"
+        # )
 
-        CfnOutput(
-            self, "WebSocketAPIGatewayID",
-            value=websocket_api.api_id,
-            description="WebSocket API Gateway ID"
-        )
+        # CfnOutput(
+        #     self, "WebSocketAPIGatewayID",
+        #     value=websocket_api.api_id,
+        #     description="WebSocket API Gateway ID"
+        # )
 
-        CfnOutput(
-            self, "WebSocketLambdaFunctionName",
-            value=websocket_lambda_function.function_name,
-            description="WebSocket Lambda Function Name"
-        )
+        # CfnOutput(
+        #     self, "WebSocketLambdaFunctionName",
+        #     value=websocket_lambda_function.function_name,
+        #     description="WebSocket Lambda Function Name"
+        # )
 
-        CfnOutput(
-            self, "WebSocketRegion",
-            value=self.region,
-            description="WebSocket API Region"
-        )
+        # CfnOutput(
+        #     self, "WebSocketRegion",
+        #     value=self.region,
+        #     description="WebSocket API Region"
+        # )
 
-        CfnOutput(
-            self, "WebSocketEndpointHTTPS",
-            value=websocket_url,
-            description="WebSocket API HTTPS Endpoint (for Lambda)"
-        )
+        # CfnOutput(
+        #     self, "WebSocketEndpointHTTPS",
+        #     value=websocket_url,
+        #     description="WebSocket API HTTPS Endpoint (for Lambda)"
+        # )
 
-        CfnOutput(
-            self, "CoachingAPIGatewayURL",
-            value=coaching_api.url,
-            description="Coaching Assist Voiceops API Gateway URL"
-        )
-        CfnOutput(
-            self,
-            "ExistingDataBucketName",
-            value=self.data_bucket.bucket_name,
-            description="Name of the existing S3 bucket containing knowledge base data"
-        )
+        # CfnOutput(
+        #     self, "CoachingAPIGatewayURL",
+        #     value=coaching_api.url,
+        #     description="Coaching Assist Voiceops API Gateway URL"
+        # )
+        # CfnOutput(
+        #     self,
+        #     "ExistingDataBucketName",
+        #     value=self.data_bucket.bucket_name,
+        #     description="Name of the existing S3 bucket containing knowledge base data"
+        # )
 
-        CfnOutput(
-            self,
-            "InsuranceOpenSearchCollectionArn",
-            value=insurance_collection.attr_arn,
-            description="ARN of the Insurance OpenSearch Serverless collection"
-        )
+        # CfnOutput(
+        #     self,
+        #     "InsuranceOpenSearchCollectionArn",
+        #     value=insurance_collection.attr_arn,
+        #     description="ARN of the Insurance OpenSearch Serverless collection"
+        # )
 
-        CfnOutput(
-            self,
-            "InsuranceOpenSearchCollectionEndpoint",
-            value=insurance_collection.attr_collection_endpoint,
-            description="Endpoint of the Insurance OpenSearch Serverless collection"
-        )
+        # CfnOutput(
+        #     self,
+        #     "InsuranceOpenSearchCollectionEndpoint",
+        #     value=insurance_collection.attr_collection_endpoint,
+        #     description="Endpoint of the Insurance OpenSearch Serverless collection"
+        # )
 
-        CfnOutput(
-            self,
-            "InsuranceKnowledgeBaseId",
-            value=insurance_kb.attr_knowledge_base_id,
-            description="ID of the Insurance Knowledge Base"
-        )
+        # CfnOutput(
+        #     self,
+        #     "InsuranceKnowledgeBaseId",
+        #     value=insurance_kb.attr_knowledge_base_id,
+        #     description="ID of the Insurance Knowledge Base"
+        # )
 
-        CfnOutput(
-            self,
-            "InsuranceDataSourceId",
-            value=insurance_kb.data_source_id,
-            description="ID of the Insurance Data Source"
-        )
+        # CfnOutput(
+        #     self,
+        #     "InsuranceDataSourceId",
+        #     value=insurance_kb.data_source_id,
+        #     description="ID of the Insurance Data Source"
+        # )
 
-        CfnOutput(
-            self,
-            "AutoSyncLambdaArn",
-            value=auto_sync_function.function_arn,
-            description="ARN of the Auto-Sync Lambda function"
-        )
+        # CfnOutput(
+        #     self,
+        #     "AutoSyncLambdaArn",
+        #     value=auto_sync_function.function_arn,
+        #     description="ARN of the Auto-Sync Lambda function"
+        # )
 
         # CfnOutput(
         #     self,
@@ -2037,126 +2037,126 @@ class InsuranceCdkStack(Stack):
         #     description="Command to manually trigger knowledge base sync if S3 events don't work"
         # )
 
-        CfnOutput(
-            self,
-            "InitialSyncFunctionArn",
-            value=initial_sync_function.function_arn,
-            description="ARN of the Initial Sync Lambda function"
-        )
+        # CfnOutput(
+        #     self,
+        #     "InitialSyncFunctionArn",
+        #     value=initial_sync_function.function_arn,
+        #     description="ARN of the Initial Sync Lambda function"
+        # )
 
-        CfnOutput(
-            self,
-            "InitialSyncStatus",
-            value="Initial sync will be triggered automatically after Knowledge Base creation",
-            description="Status of initial data sync"
-        )
+        # CfnOutput(
+        #     self,
+        #     "InitialSyncStatus",
+        #     value="Initial sync will be triggered automatically after Knowledge Base creation",
+        #     description="Status of initial data sync"
+        # )
 
-        CfnOutput(
-            self,
-            "InsuranceIndexWaiterFunctionArn",
-            value=insurance_index_waiter_function.function_arn,
-            description="ARN of the Insurance Index Waiter Lambda function"
-        )
+        # CfnOutput(
+        #     self,
+        #     "InsuranceIndexWaiterFunctionArn",
+        #     value=insurance_index_waiter_function.function_arn,
+        #     description="ARN of the Insurance Index Waiter Lambda function"
+        # )
 
-        CfnOutput(
-            self,
-            "InsuranceIndexWaiterStatus",
-            value="Index waiter ensures OpenSearch index is fully ready before Knowledge Base creation",
-            description="Status of index readiness validation"
-        )
+        # CfnOutput(
+        #     self,
+        #     "InsuranceIndexWaiterStatus",
+        #     value="Index waiter ensures OpenSearch index is fully ready before Knowledge Base creation",
+        #     description="Status of index readiness validation"
+        # )
 
 
-        CfnOutput(
-            self, "CoachingAPIGatewayID",
-            value=coaching_api.rest_api_id,
-            description="Coaching Assist Voiceops API Gateway ID"
-        )
+        # CfnOutput(
+        #     self, "CoachingAPIGatewayID",
+        #     value=coaching_api.rest_api_id,
+        #     description="Coaching Assist Voiceops API Gateway ID"
+        # )
 
-        # Add outputs for the created layers
-        for layer_name, layer_info in layer_uploader.layers.items():
+        # # Add outputs for the created layers
+        # for layer_name, layer_info in layer_uploader.layers.items():
             
-            CfnOutput(
-                self, f"{layer_name.capitalize()}LayerARN",
-                value=layer_info["layer"].layer_version_arn,
-                description=f"ARN of the {layer_name} Lambda layer"
-            )
+        #     CfnOutput(
+        #         self, f"{layer_name.capitalize()}LayerARN",
+        #         value=layer_info["layer"].layer_version_arn,
+        #         description=f"ARN of the {layer_name} Lambda layer"
+        #     )
 
 
 
-        CfnOutput(
-            self, "InstancePublicIP",
-            value=ec2_instance.instance_public_ip,
-            description="EC2 Instance Public IP"
-        )
+        # CfnOutput(
+        #     self, "InstancePublicIP",
+        #     value=ec2_instance.instance_public_ip,
+        #     description="EC2 Instance Public IP"
+        # )
 
-        CfnOutput(
-            self, "DatabaseEndpoint",
-            value=db_instance.instance_endpoint.hostname,
-            description="RDS Database Endpoint"
-        )
+        # CfnOutput(
+        #     self, "DatabaseEndpoint",
+        #     value=db_instance.instance_endpoint.hostname,
+        #     description="RDS Database Endpoint"
+        # )
 
-        CfnOutput(
-            self, "DatabaseSecretName",
-            value=secret_name,
-            description="Secret name for database credentials"
-        )
+        # CfnOutput(
+        #     self, "DatabaseSecretName",
+        #     value=secret_name,
+        #     description="Secret name for database credentials"
+        # )
 
-        CfnOutput(
-            self, "DatabaseSecretArn",
-            value=db_instance.secret.secret_arn if db_instance.secret else "No secret created",
-            description="ARN of the secret containing database credentials"
-        )
+        # CfnOutput(
+        #     self, "DatabaseSecretArn",
+        #     value=db_instance.secret.secret_arn if db_instance.secret else "No secret created",
+        #     description="ARN of the secret containing database credentials"
+        # )
 
-        CfnOutput(
-            self,
-            "KnowledgeBaseBucketName",
-            value=bucket.bucket_name,
-            description="Name of the S3 bucket for knowledge base data"
-        )
+        # CfnOutput(
+        #     self,
+        #     "KnowledgeBaseBucketName",
+        #     value=bucket.bucket_name,
+        #     description="Name of the S3 bucket for knowledge base data"
+        # )
         
-        CfnOutput(
-            self,
-            "FrontendBucketName",
-            value=frontend_bucket.bucket_name,
-            description="Name of the S3 bucket for frontend static files"
-        )
+        # CfnOutput(
+        #     self,
+        #     "FrontendBucketName",
+        #     value=frontend_bucket.bucket_name,
+        #     description="Name of the S3 bucket for frontend static files"
+        # )
         
-        CfnOutput(
-            self,
-            "FrontendBucketWebsiteURL",
-            value=frontend_bucket.bucket_website_url,
-            description="Website URL of the frontend S3 bucket"
-        )
-          # EC2 Database Initialization Outputs
-        CfnOutput(
-            self, "EC2InstanceId",
-            value=ec2_instance.instance_id,
-            description="EC2 Instance ID for Database Initialization"
-        )
+        # CfnOutput(
+        #     self,
+        #     "FrontendBucketWebsiteURL",
+        #     value=frontend_bucket.bucket_website_url,
+        #     description="Website URL of the frontend S3 bucket"
+        # )
+        #   # EC2 Database Initialization Outputs
+        # CfnOutput(
+        #     self, "EC2InstanceId",
+        #     value=ec2_instance.instance_id,
+        #     description="EC2 Instance ID for Database Initialization"
+        # )
 
 
-        CfnOutput(
-            self, "EC2SecurityGroupId",
-            value=ec2_security_group.security_group_id,
-            description="EC2 Security Group ID"
-        )
+        # CfnOutput(
+        #     self, "EC2SecurityGroupId",
+        #     value=ec2_security_group.security_group_id,
+        #     description="EC2 Security Group ID"
+        # )
 
-        CfnOutput(
-            self, "ResourceNameKey",
-            value=name_key,
-            description="Random resource name key used for this deployment"
-        )
+        # CfnOutput(
+        #     self, "ResourceNameKey",
+        #     value=name_key,
+        #     description="Random resource name key used for this deployment"
+        # )
 
-        CfnOutput(
-            self, "KeyPairName",
-            value=key_pair.key_pair_name,
-            description="Key Pair Name for EC2 Instance"
-        )
-        CfnOutput(
-            self, "PrivateKeyCommand",
-            value=f"aws ssm get-parameter --name /ec2/keypair/{key_pair.key_pair_id} --with-decryption --query Parameter.Value --output text",
-            description="Command to retrieve private key"
-        )
+        # CfnOutput(
+        #     self, "KeyPairName",
+        #     value=key_pair.key_pair_name,
+        #     description="Key Pair Name for EC2 Instance"
+        # )
+        # CfnOutput(
+        #     self, "PrivateKeyCommand",
+        #     value=f"aws ssm get-parameter --name /ec2/keypair/{key_pair.key_pair_id} --with-decryption --query Parameter.Value --output text",
+        #     description="Command to retrieve private key"
+        # )
         
         # Create CloudFront Distribution for frontend S3 bucket
         # Create S3 Origin using the new S3BucketOrigin (not deprecated)
@@ -2308,22 +2308,28 @@ class InsuranceCdkStack(Stack):
         )
  
         # Outputs for easy access to distribution information
-        CfnOutput(
-            self, "DistributionDomainName",
-            value=distribution.distribution_domain_name,
-            description="CloudFront Distribution Domain Name"
-        )
+        # CfnOutput(
+        #     self, "DistributionDomainName",
+        #     value=distribution.distribution_domain_name,
+        #     description="CloudFront Distribution Domain Name"
+        # )
        
-        CfnOutput(
-            self, "DistributionId",
-            value=distribution.distribution_id,
-            description="CloudFront Distribution ID"
-        )
+        # CfnOutput(
+        #     self, "DistributionId",
+        #     value=distribution.distribution_id,
+        #     description="CloudFront Distribution ID"
+        # )
        
+        # CfnOutput(
+        #     self, "DistributionArn",
+        #     value=distribution.distribution_arn,
+        #     description="CloudFront Distribution ARN"
+        # )
+
         CfnOutput(
-            self, "DistributionArn",
-            value=distribution.distribution_arn,
-            description="CloudFront Distribution ARN"
+            self, "CloudFrontDistributionUrl",
+            value=f"https://{distribution.distribution_domain_name}",
+            description="CloudFront Distribution URL for the frontend application"
         )
 
     def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_prefix: str, index_name: str, index_creator_function: lambda_.Function, index_creator: CustomResource, provider: cr.Provider, collection_arn: str, data_access_policy: opensearch.CfnAccessPolicy, index_waiter: CustomResource = None, index_waiter_function: lambda_.Function = None, index_waiter_provider: cr.Provider = None):

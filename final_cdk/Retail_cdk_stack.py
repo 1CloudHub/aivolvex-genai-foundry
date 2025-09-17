@@ -2305,23 +2305,11 @@ class RetailCdkStack(Stack):
                 }
             )
         )
-    
-
-        CfnOutput(self, "RestApiUrl", value=api.url)              # e.g., https://…/dev/
-        CfnOutput(self, "WebSocketUrl", value=websocket_stage.url)  # wss://…/production
-
+        
         CfnOutput(
-            self,
-            "RetailIndexWaiterFunctionArn",
-            value=retail_index_waiter_function.function_arn,
-            description="ARN of the Retail Index Waiter Lambda function"
-        )
-
-        CfnOutput(
-            self,
-            "RetailIndexWaiterStatus",
-            value="Index waiter ensures OpenSearch index is fully ready before Knowledge Base creation",
-            description="Status of index readiness validation"
+            self, "CloudFrontDistributionUrl",
+            value=f"https://{distribution.distribution_domain_name}",
+            description="CloudFront Distribution URL for the frontend application"
         )
     
     def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_prefix: str, index_name: str, index_creator_function: lambda_.Function, index_creator: CustomResource, provider: cr.Provider, collection_arn: str, data_access_policy: aoss.CfnAccessPolicy, index_waiter: CustomResource = None, index_waiter_function: lambda_.Function = None, index_waiter_provider: cr.Provider = None):
