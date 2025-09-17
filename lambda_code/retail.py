@@ -7693,10 +7693,10 @@ Maintain a friendly, professional tone throughout all interactions
                 "ITM008": {"account_id": "ACC1003", "name": "Smart TV 65-inch - Alpha7", "quantity": 1, "price": 1899.99}
             },
             "ORD345678": {
-                "ITM009": {"account_id": "ACC1004", "name": "Gaming Console - White", "quantity": 1, "price": 299.99}
+                "ITM010": {"account_id": "ACC1004", "name": "ZX900 Pro Headphones - Black", "quantity": 1, "price": 299.99}
             },
             "ORD345679": {
-                "ITM010": {"account_id": "ACC1004", "name": "ZX900 Pro Headphones - Black", "quantity": 1, "price": 299.99}
+                "ITM009": {"account_id": "ACC1004", "name": "Gaming Console - White", "quantity": 1, "price": 299.99}
             },
             "ORD456789": {
                 "ITM011": {"account_id": "ACC1005", "name": "Smart TV 55-inch - VisionX", "quantity": 1, "price": 899.99}
@@ -7822,13 +7822,12 @@ Maintain a friendly, professional tone throughout all interactions
             order_status_map = {
                 "ORD789012": "Shipped",
                 "ORD890123": "Processing",
-                "ORD567890": "Delivered",
+                "ORD567890": "Processing",
                 "ORD123456": "Processing",
                 "ORD901234": "Shipped",
                 "ORD234567": "Processing",
-                "ORD345678": "Delivered",
+                "ORD345678": "Processing",
                 "ORD345679": "Processing",
-                "ORD456789": "Shipped",
                 "ORD456789": "Processing"
             }
 
@@ -7836,11 +7835,11 @@ Maintain a friendly, professional tone throughout all interactions
             delivery_info = {
                 "ORD789012": {"type": "estimated", "date": get_dynamic_date(3)},
                 "ORD890123": {"type": "estimated", "date": get_dynamic_date(3)},
-                "ORD567890": {"type": "delivered", "date": get_dynamic_date(2)},
+                "ORD567890": {"type": "estimated", "date": get_dynamic_date(3)},
                 "ORD123456": {"type": "estimated", "date": get_dynamic_date(3)},
                 "ORD901234": {"type": "estimated", "date": get_dynamic_date(3)},
                 "ORD234567": {"type": "estimated", "date": get_dynamic_date(3)},
-                "ORD345678": {"type": "delivered", "date": get_dynamic_date(2)},
+                "ORD345678": {"type": "estimated", "date": get_dynamic_date(3)},
                 "ORD345679": {"type": "estimated", "date": get_dynamic_date(3)},
                 "ORD456789": {"type": "estimated", "date": get_dynamic_date(3)},
                 "ORD456789": {"type": "estimated", "date": get_dynamic_date(3)}
