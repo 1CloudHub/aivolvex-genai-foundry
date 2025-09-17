@@ -2,6 +2,7 @@ import boto3
 import os
 import json
 import time
+import cfnresponse
 from requests_aws4auth import AWS4Auth
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from opensearchpy.exceptions import RequestError
@@ -43,10 +44,8 @@ def handle_cfn_event(event, context):
     """Handle CloudFormation custom resource events"""
     try:
         if event['RequestType'] == 'Delete':
-            return {
-                'statusCode': 200,
-                'body': json.dumps({'message': 'Delete request - no action needed'})
-            }
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+            return
         
         properties = event['ResourceProperties']
         index_name = properties.get('index_name')
@@ -74,25 +73,21 @@ def handle_cfn_event(event, context):
         
         if result['success']:
             print("Index created successfully")
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'message': f'Successfully created vector index {index_name}',
-                    'index_name': index_name,
-                    'collection_name': collection_name,
-                    'dimension': dimension,
-                    'method': method,
-                    'engine': engine,
-                    'space_type': space_type
-                })
-            }
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                'IndexName': index_name,
+                'CollectionName': collection_name,
+                'Dimension': dimension,
+                'Method': method,
+                'Engine': engine,
+                'SpaceType': space_type
+            })
         else:
             print(f"Failed to create index: {result['error']}")
-            raise Exception(result['error'])
+            cfnresponse.send(event, context, cfnresponse.FAILED, {}, result['error'])
             
     except Exception as e:
         print(f"Error: {str(e)}")
-        raise e
+        cfnresponse.send(event, context, cfnresponse.FAILED, {}, str(e))
 
 def handle_direct_event(event, context):
     """Handle direct Lambda invocation events"""

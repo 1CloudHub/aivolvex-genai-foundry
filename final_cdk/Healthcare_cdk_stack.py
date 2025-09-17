@@ -106,6 +106,14 @@ def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_
         kb.node.add_dependency(index_creator_function)
         kb.node.add_dependency(provider)
         kb.node.add_dependency(data_access_policy)
+        
+        # Add index waiter dependencies if provided
+        if index_waiter:
+            kb.node.add_dependency(index_waiter)
+        if index_waiter_function:
+            kb.node.add_dependency(index_waiter_function)
+        if index_waiter_provider:
+            kb.node.add_dependency(index_waiter_provider)
 
         # Add data source to the Knowledge Base
         data_source = bedrock.CfnDataSource(
@@ -825,18 +833,13 @@ class HealthcareCdkStack(Stack):
             healthcare_index_creator,
             healthcare_provider,
             healthcare_collection.attr_arn,
-            healthcare_data_access_policy
+            healthcare_data_access_policy,
+            healthcare_index_waiter,
+            healthcare_index_waiter_function,
+            healthcare_waiter_provider
         )
 
-        # Add dependencies to ensure index is created and ready before Knowledge Bases
-        healthcare_kb.node.add_dependency(healthcare_data_access_policy)
-        healthcare_kb.node.add_dependency(healthcare_index_creator)
-        healthcare_kb.node.add_dependency(healthcare_index_creator_function)
-        healthcare_kb.node.add_dependency(healthcare_provider)
-        # CRITICAL: Wait for index to be fully ready before creating Knowledge Base
-        healthcare_kb.node.add_dependency(healthcare_index_waiter)
-        healthcare_kb.node.add_dependency(healthcare_index_waiter_function)
-        healthcare_kb.node.add_dependency(healthcare_waiter_provider)
+        # Dependencies are now handled inside the create_kb function
 
         # Create Auto-Sync Lambda function AFTER knowledge bases are created
         auto_sync_function = lambda_.Function(
@@ -2329,7 +2332,7 @@ class HealthcareCdkStack(Stack):
             description="CloudFront Distribution ARN"
         )
 
-    def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_prefix: str, index_name: str, index_creator_function: lambda_.Function, index_creator: CustomResource, provider: cr.Provider, collection_arn: str, data_access_policy: opensearch.CfnAccessPolicy):
+    def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_prefix: str, index_name: str, index_creator_function: lambda_.Function, index_creator: CustomResource, provider: cr.Provider, collection_arn: str, data_access_policy: opensearch.CfnAccessPolicy, index_waiter: CustomResource = None, index_waiter_function: lambda_.Function = None, index_waiter_provider: cr.Provider = None):
         """Create a Bedrock Knowledge Base with data source"""
         
         # Create Knowledge Base
@@ -2360,6 +2363,14 @@ class HealthcareCdkStack(Stack):
         kb.node.add_dependency(index_creator_function)
         kb.node.add_dependency(provider)
         kb.node.add_dependency(data_access_policy)
+        
+        # Add index waiter dependencies if provided
+        if index_waiter:
+            kb.node.add_dependency(index_waiter)
+        if index_waiter_function:
+            kb.node.add_dependency(index_waiter_function)
+        if index_waiter_provider:
+            kb.node.add_dependency(index_waiter_provider)
 
         # Add data source to the Knowledge Base
         data_source = bedrock.CfnDataSource(
