@@ -727,15 +727,54 @@ class HealthcareCdkStack(Stack):
             code=lambda_.Code.from_asset(str(lambda_dir))
         )
 
+        # Create Lambda function to wait for OpenSearch index readiness
+        healthcare_index_waiter_function = lambda_.Function(
+            self, "HealthcareIndexWaiterFunction",
+            runtime=lambda_.Runtime.PYTHON_3_9,
+            handler="index_waiter.lambda_handler",
+            role=lambda_role,
+            timeout=Duration.minutes(15),  # Longer timeout for waiting
+            environment={
+                "OPENSEARCH_ENDPOINT": healthcare_collection.attr_collection_endpoint,
+                "COLLECTION_NAME": healthcare_collection_name,
+                "INDEX_NAME": healthcare_index_name
+            },
+            layers=[
+                lambda_.LayerVersion(
+                    self, "HealthcareWaiterOpenSearchPyLayer",
+                    code=lambda_.Code.from_asset(str(layers_dir / "opensearchpy.zip")),
+                    compatible_runtimes=[lambda_.Runtime.PYTHON_3_9],
+                    description="OpenSearch Python client layer for Healthcare Index Waiter"
+                ),
+                lambda_.LayerVersion(
+                    self, "HealthcareWaiterAWS4AuthLayer",
+                    code=lambda_.Code.from_asset(str(layers_dir / "aws4auth.zip")),
+                    compatible_runtimes=[lambda_.Runtime.PYTHON_3_9],
+                    description="AWS4Auth layer for Healthcare Index Waiter"
+                )
+            ],
+            code=lambda_.Code.from_asset(str(lambda_dir))
+        )
+
         # Add dependency to ensure collection and name generation is complete before Lambda runs
         healthcare_index_creator_function.node.add_dependency(healthcare_collection)
         # Add dependency to ensure data access policy is applied before Lambda runs
         healthcare_index_creator_function.node.add_dependency(healthcare_data_access_policy)
 
-        # Create  providers for each collection
+        # Add dependencies for index waiter function
+        healthcare_index_waiter_function.node.add_dependency(healthcare_collection)
+        healthcare_index_waiter_function.node.add_dependency(healthcare_data_access_policy)
+
+        # Create providers for each collection
         healthcare_provider = cr.Provider(
             self, "HealthcareInitProvider",
             on_event_handler=healthcare_index_creator_function
+        )
+
+        # Create provider for index waiter
+        healthcare_waiter_provider = cr.Provider(
+            self, "HealthcareWaiterProvider",
+            on_event_handler=healthcare_index_waiter_function
         )
         
 
@@ -752,10 +791,26 @@ class HealthcareCdkStack(Stack):
             }
         )
 
+        # Create custom resource to wait for healthcare index readiness
+        healthcare_index_waiter = CustomResource(
+            self, "HealthcareIndexWaiter",
+            service_token=healthcare_waiter_provider.service_token,
+            properties={
+                "index_name": healthcare_index_name,
+                "max_retries": 60,  # 5 minutes with 5-second intervals
+                "retry_delay": 5    # 5 seconds between retries
+            }
+        )
+
         # Add dependency for index creators
         healthcare_index_creator.node.add_dependency(healthcare_collection)
         # Add dependency to ensure Lambda function is ready before index creation
         healthcare_index_creator.node.add_dependency(healthcare_index_creator_function)
+
+        # Add dependencies for index waiter
+        healthcare_index_waiter.node.add_dependency(healthcare_index_creator)
+        healthcare_index_waiter.node.add_dependency(healthcare_index_waiter_function)
+        healthcare_index_waiter.node.add_dependency(healthcare_waiter_provider)
 
         # Create both knowledge bases - POSITIONED LAST IN THE FLOW
 
@@ -773,11 +828,15 @@ class HealthcareCdkStack(Stack):
             healthcare_data_access_policy
         )
 
-        # Add dependencies to ensure index is created before Knowledge Bases
+        # Add dependencies to ensure index is created and ready before Knowledge Bases
         healthcare_kb.node.add_dependency(healthcare_data_access_policy)
         healthcare_kb.node.add_dependency(healthcare_index_creator)
         healthcare_kb.node.add_dependency(healthcare_index_creator_function)
         healthcare_kb.node.add_dependency(healthcare_provider)
+        # CRITICAL: Wait for index to be fully ready before creating Knowledge Base
+        healthcare_kb.node.add_dependency(healthcare_index_waiter)
+        healthcare_kb.node.add_dependency(healthcare_index_waiter_function)
+        healthcare_kb.node.add_dependency(healthcare_waiter_provider)
 
         # Create Auto-Sync Lambda function AFTER knowledge bases are created
         auto_sync_function = lambda_.Function(
@@ -1993,6 +2052,20 @@ class HealthcareCdkStack(Stack):
             "InitialSyncStatus",
             value="Initial sync will be triggered automatically after Knowledge Base creation",
             description="Status of initial data sync"
+        )
+
+        CfnOutput(
+            self,
+            "HealthcareIndexWaiterFunctionArn",
+            value=healthcare_index_waiter_function.function_arn,
+            description="ARN of the Healthcare Index Waiter Lambda function"
+        )
+
+        CfnOutput(
+            self,
+            "HealthcareIndexWaiterStatus",
+            value="Index waiter ensures OpenSearch index is fully ready before Knowledge Base creation",
+            description="Status of index readiness validation"
         )
 
 
