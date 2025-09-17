@@ -4393,7 +4393,7 @@ these are the keys to be always used while returning response. Strictly do not a
                 (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                 VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                 '''
-        values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+        values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response.get('input_tokens', '0')), str(tool_response.get('output_tokens', '0')))
         res = insert_db(query, values) 
 
 
@@ -4450,7 +4450,7 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
                 (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                 VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                 '''
-        values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+        values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response.get('input_tokens', '0')), str(tool_response.get('output_tokens', '0')))
         res = insert_db(query, values)
         print("response:",res)
 
@@ -4926,6 +4926,10 @@ these are the keys to be always used while returning response. Strictly do not a
             print("CHAT HISTORY : ",chat_history)
 
             tool_response = retail_agent_invoke_tool(chat_history, session_id,chat,connectionId)
+
+            input_tokens = tool_response.get('input_tokens', '0')
+            output_tokens = tool_response.get('output_tokens', '0') 
+
             print("TOOL RESPONSE: ", tool_response)  
             #insert into retail_chat_history_table
             query = f'''
@@ -4933,7 +4937,8 @@ these are the keys to be always used while returning response. Strictly do not a
                     (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                     VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                     '''
-            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+
+            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response.get('input_tokens', '0')), str(tool_response.get('output_tokens', '0')))
             res = insert_db(query, values)
             print("response:",res)
 
@@ -4989,7 +4994,7 @@ these are the keys to be always used while returning response. Strictly do not a
                     (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                     VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                     '''
-            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response.get('input_tokens', '0')), str(tool_response.get('output_tokens', '0')))
             res = insert_db(query, values)
             print("response:",res)
 
@@ -5043,7 +5048,7 @@ these are the keys to be always used while returning response. Strictly do not a
                     (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                     VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                     '''
-            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response.get('input_tokens', '0')), str(tool_response.get('output_tokens', '0')))
             res = insert_db(query, values)
             print("response:",res)
 
@@ -5097,7 +5102,7 @@ these are the keys to be always used while returning response. Strictly do not a
                     (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                     VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                     '''
-            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
+            values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response.get('input_tokens', '0')), str(tool_response.get('output_tokens', '0')))
             res = insert_db(query, values)
             print("response:",res)
 

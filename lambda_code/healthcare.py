@@ -2300,6 +2300,8 @@ Format as numbered list."""
                     (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                     VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                     '''
+            input_tokens = tool_response.get('input_tokens', '0')
+            output_tokens = tool_response.get('output_tokens', '0') 
             values = (str(session_id),str(chat), str(tool_response['answer']), str(tool_response['input_tokens']), str(tool_response['output_tokens']))
             res = insert_db(query, values)
             print("response:",res)
