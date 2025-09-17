@@ -1159,12 +1159,38 @@ class RetailCdkStack(Stack):
                 "INDEX_NAME": retail_index_name
             },
         )
+
+        # Create Lambda function to wait for OpenSearch index readiness
+        retail_index_waiter_function = lambda_.Function(
+            self, "RetailIndexWaiterFunction",
+            runtime=lambda_.Runtime.PYTHON_3_9,
+            handler="index_waiter.lambda_handler",
+            role=lambda_role,
+            layers=[l for l in [boto3_layer, psycopg2_layer, requests_layer, requests_aws4auth_layer, opensearchpy_layer] if l is not None],
+            timeout=Duration.minutes(15),  # Longer timeout for waiting
+            code=lambda_.Code.from_asset(str(lambda_dir)),
+            environment={
+                "OPENSEARCH_ENDPOINT": retail_collection.attr_collection_endpoint,
+                "COLLECTION_NAME": retail_collection_name,
+                "INDEX_NAME": retail_index_name
+            },
+        )
         # Add dependency to ensure collection and name generation is complete before Lambda runs
         retail_index_creator_function.node.add_dependency(retail_collection)
+        
+        # Add dependencies for index waiter function
+        retail_index_waiter_function.node.add_dependency(retail_collection)
+        
         # Create separate providers for each collection
         retail_provider = cr.Provider(
             self, "RetailInitProvider",
             on_event_handler=retail_index_creator_function
+        )
+
+        # Create provider for index waiter
+        retail_waiter_provider = cr.Provider(
+            self, "RetailWaiterProvider",
+            on_event_handler=retail_index_waiter_function
         )
 
         # Add dependency for retail provider to run after retail index creator function
@@ -1182,8 +1208,25 @@ class RetailCdkStack(Stack):
                 "space_type": "l2"
             }
         )
+
+        # Create custom resource to wait for retail index readiness
+        retail_index_waiter = CustomResource(
+            self, "RetailIndexWaiter",
+            service_token=retail_waiter_provider.service_token,
+            properties={
+                "index_name": retail_index_name,
+                "max_retries": 60,  # 5 minutes with 5-second intervals
+                "retry_delay": 5    # 5 seconds between retries
+            }
+        )
+
         # Add dependency to ensure Lambda function is ready before index creation
         retail_index_creator.node.add_dependency(retail_index_creator_function)
+
+        # Add dependencies for index waiter
+        retail_index_waiter.node.add_dependency(retail_index_creator)
+        retail_index_waiter.node.add_dependency(retail_index_waiter_function)
+        retail_index_waiter.node.add_dependency(retail_waiter_provider)
 
 
          # Create Lambda function for visual search index creation
@@ -1271,13 +1314,12 @@ class RetailCdkStack(Stack):
             retail_index_creator,
             retail_provider,
             retail_collection.attr_arn,
-            retail_data_access_policy
+            retail_data_access_policy,
+            retail_index_waiter,
+            retail_index_waiter_function,
+            retail_waiter_provider
         )
-        # Add dependencies to ensure index is created before Knowledge Bases
-        retail_kb.node.add_dependency(retail_data_access_policy)
-        retail_kb.node.add_dependency(retail_index_creator)
-        retail_kb.node.add_dependency(retail_index_creator_function)
-        retail_kb.node.add_dependency(retail_provider)
+        # Dependencies are now handled inside the create_kb function
         retail_kb.node.add_dependency(bedrock_kb_role)
 
         # Add dependency for retail KB deployment
@@ -2267,8 +2309,22 @@ class RetailCdkStack(Stack):
 
         CfnOutput(self, "RestApiUrl", value=api.url)              # e.g., https://…/dev/
         CfnOutput(self, "WebSocketUrl", value=websocket_stage.url)  # wss://…/production
+
+        CfnOutput(
+            self,
+            "RetailIndexWaiterFunctionArn",
+            value=retail_index_waiter_function.function_arn,
+            description="ARN of the Retail Index Waiter Lambda function"
+        )
+
+        CfnOutput(
+            self,
+            "RetailIndexWaiterStatus",
+            value="Index waiter ensures OpenSearch index is fully ready before Knowledge Base creation",
+            description="Status of index readiness validation"
+        )
     
-    def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_prefix: str, index_name: str, index_creator_function: lambda_.Function, index_creator: CustomResource, provider: cr.Provider, collection_arn: str, data_access_policy: aoss.CfnAccessPolicy):
+    def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_prefix: str, index_name: str, index_creator_function: lambda_.Function, index_creator: CustomResource, provider: cr.Provider, collection_arn: str, data_access_policy: aoss.CfnAccessPolicy, index_waiter: CustomResource = None, index_waiter_function: lambda_.Function = None, index_waiter_provider: cr.Provider = None):
         """Create a Bedrock Knowledge Base with data source"""
         
         # Create Knowledge Base
@@ -2299,6 +2355,14 @@ class RetailCdkStack(Stack):
         kb.node.add_dependency(index_creator_function)
         kb.node.add_dependency(provider)
         kb.node.add_dependency(data_access_policy)
+        
+        # Add index waiter dependencies if provided
+        if index_waiter:
+            kb.node.add_dependency(index_waiter)
+        if index_waiter_function:
+            kb.node.add_dependency(index_waiter_function)
+        if index_waiter_provider:
+            kb.node.add_dependency(index_waiter_provider)
 
         # Add data source to the Knowledge Base
         data_source = bedrock.CfnDataSource(

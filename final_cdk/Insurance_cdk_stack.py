@@ -106,6 +106,14 @@ def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_
         kb.node.add_dependency(index_creator_function)
         kb.node.add_dependency(provider)
         kb.node.add_dependency(data_access_policy)
+        
+        # Add index waiter dependencies if provided
+        if index_waiter:
+            kb.node.add_dependency(index_waiter)
+        if index_waiter_function:
+            kb.node.add_dependency(index_waiter_function)
+        if index_waiter_provider:
+            kb.node.add_dependency(index_waiter_provider)
 
         # Add data source to the Knowledge Base
         data_source = bedrock.CfnDataSource(
@@ -726,16 +734,54 @@ class InsuranceCdkStack(Stack):
             code=lambda_.Code.from_asset(str(lambda_dir))
         )
 
+        # Create Lambda function to wait for OpenSearch index readiness
+        insurance_index_waiter_function = lambda_.Function(
+            self, "InsuranceIndexWaiterFunction",
+            runtime=lambda_.Runtime.PYTHON_3_9,
+            handler="index_waiter.lambda_handler",
+            role=lambda_role,
+            timeout=Duration.minutes(15),  # Longer timeout for waiting
+            environment={
+                "OPENSEARCH_ENDPOINT": insurance_collection.attr_collection_endpoint,
+                "COLLECTION_NAME": insurance_collection_name,
+                "INDEX_NAME": insurance_index_name
+            },
+            layers=[
+                lambda_.LayerVersion(
+                    self, "InsuranceWaiterOpenSearchPyLayer",
+                    code=lambda_.Code.from_asset(str(layers_dir / "opensearchpy.zip")),
+                    compatible_runtimes=[lambda_.Runtime.PYTHON_3_9],
+                    description="OpenSearch Python client layer for Insurance Index Waiter"
+                ),
+                lambda_.LayerVersion(
+                    self, "InsuranceWaiterAWS4AuthLayer",
+                    code=lambda_.Code.from_asset(str(layers_dir / "aws4auth.zip")),
+                    compatible_runtimes=[lambda_.Runtime.PYTHON_3_9],
+                    description="AWS4Auth layer for Insurance Index Waiter"
+                )
+            ],
+            code=lambda_.Code.from_asset(str(lambda_dir))
+        )
+
         # Add dependency to ensure collection and name generation is complete before Lambda runs
         insurance_index_creator_function.node.add_dependency(insurance_collection)
         # Add dependency to ensure data access policy is applied before Lambda runs
         insurance_index_creator_function.node.add_dependency(insurance_data_access_policy)
 
-        # Create  providers for each collection
+        # Add dependencies for index waiter function
+        insurance_index_waiter_function.node.add_dependency(insurance_collection)
+        insurance_index_waiter_function.node.add_dependency(insurance_data_access_policy)
 
+        # Create providers for each collection
         insurance_provider = cr.Provider(
             self, "InsuranceInitProvider",
             on_event_handler=insurance_index_creator_function
+        )
+
+        # Create provider for index waiter
+        insurance_waiter_provider = cr.Provider(
+            self, "InsuranceWaiterProvider",
+            on_event_handler=insurance_index_waiter_function
         )
 
         # Create custom resource to create insurance index
@@ -751,10 +797,26 @@ class InsuranceCdkStack(Stack):
             }
         )
 
+        # Create custom resource to wait for insurance index readiness
+        insurance_index_waiter = CustomResource(
+            self, "InsuranceIndexWaiter",
+            service_token=insurance_waiter_provider.service_token,
+            properties={
+                "index_name": insurance_index_name,
+                "max_retries": 60,  # 5 minutes with 5-second intervals
+                "retry_delay": 5    # 5 seconds between retries
+            }
+        )
+
         # Add dependency for index creators
         insurance_index_creator.node.add_dependency(insurance_collection)
         # Add dependency to ensure Lambda function is ready before index creation
         insurance_index_creator.node.add_dependency(insurance_index_creator_function)
+
+        # Add dependencies for index waiter
+        insurance_index_waiter.node.add_dependency(insurance_index_creator)
+        insurance_index_waiter.node.add_dependency(insurance_index_waiter_function)
+        insurance_index_waiter.node.add_dependency(insurance_waiter_provider)
 
         # Create both knowledge bases - POSITIONED LAST IN THE FLOW
 
@@ -769,14 +831,13 @@ class InsuranceCdkStack(Stack):
             insurance_index_creator,
             insurance_provider,
             insurance_collection.attr_arn,
-            insurance_data_access_policy
+            insurance_data_access_policy,
+            insurance_index_waiter,
+            insurance_index_waiter_function,
+            insurance_waiter_provider
         )
 
-        # Add dependencies to ensure index is created before Knowledge Bases
-        insurance_kb.node.add_dependency(insurance_data_access_policy)
-        insurance_kb.node.add_dependency(insurance_index_creator)
-        insurance_kb.node.add_dependency(insurance_index_creator_function)
-        insurance_kb.node.add_dependency(insurance_provider)
+        # Dependencies are now handled inside the create_kb function
         insurance_kb.node.add_dependency(bedrock_kb_role)
 
         # Create Auto-Sync Lambda function AFTER knowledge bases are created
@@ -1990,6 +2051,20 @@ class InsuranceCdkStack(Stack):
             description="Status of initial data sync"
         )
 
+        CfnOutput(
+            self,
+            "InsuranceIndexWaiterFunctionArn",
+            value=insurance_index_waiter_function.function_arn,
+            description="ARN of the Insurance Index Waiter Lambda function"
+        )
+
+        CfnOutput(
+            self,
+            "InsuranceIndexWaiterStatus",
+            value="Index waiter ensures OpenSearch index is fully ready before Knowledge Base creation",
+            description="Status of index readiness validation"
+        )
+
 
         CfnOutput(
             self, "CoachingAPIGatewayID",
@@ -2251,7 +2326,7 @@ class InsuranceCdkStack(Stack):
             description="CloudFront Distribution ARN"
         )
 
-    def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_prefix: str, index_name: str, index_creator_function: lambda_.Function, index_creator: CustomResource, provider: cr.Provider, collection_arn: str, data_access_policy: opensearch.CfnAccessPolicy):
+    def create_kb(self, name: str, s3_uri: str, model_arn: str, role_arn: str, data_prefix: str, index_name: str, index_creator_function: lambda_.Function, index_creator: CustomResource, provider: cr.Provider, collection_arn: str, data_access_policy: opensearch.CfnAccessPolicy, index_waiter: CustomResource = None, index_waiter_function: lambda_.Function = None, index_waiter_provider: cr.Provider = None):
         """Create a Bedrock Knowledge Base with data source"""
         
         # Create Knowledge Base
@@ -2282,6 +2357,14 @@ class InsuranceCdkStack(Stack):
         kb.node.add_dependency(index_creator_function)
         kb.node.add_dependency(provider)
         kb.node.add_dependency(data_access_policy)
+        
+        # Add index waiter dependencies if provided
+        if index_waiter:
+            kb.node.add_dependency(index_waiter)
+        if index_waiter_function:
+            kb.node.add_dependency(index_waiter_function)
+        if index_waiter_provider:
+            kb.node.add_dependency(index_waiter_provider)
 
         # Add data source to the Knowledge Base
         data_source = bedrock.CfnDataSource(
