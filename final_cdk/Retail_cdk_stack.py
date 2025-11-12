@@ -222,10 +222,11 @@ class LambdaLayerUploader(Construct):
 
 class RetailCdkStack(Stack):
 
-    def __init__(self, scope: Construct, construct_id: str, stack_selection: str = "unknown", **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, stack_selection: str = "unknown", chat_tool_model: str = "us.amazon.nova-pro-v1:0", **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         
-        # Store the selection for use throughout the stack
+        # Store the selection and model for use throughout the stack
+        self.chat_tool_model = chat_tool_model
         self.stack_selection = stack_selection
         print(f"🏗️ Building Retail Stack with selection: {self.stack_selection}")
 
@@ -1156,7 +1157,8 @@ class RetailCdkStack(Stack):
             environment={
                 "OPENSEARCH_ENDPOINT": retail_collection.attr_collection_endpoint,
                 "COLLECTION_NAME": retail_collection_name,
-                "INDEX_NAME": retail_index_name
+                "INDEX_NAME": retail_index_name,
+                "chat_tool_model": self.chat_tool_model
             },
         )
 
@@ -1172,7 +1174,8 @@ class RetailCdkStack(Stack):
             environment={
                 "OPENSEARCH_ENDPOINT": retail_collection.attr_collection_endpoint,
                 "COLLECTION_NAME": retail_collection_name,
-                "INDEX_NAME": retail_index_name
+                "INDEX_NAME": retail_index_name,
+                "chat_tool_model": self.chat_tool_model
             },
         )
         # Add dependency to ensure collection and name generation is complete before Lambda runs
@@ -1241,7 +1244,8 @@ class RetailCdkStack(Stack):
             environment={
                 "OPENSEARCH_ENDPOINT": visual_search_collection.attr_collection_endpoint,
                 "COLLECTION_NAME": f"visualproductsearch-{name_key}",
-                "INDEX_NAME": f"visualproductsearchmod-{name_key}"
+                "INDEX_NAME": f"visualproductsearchmod-{name_key}",
+                "chat_tool_model": self.chat_tool_model
             },
         )
         
@@ -1372,7 +1376,8 @@ class RetailCdkStack(Stack):
             "rds_endpoint": db_instance.instance_endpoint.hostname,
             "rds_port": str(db_instance.instance_endpoint.port),
             "rds_database": rds_name_key,
-            "rds_username": "postgres"
+            "rds_username": "postgres",
+            "chat_tool_model": self.chat_tool_model
         }
 
         # Dependencies will be added after Lambda functions are defined
@@ -1528,6 +1533,7 @@ class RetailCdkStack(Stack):
         data_ingestion_function.add_environment("BUCKET_NAME", s3_bucket_name)
         data_ingestion_function.add_environment("S3_PREFIX", "visualproductsearch")
         data_ingestion_function.add_environment("CLAUDE_MODEL_ID", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+        data_ingestion_function.add_environment("chat_tool_model", self.chat_tool_model)
 
 
         bucket.grant_read(data_ingestion_function)
@@ -1692,6 +1698,7 @@ class RetailCdkStack(Stack):
             environment={
                 "RETAIL_KB_ID": retail_kb.attr_knowledge_base_id,
                 "RETAIL_DS_ID": retail_kb.data_source_id,
+                "chat_tool_model": self.chat_tool_model
             },
             code=lambda_.Code.from_asset(str(lambda_dir))
         )
@@ -1710,10 +1717,11 @@ class RetailCdkStack(Stack):
             environment={
                 "RETAIL_KB_ID": retail_kb.attr_knowledge_base_id,
                 "RETAIL_DS_ID": retail_kb.data_source_id,
+                "chat_tool_model": self.chat_tool_model
             },
             code=lambda_.Code.from_asset(str(lambda_dir))
-        )   
-        
+        )
+
         # Add dependencies to ensure Knowledge Bases are created before initial sync
         initial_sync_function.node.add_dependency(retail_kb)
         initial_sync_function.node.add_dependency(retail_kb_deploy)

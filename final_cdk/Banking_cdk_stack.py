@@ -293,10 +293,11 @@ class LambdaLayerUploader(Construct):
 s3_name = "genai-foundry-test"
 class BankingCdkStack(Stack):
 
-    def __init__(self, scope: Construct, construct_id: str, stack_selection: str = "unknown", **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, stack_selection: str = "unknown", chat_tool_model: str = "us.amazon.nova-pro-v1:0", **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         
-        # Store the selection for use throughout the stack
+        # Store the selection and model for use throughout the stack
+        self.chat_tool_model = chat_tool_model
         self.stack_selection = stack_selection
         print(f"🏗️ Building Banking Stack with selection: {self.stack_selection}")
 
@@ -714,7 +715,8 @@ class BankingCdkStack(Stack):
             environment={
                 "OPENSEARCH_ENDPOINT": banking_collection.attr_collection_endpoint,
                 "COLLECTION_NAME": banking_collection_name,
-                "INDEX_NAME": banking_index_name
+                "INDEX_NAME": banking_index_name,
+                "chat_tool_model": self.chat_tool_model
             },
             layers=[
                 lambda_.LayerVersion(
@@ -743,7 +745,8 @@ class BankingCdkStack(Stack):
             environment={
                 "OPENSEARCH_ENDPOINT": banking_collection.attr_collection_endpoint,
                 "COLLECTION_NAME": banking_collection_name,
-                "INDEX_NAME": banking_index_name
+                "INDEX_NAME": banking_index_name,
+                "chat_tool_model": self.chat_tool_model
             },
             layers=[
                 lambda_.LayerVersion(
@@ -848,6 +851,7 @@ class BankingCdkStack(Stack):
             environment={
                 "BANKING_KB_ID": banking_kb.attr_knowledge_base_id,
                 "BANKING_DS_ID": banking_kb.data_source_id,
+                "chat_tool_model": self.chat_tool_model
             },
             code=lambda_.Code.from_asset(str(lambda_dir))
         )
@@ -865,6 +869,7 @@ class BankingCdkStack(Stack):
             environment={
                 "BANKING_KB_ID": banking_kb.attr_knowledge_base_id,
                 "BANKING_DS_ID": banking_kb.data_source_id,
+                "chat_tool_model": self.chat_tool_model
             },
             code=lambda_.Code.from_asset(str(lambda_dir))
         )
@@ -1345,7 +1350,8 @@ class BankingCdkStack(Stack):
             "rds_endpoint": db_instance.instance_endpoint.hostname,
             "rds_port": str(db_instance.instance_endpoint.port),
             "rds_database": rds_name_key,
-            "rds_username": "postgres"
+            "rds_username": "postgres",
+            "chat_tool_model": self.chat_tool_model
         }
 
         # Create Lambda function

@@ -23,13 +23,25 @@ def create_cdk_app():
     
     # Get the selection from environment variable (set by deploy.py)
     stack_selection = os.getenv('CDK_STACK_SELECTION', 'unknown')
+    model_selection = os.getenv('CDK_MODEL_SELECTION', 'Nova')  # Default to Nova if not set
+    
+    # Map model selection to model ID
+    model_id_map = {
+        'Nova': 'us.amazon.nova-pro-v1:0',
+        'Claude': 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+    }
+    chat_tool_model = model_id_map.get(model_selection, 'us.amazon.nova-pro-v1:0')
+    
     print(f"🔧 CDK Stack Selection: {stack_selection}")
+    print(f"🤖 Model Selection: {model_selection}")
+    print(f"🔧 Chat Tool Model: {chat_tool_model}")
     
     # Create Banking Stack
     BankingCdkStack(
         app,
         "GenAiFoundryBankingStack",
         stack_selection=stack_selection,  # Pass selection to stack
+        chat_tool_model=chat_tool_model,  # Pass model ID to stack
         env=cdk.Environment(
             account=os.getenv('CDK_DEFAULT_ACCOUNT'),
             region=os.getenv('CDK_DEFAULT_REGION')
@@ -41,6 +53,7 @@ def create_cdk_app():
         app,
         "GenAiFoundryInsuranceStack",
         stack_selection=stack_selection,  # Pass selection to stack
+        chat_tool_model=chat_tool_model,  # Pass model ID to stack
         env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION'))
     )
     
@@ -49,6 +62,7 @@ def create_cdk_app():
         app,
         "GenAiFoundryRetailStack",
         stack_selection=stack_selection,  # Pass selection to stack
+        chat_tool_model=chat_tool_model,  # Pass model ID to stack
         env=cdk.Environment(
             account=os.getenv('CDK_DEFAULT_ACCOUNT'),
             region=os.getenv('CDK_DEFAULT_REGION')
@@ -60,6 +74,7 @@ def create_cdk_app():
         app,
         "GenAiFoundryHealthcareStack",
         stack_selection=stack_selection,  # Pass selection to stack
+        chat_tool_model=chat_tool_model,  # Pass model ID to stack
         env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION'))
     )
     return app
