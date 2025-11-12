@@ -25,6 +25,7 @@ db_host = os.environ['db_host']
 db_port = os.environ['db_port']
 db_database = os.environ['db_database']
 region_used = os.environ["region_used"]
+chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
 # Get new environment variables for voice operations
 region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
 voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
@@ -3379,7 +3380,7 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
 
     elif event_type == 'kyc_extraction':
         return kyc_extraction_api(event)
-    if event_type == 'voiceops':
+    elif event_type == 'voiceops':
         try:
             url =f"http://{ec2_instance_ip}:8000/transcribe"
             kb_id=''
@@ -3470,7 +3471,7 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
                     'error': str(e)
                 })
             }
-    if event_type == "generate_summary":     
+    elif event_type == "generate_summary":     
         
         print("SUMMARY GENERATION ")
         session_id = event["session_id"]
@@ -3505,7 +3506,7 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
 	-IMPORTANT: keep the summary in 2-3 lines
         
         Detailed Summary:
-        - Provide a clear summary of the conversation, capturing the customer's needs, questions, and any recurring themes.
+        - Provide a clear summary of the conversation, capturing the customer’s needs, questions, and any recurring themes.
 	- IMPORTANT: keep the summary in 2-3 lines keep it short
 
         
@@ -3546,14 +3547,14 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
 	Follow the structure of the sample WhatsApp message below:
 	<format_for_whatsapp_message>
 
-Hi, Thanks for reaching out to AnyBank! 
+Hi, Thanks for reaching out! 
 
-You had a query about [Inquiry Topic]. Here's what you can do next:
+You had a query about [Inquiry Topic]. Here’s what you can do next:
 
 1. [Step 1]  
 2. [Step 2]
 
-If you'd like, I can personally help you with [Offer/Action]. Just share your [Details Needed].
+If you’d like, I can personally help you with [Offer/Action]. Just share your [Details Needed].
 
 Looking forward to hearing from you soon.
 
@@ -3620,9 +3621,53 @@ these are the keys to be always used while returning response. Strictly do not a
         {prompt_template}
         '''
     
-        # - Ensure the email content is formatted correctly with new lines. USE ONLY "\n" for new lines. 
-        #         - Ensure the email content is formatted correctly for new lines instead of using new line characters.
-        response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
+        # Check if Nova model should be used for summary generation
+        selected_model = chat_tool_model
+        is_nova_model = (
+            selected_model == 'nova' or  # Exact match
+            selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+            selected_model.startswith('nova-') or  # Nova variant pattern
+            ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
+        )
+
+        import boto3
+        bedrock_client = boto3.client("bedrock-runtime", region_name=region_used)
+        
+        # Use appropriate API based on model type
+        if is_nova_model:
+            print(f"Using Nova model for summary generation: {selected_model}")
+            # Use Nova Converse API
+            response = bedrock_client.converse(
+                modelId=selected_model,
+                system=[
+                    {"text": prompt_template}
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": template}
+                        ]
+                    }
+                ],
+                inferenceConfig={
+                    "maxTokens": 4000,
+                    "temperature": 0.7
+                }
+            )
+            
+            # Extract Nova reply text
+            try:
+                out = response.get("output", {}).get("message", {}).get("content", [])[0].get("text", "")
+            except Exception as e:
+                print(f"Error extracting Nova response: {e}")
+                import traceback
+                print(f"Full traceback: {traceback.format_exc()}")
+                out = ""
+        else:
+            print(f"Using Claude model for summary generation: {model_id}")
+            # Use Claude invoke_model API (existing implementation)
+            response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
             "anthropic_version": "bedrock-2023-05-31",  
             "max_tokens": 4000,     
             "messages": [
@@ -3635,9 +3680,11 @@ these are the keys to be always used while returning response. Strictly do not a
             ],
         }), modelId=model_id)                                                                                                                       
     
-        inference_result = response['body'].read().decode('utf-8')
-        final = json.loads(inference_result)
-        out=final['content'][0]['text']
+            # Extract Claude reply text
+            inference_result = response['body'].read().decode('utf-8')
+            final = json.loads(inference_result)
+            out = final['content'][0]['text']
+        
         print(out)
         llm_out = extract_sections(out)
         
@@ -3759,7 +3806,8 @@ these are the keys to be always used while returning response. Strictly do not a
                 "statusCode" : 200,
                 "message" : "Summary Successfully Generated"
             }
-    if event_type == 'list_chat_summary':
+
+    elif event_type == 'list_chat_summary':
         session_id = event['session_id']
         chat_query = f'''
         SELECT question,answer
