@@ -642,6 +642,9 @@ def transcribe_audio():
         # print("QQQQQQQQQQQQQQQQQQQQQ", request.json)
         data_aud = request.json
         session_id = data_aud.get('session_id')
+        chat_model=data_aud.get('chat_model')
+        print("TESTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT")
+        print("chat_model",chat_model)
         print("SESSSSSIIOONN", session_id)
         connection_id = data_aud.get("connection_id")
         connection_url = data_aud.get("connection_url")
@@ -658,6 +661,7 @@ def transcribe_audio():
         # t_language = request.form.get('language')
         # trans_type = request.form.get('type', 'llm') 
         box_type = data_aud.get('box_type')
+
         print("box_type",box_type)
         session_awsss = boto3.Session(region_name=total_region)
 
@@ -699,7 +703,7 @@ def transcribe_audio():
         chat = result
         connectionId = request.form.get('connectionId', 'default-conn-id')
         print("Calling knowledge_base_retrieve_and_generate with transcription...")
-        answer = knowledge_base_retrieve_and_generate(chat, session_id, kb_id, box_type, prompt_template_front, db_cred, total_region)
+        answer = knowledge_base_retrieve_and_generate(chat, session_id, kb_id, box_type, prompt_template_front, db_cred, total_region, chat_model)
         print("Knowledge base answer:", answer)
         
         # Clean up uploaded file immediately after processing
@@ -851,17 +855,17 @@ def upload_file_to_s3(file_path, bucket_name, object_key=None):
         print(f"Error uploading file: {e}")
         return False
 
-def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prompt_template, db_cred, region):
+def knowledge_base_retrieve_and_generate(query, session_id, kb_id, box_type, prompt_template, db_cred, region, chat_model=None):
     print("aaaaaaaaaaaaaaaa", db_host, db_database, db_password)
+    # Bedrock models are in us-east-1, but knowledge base might be in different region
+    # Use the region parameter for the client (should match KB region)
     retrieve_client = boto3.client(
-    'bedrock-agent-runtime',
-    region_name=region,
-
-)
+        'bedrock-agent-runtime',
+        region_name=region
+    )
     try:
         print("IN KNOWLEDGE BASE RETRIEVE AND GENERATE:", query)
-        
-
+        print(f"Using chat_model: {chat_model}")
         
         # Get configuration from voicebot_meta table based on box_type
         try:
@@ -913,51 +917,99 @@ def knowledge_base_retrieve_and_generate(query, session_id,kb_id, box_type, prom
                     chat_history_context = "\n".join(history_parts) + "\n\nCurrent Question: "
                     print(f"✅ Retrieved chat history from {schema}.{chat_table_name}")
             except Exception as e:
-                print(f"❌ Error fetching chat history: {e}")
+                print("Error fetching chat history: {e}")
         
         # Combine history context with current query
         full_query = chat_history_context + query if chat_history_context else query
         
-        # Use retrieve and generate with the knowledge base
-        # Construct proper model ARN for the region
-        model_arn = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+        # Determine model based on chat_model parameter
+        selected_model = chat_model if chat_model else "claude"
+        print(f"Using model from payload: {selected_model}")
         
-        # Debug logging
-        print(f"🔍 DEBUG: Using region: {region}")
-        print(f"🔍 DEBUG: Knowledge Base ID: {kb_id}")
-        print(f"🔍 DEBUG: Model ARN: {model_arn}")
-        print(f"🔍 DEBUG: Prompt template: {prompt_template[:100] if prompt_template else 'None'}...")
+        # Check if Nova model should be used (same logic as chat_tool)
+        is_nova_model = (
+            selected_model == 'nova' or  # Exact match
+            selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+            selected_model.startswith('nova-') or  # Nova variant pattern
+            ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
+        )
         
-        response = retrieve_client.retrieve_and_generate(
-            input={
-                'text': full_query
-            },
-            retrieveAndGenerateConfiguration={
-                'type': 'KNOWLEDGE_BASE',
-                'knowledgeBaseConfiguration': {
-                    'knowledgeBaseId': kb_id,
-                    'modelArn': model_arn,
-                    'retrievalConfiguration': {
-                        'vectorSearchConfiguration': {
-                            'numberOfResults': 10,
-                            'overrideSearchType': 'HYBRID'
-                        }
-                    },
-                    'generationConfiguration': {
-                        'inferenceConfig': {
-                            'textInferenceConfig': {
-                                'temperature': 0.1,
-                                'topP': 0.9,
-                                'maxTokens': 1000
+        # Use retrieve and generate with the knowledge base based on model type
+        if is_nova_model:
+            print(f"Using Nova model: {selected_model}")
+            # For Nova models, try using the model ARN format
+            # Note: Nova models may not be fully supported in retrieve_and_generate
+            # If this fails, we'll fall back to Claude
+            # Use amazon.nova-pro-v1:0 (without 'us.' prefix) in the ARN
+            nova_model_id = "us.amazon.nova-pro-v1:0"
+            try:
+                bedrock_request = {
+                    'input': {'text': full_query},
+                    'retrieveAndGenerateConfiguration': {
+                        'type': 'KNOWLEDGE_BASE',
+                        'knowledgeBaseConfiguration': {
+                            'knowledgeBaseId': kb_id,
+                            'modelArn':nova_model_id,
+                            'generationConfiguration': {
+                                'promptTemplate': {'textPromptTemplate': prompt_template},
+                                'inferenceConfig': {
+                                    'textInferenceConfig': {
+                                        'maxTokens': 400,
+                                        'temperature': 0.5,
+                                        'topP': 0.9
+                                    }
+                                }
+                            },
+                            'retrievalConfiguration': {
+                                'vectorSearchConfiguration': {
+                                    'numberOfResults': 5,
+                                    'overrideSearchType': 'HYBRID'
+                                }
                             }
-                        },
-                        'promptTemplate': {
-                            'textPromptTemplate': prompt_template if prompt_template else "You are a helpful assistant. Answer the user's question based on the provided context."
                         }
                     }
                 }
-            }
-        )
+                response = retrieve_client.retrieve_and_generate(**bedrock_request)
+            except Exception as nova_error:
+                print(f"❌ Nova model failed: {nova_error}")
+                print("⚠️ Falling back to Claude model")
+                # Fall back to Claude model
+                is_nova_model = False
+                selected_model = "claude"
+        
+        if not is_nova_model:
+            print(f"Using Claude model: {selected_model}")
+            model_id = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+            response = retrieve_client.retrieve_and_generate(
+                input={
+                    'text': full_query
+                },
+                retrieveAndGenerateConfiguration={
+                    'type': 'KNOWLEDGE_BASE',
+                    'knowledgeBaseConfiguration': {
+                        'knowledgeBaseId': kb_id,
+                        'modelArn':model_id,
+                        'retrievalConfiguration': {
+                            'vectorSearchConfiguration': {
+                                'numberOfResults': 10,
+                                'overrideSearchType': 'HYBRID'
+                            }
+                        },
+                        'generationConfiguration': {
+                            'inferenceConfig': {
+                                'textInferenceConfig': {
+                                    'temperature': 0.1,
+                                    'topP': 0.9,
+                                    'maxTokens': 1000
+                                }
+                            },
+                            'promptTemplate': {
+                                'textPromptTemplate': prompt_template
+                            }
+                        }
+                    }
+                }
+            )
         
         # Extract the generated answer
         generated_answer = response.get('output', {}).get('text', '')
@@ -1071,4 +1123,5 @@ def t_lang():
 if __name__ == '__main__':
     print("TESTTTTTTTT GAAA")
     app.run(host='0.0.0.0', port=8000)
+
 
