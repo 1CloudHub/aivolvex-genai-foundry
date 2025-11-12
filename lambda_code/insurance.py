@@ -866,6 +866,914 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
             "output_tokens": "0"
         }
 
+def nova_agent_invoke_tool(chat_history, session_id, chat, connectionId):
+    """
+    Nova model agent invoke tool function using AWS Bedrock Converse API.
+    Uses the same tools and logic as agent_invoke_tool but adapted for Nova Converse API.
+    """
+    try:
+        # Start keepalive thread
+        keepalive_thread = send_keepalive(connectionId, 30)
+        import uuid
+        import random
+        import re
+        
+        # Fetch base_prompt from the database (same as agent_invoke_tool)
+        select_query = f'''select base_prompt from {schema}.{prompt_metadata_table} where id =1;'''
+        base_prompt = f'''You are a Virtual Insurance Assistant, a helpful and accurate chatbot for insurance customers. You help customers with their insurance policies, claims, and related services.
+
+## CRITICAL INSTRUCTIONS:
+- **NEVER** reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
+- **NEVER** say "To answer your question about [topic], let me check our knowledge base" or similar phrases.
+- After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
+- If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
+- For general insurance questions, IMMEDIATELY use the faq_tool_schema tool WITHOUT any preliminary message.
+
+## CRN HANDLING RULES:
+- **NEVER** ask for CRN if it has already been provided in the conversation history
+- If CRN is available in the conversation, use it automatically for all tool calls
+- If user says "I gave you before" or similar, acknowledge and proceed with the stored CRN
+- Only ask for CRN if it's completely missing from the conversation history
+- When CRN is provided, validate it matches the pattern CUST#### (e.g., CUST1001)
+
+## MANDATORY QUESTION COLLECTION RULES:
+- **ALWAYS** collect ALL required information for any tool before using it
+- **NEVER** skip any required questions, even if the user provides some information
+- **NEVER** assume or guess missing information
+- **NEVER** proceed with incomplete information
+- Ask questions ONE AT A TIME in this exact order:
+
+### For get_user_policies tool:
+1. CRN (Customer Reference Number) - if not already provided
+
+### For track_claim_status tool:
+1. CRN (Customer Reference Number) - if not already provided
+
+### For file_claim tool (ask in this exact order):
+1. CRN (Customer Reference Number) - if not already provided
+2. Policy ID (from user's active policies) - ALWAYS use get_user_policies tool first to show available policies, then ask which policy to use
+3. Claim Type 
+4. Date of Incident (accept any reasonable format)
+5. Claim Amount (e.g., 6500SGD, SGD 6500, 6500)
+6. Description (brief description of what happened)
+
+### For schedule_agent_callback tool (ask in this exact order):
+1. CRN (Customer Reference Number) - if not already provided
+2. Reason for callback request
+3. Preferred time slot (e.g., '13 July, 2-4pm')
+4. Preferred contact method (phone or email)
+
+## CALLBACK SCHEDULING RULES:
+- When a user requests an agent callback, IMMEDIATELY start collecting required information
+- Ask ONLY ONE question at a time in this exact order:
+  1. Reason for callback request (e.g., "What would you like to discuss with our agent?")
+  2. Preferred time slot (e.g., "When would you prefer the callback?")  
+  3. Preferred contact method (e.g., "Would you prefer to be contacted by phone or email?")
+- Do NOT assume or guess any of these values
+- Do NOT use random dates, times, or contact methods
+- Do NOT proceed until ALL information is collected
+- **NEVER** automatically schedule with hardcoded values like "13 July, 2-4pm"
+- **NEVER** assume the user wants a specific time or contact method
+
+## INPUT VALIDATION RULES:
+- **NEVER** ask for the same information twice in a session
+- Accept any reasonable date format (July 19, 2025, 19/07/2025, 2025-07-19, etc.)
+- Accept any reasonable claim amount format (6500SGD, SGD 6500, 6500, etc.)
+- Accept any reasonable claim type
+- **NEVER** ask for specific formats - accept what the user provides
+- If validation fails, provide a clear, specific error message with examples
+
+##NATURAL DATE INTERPRETATION RULE:
+- When collecting a date or time-related input, accept natural expressions such as:
+	
+	"yesterday", "today", "tomorrow", "last night", etc.
+	
+- Convert these into actual calendar dates based on the current date.
+	
+- If a time of day is mentioned (e.g., "yesterday evening"), assign a random time in that time range:
+	
+	Morning: 8am–12pm
+	
+	Afternoon: 1pm–5pm
+	
+	Evening: 6pm–9pm
+	
+	Night: 9pm–11pm
+	
+- Examples:
+	
+	"yesterday" → 2025-07-30
+	
+	"today afternoon" → 2025-07-31, 2:34 PM (randomized)
+	
+	"tomorrow morning" → 2025-08-01, 9:12 AM (randomized)
+
+## Tool Usage Rules:
+- When a user asks about coverage, benefits, policy details, or general insurance questions, IMMEDIATELY use the faq_tool_schema tool
+- Do NOT announce that you're using the tool or searching for information
+- Simply use the tool and provide the direct answer from the knowledge base
+- If the knowledge base doesn't have the information, say "I don't have specific information about that in our current knowledge base. Let me schedule a callback with one of our agents who can provide detailed information."
+
+## Response Format:
+- ALWAYS answer in the shortest, most direct way possible
+- Do NOT add extra greetings, confirmations, or explanations
+- Do NOT mention backend systems or tools
+- Speak naturally as a helpful insurance representative who already knows the information
+- After every completed tool call (such as filing a claim, tracking a claim, or scheduling a callback), always include a clear summary of all user-provided inputs involved in that flow, followed by the final result (e.g., Claim ID, callback confirmation, etc.).
+
+	The summary must include:
+	
+	All collected fields in the order they were asked
+	
+	The tool output (e.g., Claim ID or confirmation)
+	
+	Example (for a filed claim):
+	Your claim has been submitted.
+	- CRN: CUST1001
+	- Policy ID: POL12345
+	- Claim Type: Accident
+	- Date of Incident: July 19, 2025
+	- Claim Amount: 6500SGD
+	- Description: Got hit by train
+	- Claim ID: CLM45829
+
+Available Tools:
+1. get_user_policies - Retrieve active insurance policies for a customer
+2. track_claim_status - Check the status of insurance claims
+3. file_claim - Submit a new insurance claim
+4. schedule_agent_callback - Schedule a callback from a human agent
+5. faq_tool_schema - Retrieve answers from the insurance knowledge base
+
+## SYSTEMATIC QUESTION COLLECTION:
+- When a user wants to file a claim OR schedule a callback, IMMEDIATELY start collecting required information
+- Ask ONLY ONE question at a time
+- After each user response, check what information is still missing
+- Ask for the NEXT missing required field (in the exact order listed above)
+- Do NOT ask multiple questions in one message
+- Do NOT skip any required questions
+- Do NOT proceed until ALL required information is collected
+
+## EXAMPLES OF CORRECT BEHAVIOR:
+
+### Filing a Claim:
+User: "I want to file a claim"
+Assistant: "I'll help you file a claim. What is your Customer Reference Number (CRN)?"
+
+User: "CUST1001"
+Assistant: [Use get_user_policies tool and display policies directly]
+You have two active policies:
+POL1001: MediPlus Secure (Health) - Coverage: SGD 150,000/year
+POL1002: LifeSecure Term Advantage (Life) - Coverage: SGD 500,000
+Which policy ID would you like to use for your claim?
+
+User: "POL1001"
+Assistant: "What type of claim is this?"
+
+User: "Accident"
+Assistant: "What was the date of the incident?"
+
+User: "July 19, 2025"
+Assistant: "What amount are you claiming?"
+
+User: "6500SGD"
+Assistant: "Please provide a brief description of what happened."
+
+User: "Got hit by train"
+Assistant: [Use file_claim tool with all collected information]
+
+### Scheduling a Callback:
+User: "I want to schedule an agent callback"
+Assistant: "What would you like to discuss with our agent?"
+
+User: "I need help with my policy coverage"
+Assistant: "When would you prefer the callback?"
+
+User: "Tomorrow morning"
+Assistant: "Would you prefer to be contacted by phone or email?"
+
+User: "Phone"
+Assistant: [Use schedule_agent_callback tool with all collected information]
+
+## EXAMPLES OF INCORRECT BEHAVIOR:
+- ❌ "What's your CRN, policy ID, claim type, date, amount, and description?" (asking multiple questions)
+- ❌ Skipping any required questions
+- ❌ Proceeding with incomplete information
+- ❌ Asking for the same information twice
+- ❌ Using hardcoded values like "13 July, 2-4pm" without asking the user
+- ❌ Assuming contact method or time preferences
+
+## CRITICAL SESSION MEMORY RULES:
+- When a user provides a CRN and asks to see their policies, check coverage, or similar, IMMEDIATELY use the get_user_policies tool with their CRN. Do NOT thank, confirm, or repeat the user's request—just use the tool and return the result.
+- When a user asks about claim status, IMMEDIATELY use the track_claim_status tool with their CRN.
+- When a user wants to file a new claim, IMMEDIATELY start collecting required information in the exact order specified above.
+- When collecting information for a tool (such as filing a claim OR scheduling a callback), ALWAYS ask for only ONE missing required field at a time.
+- NEVER ask for more than one piece of information in a single message.
+- After the user answers, check which required field is still missing, and ask for only that field next.
+- Do NOT list multiple questions or fields in a single message, even if several are missing.
+- If the user provides more than one field in their answer, acknowledge all provided info, then ask for the next missing field (one at a time).
+- If all required fields are provided, proceed to use the tool and summarize the result.
+
+## POLICY DISPLAY RULES FOR CLAIMS:
+- When a user wants to file a claim and provides their CRN, IMMEDIATELY use the get_user_policies tool to retrieve and display their active policies
+- Do NOT say "Let me check your active policies first" or similar phrases
+- Directly display the policy details in a clear format showing Policy ID, Plan Name, Policy Type, and Coverage Amount
+- After displaying the policies, ask "Which policy ID would you like to use for your claim?"
+- NEVER mention checking, looking up, or finding information - just display the policies directly
+
+## FIELD COLLECTION PERSISTENCE:
+- For each required field, use the user's first answer as the value for that field. Do NOT ask for the same field again, even if later user messages contain related or similar information.
+- If the user provides additional information after a required field has already been answered, treat it as context or as the answer to the next required field, NOT as a replacement for a previous answer.
+- Do NOT reinterpret or overwrite a previously collected answer for any required field.
+- Only ask for a required field if it has not already been answered in this session.
+
+## SESSION CONTINUITY:
+- Once the user provides their CRN and policy, REMEMBER them for the entire session. Use the same CRN and policy for all subsequent tool calls and do NOT ask for them again, even if the user initiates multiple requests or cases in the same session, or if their answer is ambiguous or short.
+- If the user's answer is unclear, make your best guess based on previous context, but do NOT re-ask for information you already have.
+- If you are unsure, always proceed with the most recently provided value for each required field.
+- Do NOT repeat questions that have already been answered. Only ask for information that is still missing.
+- Stay focused and do not ask for the same information more than once per session.
+
+## INPUT ACCEPTANCE RULES:
+- Do NOT validate, reject, or question the user's input for required fields (such as dates, claim amounts, etc.). Accept any value the user provides and proceed to the next required field.
+- Do NOT comment on whether a date is in the past or future. Simply record the value and continue.
+- If the user provides a value that seems unusual, do NOT ask for clarification or corrections—just accept the input and move on.
+- NEVER ask for a date in a specific format (such as 'DD_MM_YYYY?'). When you need a date, simply ask plainly for the date (e.g., 'When did the incident occur?'), without specifying a format in the question.
+
+## RESPONSE GUIDELINES:
+- For general insurance questions, IMMEDIATELY use the faq_tool_schema tool.
+- ALWAYS answer in the shortest, most direct way possible. Do NOT add extra greetings, confirmations, or explanations.
+- Do NOT mention backend systems or tools. Speak naturally as a helpful insurance representative.
+- If a user provides a CRN and asks about their policies, use the get_user_policies tool immediately, without further confirmation.
+- After using a tool, ALWAYS provide a short, direct summary of the result to the user. Do not leave the user without a response.
+- NEVER reply with messages like "I'm thinking", "Let me check", "I'll look up your policies", "One moment", "Please wait", or any similar filler or placeholder text.
+- ONLY reply with:
+    - The next required question if you need more information from the user (ask one question at a time, never multiple).
+    - The direct answer or result after using a tool.
+    - A short, direct summary of the tool result.
+- Do NOT add extra confirmations, explanations, or conversational filler.
+- Do NOT mention backend systems, tools, or your own reasoning process.
+- Speak naturally and concisely, as a helpful insurance representative.
+- Handle greetings warmly and ask how you can help with their insurance needs today.
+'''
+        
+        # Insurance tool schema - converted to Nova's toolSpec format
+        insurance_tools_nova = [
+            {
+                "toolSpec": {
+                    "name": "get_user_policies",
+                    "description": "Retrieve active insurance policies for a customer based on their CRN",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "crn": {"type": "string", "description": "Customer Reference Number (e.g., CUST1001)"}
+                            },
+                            "required": ["crn"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "track_claim_status",
+                    "description": "Check the status of insurance claims for a customer",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "crn": {"type": "string", "description": "Customer Reference Number (e.g., CUST1001)"}
+                            },
+                            "required": ["crn"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "file_claim",
+                    "description": "Submit a new insurance claim",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "crn": {"type": "string", "description": "Customer Reference Number"},
+                                "policy_id": {"type": "string", "description": "Policy ID from user's active policies"},
+                                "claim_type": {"type": "string", "description": "Type of claim "},
+                                "date_of_incident": {"type": "string", "description": "Date of the incident (YYYY-MM-DD format)"},
+                                "claim_amount": {"type": "string", "description": "Claimed amount (e.g., SGD 12000)"},
+                                "description": {"type": "string", "description": "Brief description of what happened"}
+                            },
+                            "required": ["crn", "policy_id", "claim_type", "date_of_incident", "claim_amount", "description"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "schedule_agent_callback",
+                    "description": "Schedule a callback from a human insurance agent",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "crn": {"type": "string", "description": "Customer Reference Number"},
+                                "reason": {"type": "string", "description": "Reason for callback request"},
+                                "preferred_timeslot": {"type": "string", "description": "Preferred time slot (e.g., '2-4pm')"},
+                                "preferred_contact_method": {"type": "string", "description": "Preferred contact method (phone or email)"}
+                            },
+                            "required": ["crn", "reason", "preferred_timeslot", "preferred_contact_method"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "faq_tool_schema",
+                    "description": "Retrieve answers from the insurance knowledge base",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "knowledge_base_retrieval_question": {"type": "string", "description": "A question to retrieve from the insurance knowledge base."}
+                            },
+                            "required": ["knowledge_base_retrieval_question"]
+                        }
+                    }
+                }
+            }
+        ]
+
+        # --- Mock tool implementations (same as agent_invoke_tool) ---
+        def get_user_policies(crn):
+            mock_policies = {
+                "CUST1001": [
+                    {"policy_id": "POL1001", "plan_name": "MediPlus Secure", "policy_type": "Health", "coverage_amount": "SGD 150,000/year", "start_date": "2022-04-15", "premium_amount": "SGD 120", "next_premium_due": get_dynamic_date(3), "status": "Active"},
+                    {"policy_id": "POL1002", "plan_name": "LifeSecure Term Advantage", "policy_type": "Life", "coverage_amount": "SGD 500,000", "start_date": "2021-09-10", "premium_amount": "SGD 95", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ],
+                "CUST1002": [
+                    {"policy_id": "POL2001", "plan_name": "FamilyCare Protect", "policy_type": "Family", "coverage_amount": "SGD 250,000", "start_date": "2023-01-05", "premium_amount": "SGD 290", "next_premium_due": get_dynamic_date(3), "status": "Active"},
+                    {"policy_id": "POL2002", "plan_name": "ActiveShield PA", "policy_type": "Accident", "coverage_amount": "SGD 100,000", "start_date": "2022-08-22", "premium_amount": "SGD 40", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ],
+                "CUST1003": [
+                    {"policy_id": "POL3001", "plan_name": "SilverShield Health", "policy_type": "Senior", "coverage_amount": "SGD 100,000/year", "start_date": "2021-11-30", "premium_amount": "SGD 320", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ],
+                "CUST1004": [
+                    {"policy_id": "POL4001", "plan_name": "MediPlus Secure", "policy_type": "Health", "coverage_amount": "SGD 150,000/year", "start_date": "2023-03-18", "premium_amount": "SGD 120", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ],
+                "CUST1005": [
+                    {"policy_id": "POL5001", "plan_name": "LifeSecure Term Advantage", "policy_type": "Life", "coverage_amount": "SGD 300,000", "start_date": "2020-06-25", "premium_amount": "SGD 85", "next_premium_due": get_dynamic_date(3), "status": "Active"}
+                ]
+            }
+            return mock_policies.get(crn, [])
+
+        def track_claim_status(crn):
+            mock_claims = {
+                "CUST1001": [
+                    {"claim_id": "CLM1001", "policy_id": "POL1001", "claim_type": "Hospitalisation", "claim_status": "Under Review", "claim_amount": "SGD 12,000", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Awaiting final approval from claims officer"},
+                    {"claim_id": "CLM1002", "policy_id": "POL1002", "claim_type": "Terminal Illness", "claim_status": "Submitted", "claim_amount": "SGD 250,000", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Doctor's certification under verification"}
+                ],
+                "CUST1002": [
+                    {"claim_id": "CLM2001", "policy_id": "POL2002", "claim_type": "Accident Medical", "claim_status": "Approved", "claim_amount": "SGD 7,500", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Payout issued to registered bank account"},
+                    {"claim_id": "CLM2002", "policy_id": "POL2001", "claim_type": "Outpatient Family Cover", "claim_status": "Submitted", "claim_amount": "SGD 4,200", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Pending document verification"}
+                ],
+                "CUST1003": [
+                    {"claim_id": "CLM3001", "policy_id": "POL3001", "claim_type": "Hospitalisation", "claim_status": "Rejected", "claim_amount": "SGD 9,200", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Missing discharge summary and itemised bill"}
+                ],
+                "CUST1004": [
+                    {"claim_id": "CLM4001", "policy_id": "POL4001", "claim_type": "Hospitalisation", "claim_status": "Submitted", "claim_amount": "SGD 6,800", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Documents received, pending review"}
+                ],
+                "CUST1005": [
+                    {"claim_id": "CLM5001", "policy_id": "POL5001", "claim_type": "Death", "claim_status": "Under Review", "claim_amount": "SGD 300,000", "date_filed": get_dynamic_date(2), "last_updated": get_dynamic_date(3), "remarks": "Awaiting legal verification and supporting documents"}
+                ]
+            }
+            return mock_claims.get(crn, [])
+
+        def file_claim(crn, policy_id, claim_type, date_of_incident, claim_amount, description):
+            claim_id = f"CLM{str(uuid.uuid4())[:4].upper()}"
+            return {
+                "claim_id": claim_id,
+                "status": "Submitted",
+                "remarks": "Your claim has been submitted. Our team will review it, and an agent will reach out to you shortly."
+            }
+
+        def schedule_agent_callback(crn, reason, preferred_timeslot, preferred_contact_method):
+            return {
+                "status": "Scheduled",
+                "scheduled_for": preferred_timeslot,
+                "remarks": f"An agent will reach out to you via {preferred_contact_method} during your selected time window."
+            }
+
+        input_tokens = 0
+        output_tokens = 0
+        print("In nova_agent_invoke_tool (Insurance Bot - Nova)")
+        
+        # Extract CRN from chat history (same as agent_invoke_tool)
+        extracted_crn = None
+        for message in chat_history:
+            if message['role'] == 'user':
+                content_text = message['content'][0]['text']
+                crn_match = re.search(r'\b(CUST\d{4})\b', content_text.upper())
+                if crn_match:
+                    extracted_crn = crn_match.group(1)
+                    print(f"Extracted CRN from chat history: {extracted_crn}")
+                    break
+        
+        # Enhance system prompt with CRN context
+        if extracted_crn:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's CRN is {extracted_crn}. Use this CRN automatically for any tool calls that require it without asking again."
+            print(f"Enhanced prompt with CRN: {extracted_crn}")
+        else:
+            enhanced_prompt = base_prompt
+        
+        # Convert chat history format for Nova Converse API
+        message_history = []
+        for msg in chat_history:
+            if msg['role'] in ['user', 'assistant']:
+                content_items = msg.get('content', [])
+                text_content = None
+                
+                if isinstance(content_items, list) and len(content_items) > 0:
+                    for content_item in content_items:
+                        if isinstance(content_item, dict):
+                            if 'type' in content_item and content_item['type'] == 'text':
+                                text_content = content_item.get('text', '')
+                                break
+                            elif 'text' in content_item:
+                                text_content = content_item['text']
+                                break
+                
+                if text_content and text_content.strip():
+                    message_history.append({
+                        'role': msg['role'],
+                        'content': [{'text': text_content.strip()}]
+                    })
+        
+        print("Nova Model - Chat History: ", message_history)
+        
+        # Nova model configuration
+        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_region = os.environ.get("region_used", region_used)
+        nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
+        
+        # First API call to get initial response
+        try:
+            response = nova_bedrock_client.converse(
+                modelId=nova_model_name,
+                messages=message_history,
+                system=[{"text": enhanced_prompt}],
+                inferenceConfig={
+                    "temperature": 0,
+                    "topP": 0.9
+                },
+                toolConfig={
+                    "tools": insurance_tools_nova
+                }
+            )
+            
+            print("Nova Model Response: ", response)
+            
+            # Parse the response
+            assistant_response = []
+            output_msg = (response.get('output') or {}).get('message') or {}
+            content_items = output_msg.get('content') or []
+            
+            for item in content_items:
+                if 'text' in item:
+                    # Filter out thinking tags from Nova responses (same behavior as Claude)
+                    text_content = item['text']
+                    # Remove thinking tags if present
+                    text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL)
+                    text_content = text_content.strip()
+                    # Only add non-empty text (after removing thinking tags)
+                    if text_content:
+                        assistant_response.append({"text": text_content})
+                elif 'toolUse' in item:
+                    tu = item['toolUse'] or {}
+                    assistant_response.append({
+                        "toolUse": {
+                            "name": tu.get('name'),
+                            "toolUseId": tu.get('toolUseId'),
+                            "input": tu.get('input', {})
+                        }
+                    })
+            
+            usage = response.get('usage') or {}
+            input_tokens = usage.get('inputTokens', 0)
+            output_tokens = usage.get('outputTokens', 0)
+            
+            # Append assistant response to chat history
+            message_history.append({'role': 'assistant', 'content': assistant_response})
+            
+            # Check if any tools were called
+            tool_calls = [a for a in assistant_response if 'toolUse' in a]
+            print("Nova Tool calls: ", tool_calls)
+            
+            if tool_calls:
+                # Process all tool calls (same logic as agent_invoke_tool)
+                tools_used = []
+                tool_results = []
+                
+                for tool_call_item in tool_calls:
+                    tool_call = tool_call_item['toolUse']
+                    tool_name = tool_call.get('name')
+                    tool_input = tool_call.get('input', {})
+                    tool_use_id = tool_call.get('toolUseId')
+                    tool_result = None
+                    
+                    tools_used.append(tool_name)
+                    
+                    # Send a heartbeat to keep WebSocket alive during tool execution (same as agent_invoke_tool)
+                    try:
+                        heartbeat = {'type': 'heartbeat'}
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                    except Exception as e:
+                        print(f"Heartbeat send error: {e}")
+                    
+                    # Execute the appropriate tool (same logic as agent_invoke_tool)
+                    if tool_name == 'get_user_policies':
+                        # Use CRN from tool_input or fallback to extracted CRN
+                        crn = tool_input.get('crn') or extracted_crn
+                        if not crn:
+                            tool_result = ["Error: Customer Reference Number (CRN) is required. Please provide your CRN."]
+                        else:
+                            tool_result = get_user_policies(crn)
+                    elif tool_name == 'track_claim_status':
+                        # Use CRN from tool_input or fallback to extracted CRN
+                        crn = tool_input.get('crn') or extracted_crn
+                        if not crn:
+                            tool_result = ["Error: Customer Reference Number (CRN) is required. Please provide your CRN."]
+                        else:
+                            tool_result = track_claim_status(crn)
+                    elif tool_name == 'file_claim':
+                        # Use CRN from tool_input or fallback to extracted CRN
+                        crn = tool_input.get('crn') or extracted_crn
+                        if not crn:
+                            tool_result = ["Error: Customer Reference Number (CRN) is required. Please provide your CRN."]
+                        else:
+                            tool_result = file_claim(
+                                crn,
+                                tool_input.get('policy_id', ''),
+                                tool_input.get('claim_type', ''),
+                                tool_input.get('date_of_incident', ''),
+                                tool_input.get('claim_amount', ''),
+                                tool_input.get('description', '')
+                            )
+                    elif tool_name == 'schedule_agent_callback':
+                        # Use CRN from tool_input or fallback to extracted CRN
+                        crn = tool_input.get('crn') or extracted_crn
+                        if not crn:
+                            tool_result = ["Error: Customer Reference Number (CRN) is required. Please provide your CRN."]
+                        else:
+                            tool_result = schedule_agent_callback(
+                                crn,
+                                tool_input.get('reason', ''),
+                                tool_input.get('preferred_timeslot', ''),
+                                tool_input.get('preferred_contact_method', '')
+                            )
+                    elif tool_name == 'faq_tool_schema':
+                        # Send another heartbeat before FAQ retrieval (same as agent_invoke_tool)
+                        try:
+                            heartbeat = {'type': 'heartbeat'}
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                        except Exception as e:
+                            print(f"FAQ heartbeat send error: {e}")
+                        
+                        tool_result = get_FAQ_chunks_tool(tool_input)
+                        
+                        # If FAQ tool returns empty or no results, provide fallback
+                        if not tool_result or len(tool_result) == 0:
+                            tool_result = ["I don't have specific information about that in our current knowledge base. Let me schedule a callback with one of our agents who can provide detailed information."]
+                    
+                    # Create tool result message (handle both strings and dictionaries) - same as agent_invoke_tool
+                    try:
+                        print(f"Tool result type: {type(tool_result)}")
+                        print(f"Tool result content: {tool_result}")
+                        
+                        # Handle different types of tool results (same logic as agent_invoke_tool)
+                        if isinstance(tool_result, list) and tool_result:
+                            if isinstance(tool_result[0], dict):
+                                # Format list of dictionaries (like policy data)
+                                formatted_results = []
+                                for item in tool_result:
+                                    if isinstance(item, dict):
+                                        formatted_item = []
+                                        for key, value in item.items():
+                                            formatted_item.append(f"{key.replace('_', ' ').title()}: {value}")
+                                        formatted_results.append("\n".join(formatted_item))
+                                    else:
+                                        formatted_results.append(str(item))
+                                content_text = "\n\n".join(formatted_results)
+                            else:
+                                # Handle list of strings
+                                content_text = "\n".join(str(item) for item in tool_result)
+                        else:
+                            content_text = str(tool_result) if tool_result else "No information available"
+                        
+                        # Create tool result block for Nova Converse API
+                        tool_result_block = {
+                            "toolResult": {
+                                "toolUseId": tool_use_id,
+                                "content": [{"text": content_text}],
+                                "status": "success"
+                            }
+                        }
+                        tool_results.append(tool_result_block)
+                        print(f"Tool response created successfully")
+                        
+                    except Exception as e:
+                        print(f"Error creating tool response: {e}")
+                        print(f"Tool result type: {type(tool_result)}")
+                        print(f"Tool result content: {tool_result}")
+                        import traceback
+                        print(f"Traceback: {traceback.format_exc()}")
+                        # Skip this tool result instead of crashing
+                        continue
+                
+                # Validate and add tool results to message history (same as agent_invoke_tool)
+                if tool_results:
+                    print(f"Tool results to validate: {tool_results}")
+                    # Validate tool results before adding to chat history
+                    valid_tool_results = []
+                    for tool_result in tool_results:
+                        print(f"Validating tool result: {tool_result}")
+                        if (tool_result and 
+                            isinstance(tool_result, dict) and 
+                            'toolResult' in tool_result and 
+                            tool_result['toolResult'].get('content') and 
+                            len(tool_result['toolResult']['content']) > 0 and
+                            tool_result['toolResult']['content'][0].get('text', '').strip()):
+                            valid_tool_results.append(tool_result)
+                            print(f"Tool result is valid: {tool_result}")
+                        else:
+                            print(f"Tool result is invalid: {tool_result}")
+                    
+                    # Only add tool results if we have valid ones
+                    if valid_tool_results:
+                        print(f"Adding {len(valid_tool_results)} valid tool results to chat history")
+                        message_history.append({
+                            "role": "user",
+                            "content": valid_tool_results
+                        })
+                    else:
+                        print("No valid tool results to add to chat history")
+                
+                # Make second API call with tool results
+                try:
+                    final_response = nova_bedrock_client.converse(
+                        modelId=nova_model_name,
+                        messages=message_history,
+                        system=[{"text": enhanced_prompt}],
+                        inferenceConfig={
+                            "temperature": 0,
+                            "topP": 0.9
+                        },
+                        toolConfig={
+                            "tools": insurance_tools_nova
+                        }
+                    )
+                    
+                    # Extract final answer (same logic as agent_invoke_tool - take first text response only)
+                    final_output_msg = (final_response.get('output') or {}).get('message') or {}
+                    final_content_items = final_output_msg.get('content') or []
+                    final_answer = ""
+                    
+                    # Take the first text response only (same as agent_invoke_tool line 2096-2101)
+                    for item in final_content_items:
+                        if 'text' in item:
+                            # Filter out thinking tags from Nova responses
+                            text_content = item['text']
+                            text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL)
+                            text_content = text_content.strip()
+                            if text_content:
+                                final_answer = text_content  # Take first text response only, don't concatenate
+                                break  # Break after first text response (same as agent_invoke_tool)
+                    
+                    # If no text response, provide fallback (same as agent_invoke_tool)
+                    if not final_answer:
+                        final_answer = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
+                    
+                    # Send response via WebSocket in streaming format (same as agent_invoke_tool)
+                    # Since Nova Converse API doesn't support streaming, simulate it by sending in chunks
+                    try:
+                        # Send the answer in chunks to simulate streaming (frontend expects content_block_delta format)
+                        words = final_answer.split()
+                        for i, word in enumerate(words):
+                            delta_message = {
+                                'type': 'content_block_delta',
+                                'index': 0,
+                                'delta': {
+                                    'type': 'text_delta',
+                                    'text': word + (' ' if i < len(words) - 1 else '')
+                                }
+                            }
+                            try:
+                                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta_message))
+                            except api_gateway_client.exceptions.GoneException:
+                                print(f"Connection {connectionId} is closed (GoneException) - delta message (Nova)")
+                            except Exception as e:
+                                print(f"WebSocket send error (delta, Nova): {e}")
+                        
+                        # Send content_block_stop message
+                        stop_message = {'type': 'content_block_stop', 'index': 0}
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_message))
+                        except api_gateway_client.exceptions.GoneException:
+                            print(f"Connection {connectionId} is closed (GoneException) - stop message (Nova)")
+                        except Exception as e:
+                            print(f"WebSocket send error (stop, Nova): {e}")
+                        
+                        # Send message_stop message (optional, but frontend may expect it)
+                        message_stop = {
+                            'type': 'message_stop',
+                            'amazon-bedrock-invocationMetrics': {
+                                'inputTokenCount': input_tokens,
+                                'outputTokenCount': output_tokens
+                            }
+                        }
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                        except api_gateway_client.exceptions.GoneException:
+                            print(f"Connection {connectionId} is closed (GoneException) - message_stop (Nova)")
+                        except Exception as e:
+                            print(f"WebSocket send error (message_stop, Nova): {e}")
+                    except Exception as e:
+                        print(f"Error sending WebSocket messages for Nova: {e}")
+                    
+                    # Update token counts
+                    final_usage = final_response.get('usage') or {}
+                    input_tokens += final_usage.get('inputTokens', 0)
+                    output_tokens += final_usage.get('outputTokens', 0)
+                    
+                    return {
+                        "statusCode": "200",
+                        "answer": final_answer if final_answer else "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team.",
+                        "question": chat,
+                        "session_id": session_id,
+                        "input_tokens": str(input_tokens),
+                        "output_tokens": str(output_tokens)
+                    }
+                    
+                except Exception as e:
+                    print(f"Error in final Nova response: {e}")
+                    import traceback
+                    print(f"Full traceback: {traceback.format_exc()}")
+                    error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+                    
+                    # Send error response via WebSocket (same as agent_invoke_tool)
+                    try:
+                        words = error_response.split()
+                        for i, word in enumerate(words):
+                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                            try:
+                                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                            except:
+                                pass
+                        stop_answer = {'type': 'content_block_stop', 'index': 0}
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                        except:
+                            pass
+                    except:
+                        pass
+                    
+                    return {
+                        "statusCode": "500",
+                        "answer": error_response,
+                        "question": chat,
+                        "session_id": session_id,
+                        "input_tokens": str(input_tokens),
+                        "output_tokens": str(output_tokens)
+                    }
+            else:
+                # No tools called, handle normal response (same logic as agent_invoke_tool)
+                answer_text = ""
+                for item in assistant_response:
+                    if 'text' in item:
+                        # Filter out thinking tags
+                        text_content = item['text']
+                        text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL)
+                        text_content = text_content.strip()
+                        if text_content:
+                            answer_text = text_content
+                            break  # Take first text response (same as agent_invoke_tool)
+                
+                # Fallback if no text response (same as agent_invoke_tool)
+                if not answer_text:
+                    answer_text = "I'm here to help with your insurance needs. How can I assist you today?"
+                
+                # Send response via WebSocket in streaming format (same as agent_invoke_tool)
+                # Since Nova Converse API doesn't support streaming, simulate it by sending in chunks
+                try:
+                    # Send the answer in chunks to simulate streaming (frontend expects content_block_delta format)
+                    words = answer_text.split()
+                    for i, word in enumerate(words):
+                        delta_message = {
+                            'type': 'content_block_delta',
+                            'index': 0,
+                            'delta': {
+                                'type': 'text_delta',
+                                'text': word + (' ' if i < len(words) - 1 else '')
+                            }
+                        }
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta_message))
+                        except api_gateway_client.exceptions.GoneException:
+                            print(f"Connection {connectionId} is closed (GoneException) - delta message (Nova, no tools)")
+                        except Exception as e:
+                            print(f"WebSocket send error (delta, Nova, no tools): {e}")
+                    
+                    # Send content_block_stop message
+                    stop_message = {'type': 'content_block_stop', 'index': 0}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_message))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - stop message (Nova, no tools)")
+                    except Exception as e:
+                        print(f"WebSocket send error (stop, Nova, no tools): {e}")
+                    
+                    # Send message_stop message (optional, but frontend may expect it)
+                    message_stop = {
+                        'type': 'message_stop',
+                        'amazon-bedrock-invocationMetrics': {
+                            'inputTokenCount': input_tokens,
+                            'outputTokenCount': output_tokens
+                        }
+                    }
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - message_stop (Nova, no tools)")
+                    except Exception as e:
+                        print(f"WebSocket send error (message_stop, Nova, no tools): {e}")
+                except Exception as e:
+                    print(f"Error sending WebSocket messages for Nova (no tools): {e}")
+                
+                return {
+                    "statusCode": "200",
+                    "answer": answer_text,
+                    "question": chat,
+                    "session_id": session_id,
+                    "input_tokens": str(input_tokens),
+                    "output_tokens": str(output_tokens)
+                }
+                
+        except Exception as e:
+            print("AN ERROR OCCURRED : ", e)
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            response = "We are unable to assist right now please try again after few minutes"
+            
+            # Send error response via WebSocket (same as agent_invoke_tool)
+            try:
+                words = response.split()
+                for i, word in enumerate(words):
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    except:
+                        pass
+                stop_answer = {'type': 'content_block_stop', 'index': 0}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+            except:
+                pass
+            
+            return {"answer": response, "question": chat, "session_id": session_id}
+            
+    except Exception as e:
+        print(f"Unexpected error in nova_agent_invoke_tool: {e}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
+        error_response = "An unknown error occurred. Please try again after some time."
+        
+        # Send error response via WebSocket if connectionId is available
+        try:
+            if connectionId:
+                words = error_response.split()
+                for i, word in enumerate(words):
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    except:
+                        pass
+                stop_answer = {'type': 'content_block_stop', 'index': 0}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+        except:
+            pass
+        
+        return {
+            "statusCode": "500",
+            "answer": error_response,
+            "question": chat,
+            "session_id": session_id,
+            "input_tokens": "0",
+            "output_tokens": "0"
+        }
 
 def get_FAQ_chunks_tool(query):
     try:
@@ -1437,29 +2345,73 @@ inputs required through form:
 """
    
 
-
-    # Prepare payload for Bedrock Claude
-   #  bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
-
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 2048,
-        "messages": [{"role": "user", "content": prompt}]
-    })
-
-    response = bedrock.invoke_model(
-        modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        body=body,
+    selected_model = chat_tool_model
+    # selected_model = claude_model_name
+    is_nova_model = (
+        selected_model == 'nova' or  # Exact match
+        selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+        selected_model.startswith('nova-') or  # Nova variant pattern
+        ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
     )
+    
+    # Use appropriate API based on model type
+    if is_nova_model:
+        print(f"Using Nova model for summary generation: {selected_model}")
+        # Use Nova Converse API
+        response = bedrock_client.converse(
+            modelId=selected_model,
+            system=[
+                {"text": prompt}
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "Follow the system instructions."}
+                    ]
+                }
+            ],
+            inferenceConfig={
+                "maxTokens": 4000,
+                "temperature": 0.7
+            }
+        )
+        # Extract Nova output
+        try:
+            assistant_msg = response["output"]["message"]["content"][0]["text"]
+        except Exception as e:
+            print("Error extracting Nova output:", e)
+            raise
 
-    final_text = str(json.loads(response.get("body").read())["content"][0]["text"])
-    print("LLM OUTPUT:", final_text)  # Debug
+        print("NOVA OUTPUT:", assistant_msg)
 
-    # Try to extract JSON response
-    match = re.search(r'({.*})', final_text, re.DOTALL)
-    json_str = match.group(1) if match else final_text
+        # In case Nova adds extra narration, strip to JSON
+        match = re.search(r'({.*})', assistant_msg, re.DOTALL)
+        json_str = match.group(1) if match else assistant_msg
 
-    return json.loads(json_str)
+        return json.loads(json_str)
+
+    else:
+        print(f"Using Claude model for summary generation: {selected_model}")
+
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": prompt}]
+        })
+
+        response = bedrock.invoke_model(
+            modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            body=body,
+        )
+
+        final_text = json.loads(response.get("body").read())["content"][0]["text"]
+        print("LLM OUTPUT:", final_text)
+
+        match = re.search(r'({.*})', final_text, re.DOTALL)
+        json_str = match.group(1) if match else final_text
+        return json.loads(json_str)
+
 def generate_lifesecure_assessment(event):
     applicant = event.get('applicant_data', {})
     print(applicant)
@@ -1856,27 +2808,73 @@ Return only the following JSON format (no markdown, no extra commentary):
 
 """
 
-    # Invoke Claude via Bedrock
-    # bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
 
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 2048,
-        "messages": [{"role": "user", "content": prompt}]
-    })
-
-    response = bedrock.invoke_model(
-        modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        body=body,
+    selected_model = chat_tool_model
+    # selected_model = claude_model_name
+    is_nova_model = (
+        selected_model == 'nova' or  # Exact match
+        selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+        selected_model.startswith('nova-') or  # Nova variant pattern
+        ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
     )
+    
+    # Use appropriate API based on model type
+    if is_nova_model:
+        print(f"Using Nova model for summary generation: {selected_model}")
+        # Use Nova Converse API
+        response = bedrock_client.converse(
+            modelId=selected_model,
+            system=[
+                {"text": prompt}
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "Follow the system instructions."}
+                    ]
+                }
+            ],
+            inferenceConfig={
+                "maxTokens": 4000,
+                "temperature": 0.7
+            }
+        )
+        # Extract Nova output
+        try:
+            assistant_msg = response["output"]["message"]["content"][0]["text"]
+        except Exception as e:
+            print("Error extracting Nova output:", e)
+            raise
 
-    final_text = str(json.loads(response.get("body").read())["content"][0]["text"])
-    print("LLM OUTPUT:", final_text)
+        print("NOVA OUTPUT:", assistant_msg)
 
-    match = re.search(r'({.*})', final_text, re.DOTALL)
-    json_str = match.group(1) if match else final_text
+        # In case Nova adds extra narration, strip to JSON
+        match = re.search(r'({.*})', assistant_msg, re.DOTALL)
+        json_str = match.group(1) if match else assistant_msg
 
-    return json.loads(json_str)
+        return json.loads(json_str)
+
+    else:
+        print(f"Using Claude model for summary generation: {selected_model}")
+
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": prompt}]
+        })
+
+        response = bedrock.invoke_model(
+            modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            body=body,
+        )
+
+        final_text = json.loads(response.get("body").read())["content"][0]["text"]
+        print("LLM OUTPUT:", final_text)
+
+        match = re.search(r'({.*})', final_text, re.DOTALL)
+        json_str = match.group(1) if match else final_text
+        return json.loads(json_str)
 
 def kyc_extraction_api(event):
 
@@ -2034,147 +3032,260 @@ The provided document seems like to be set of three documents and there are disc
 
 """
 
-       
-
         try:
-
-            # Prepare the request body for Bedrock
-
-            body = json.dumps({
-
-                "anthropic_version": "bedrock-2023-05-31",
-
-                "max_tokens": 4000,
-
-                "messages": [
-
-                    {
-
-                        "role": "user",
-
-                        "content": prompt_template
-
-                    }
-
-                ]
-
-            })
-
-           
-
-            # Call Bedrock using the same pattern as other functions
-
-            response = bedrock_client.invoke_model(
-
-                contentType='application/json',
-
-                body=body,
-
-                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-
+            # Check if Nova model should be used for KYC extraction
+            selected_model = chat_tool_model
+            is_nova_model = (
+                selected_model == 'nova' or  # Exact match
+                selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+                selected_model.startswith('nova-') or  # Nova variant pattern
+                ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
             )
-
-           
-
-            response_body = json.loads(response['body'].read())
-
-            extracted_data = response_body.get('content', [{}])[0].get('text', '')
-
-           
-
-            # Create response data
-
-            response_data = {
-
-                "extracted_kyc_data": extracted_data,
-
-                "timestamp": datetime.now().isoformat(),
-
-                "session_id": session_id
-
-            }
-
-           
-
-            # Log the KYC extraction
-
-            try:
-
-                log_query = """
-
-                    INSERT INTO {}.{} (session_id, query, response, timestamp, api_type)
-
-                    VALUES (%s, %s, %s, %s, %s)
-
-                """.format(schema, CHAT_LOG_TABLE)
-
-               
-
-                log_values = (
-
-                    session_id,
-
-                    json.dumps({"document_data": bool(document_data)}),
-
-                    json.dumps(response_data),
-
-                    datetime.now(),
-
-                    'kyc_extraction'
-
+            
+            # Use appropriate API based on model type
+            if is_nova_model:
+                print(f"Using Nova model for KYC extraction: {selected_model}")
+                # Use Nova Converse API
+                response = bedrock_client.converse(
+                    modelId=selected_model,
+                    system=[
+                        {"text": "You are a document data viewer, your task is to view the information provided to you and extract relevant information in a neat and clear manner."}
+                    ],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"text": prompt_template}
+                            ]
+                        }
+                    ],
+                    inferenceConfig={
+                        "maxTokens": 4000,
+                        "temperature": 0.1
+                    }
                 )
+                
+                # Extract Nova reply text
+                try:
+                    extracted_data = response.get("output", {}).get("message", {}).get("content", [])[0].get("text", "")
+                except Exception as e:
+                    print(f"Error extracting Nova response: {e}")
+                    import traceback
+                    print(f"Full traceback: {traceback.format_exc()}")
+                    extracted_data = ""
+            else:  
+                print(f"Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                # Use Claude invoke_model API (existing implementation)
+                # Prepare the request body for Bedrock
+                body = json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4000,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt_template
+                        }
+                    ]
+                })
+            
+                # Call Bedrock using the same pattern as other functions
+                response = bedrock_client.invoke_model(
+                    contentType='application/json',
+                    body=body,
+                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                )
+            
+                response_body = json.loads(response['body'].read())
+                extracted_data = response_body.get('content', [{}])[0].get('text', '')
+            
+            # Create response data
+            response_data = {
+                "extracted_kyc_data": extracted_data,
+                "timestamp": datetime.now().isoformat(),
+                "session_id": session_id
+            }
+            
+            # Log the KYC extraction
+            try:
+                log_query = """
+                    INSERT INTO {}.{} (session_id, query, response, timestamp, api_type)
+                    VALUES (%s, %s, %s, %s, %s)
+                """.format(schema, CHAT_LOG_TABLE)
+                
+                log_values = (
+                    session_id,
+                    json.dumps({"document_data": bool(document_data)}),
+                    json.dumps(response_data),
+                    datetime.now(),
+                    'kyc_extraction'
+                )
+                
+                insert_db(log_query, log_values)
+            except Exception as e:
+                print(f"Error logging KYC extraction: {e}")
+            
+            return {
+                "statusCode": 200,
+                "session_id": session_id,
+                "response_data": response_data
+            }
+            
+        except Exception as e:
+            print(f"Error calling Bedrock for KYC extraction: {e}")
+            return {
+                "statusCode": 500,
+                "error": "Error processing KYC extraction",
+                "session_id": session_id
+            }
+        
+    except Exception as e:
+        print(f"Error in KYC extraction API: {e}")
+        return {
+            "statusCode": 500,
+            "error": "Internal server error during KYC extraction",
+            "session_id": session_id if 'session_id' in locals() else str(uuid.uuid4())
+        }
+
+    #     try:
+
+    #         # Prepare the request body for Bedrock
+
+    #         body = json.dumps({
+
+    #             "anthropic_version": "bedrock-2023-05-31",
+
+    #             "max_tokens": 4000,
+
+    #             "messages": [
+
+    #                 {
+
+    #                     "role": "user",
+
+    #                     "content": prompt_template
+
+    #                 }
+
+    #             ]
+
+    #         })
+
+           
+
+    #         # Call Bedrock using the same pattern as other functions
+
+    #         response = bedrock_client.invoke_model(
+
+    #             contentType='application/json',
+
+    #             body=body,
+
+    #             modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+
+    #         )
+
+           
+
+    #         response_body = json.loads(response['body'].read())
+
+    #         extracted_data = response_body.get('content', [{}])[0].get('text', '')
+
+           
+
+    #         # Create response data
+
+    #         response_data = {
+
+    #             "extracted_kyc_data": extracted_data,
+
+    #             "timestamp": datetime.now().isoformat(),
+
+    #             "session_id": session_id
+
+    #         }
+
+           
+
+    #         # Log the KYC extraction
+
+    #         try:
+
+    #             log_query = """
+
+    #                 INSERT INTO {}.{} (session_id, query, response, timestamp, api_type)
+
+    #                 VALUES (%s, %s, %s, %s, %s)
+
+    #             """.format(schema, CHAT_LOG_TABLE)
 
                
 
-                insert_db(log_query, log_values)
+    #             log_values = (
 
-            except Exception as e:
+    #                 session_id,
 
-                print(f"Error logging KYC extraction: {e}")
+    #                 json.dumps({"document_data": bool(document_data)}),
+
+    #                 json.dumps(response_data),
+
+    #                 datetime.now(),
+
+    #                 'kyc_extraction'
+
+    #             )
+
+               
+
+    #             insert_db(log_query, log_values)
+
+    #         except Exception as e:
+
+    #             print(f"Error logging KYC extraction: {e}")
 
            
 
-            return {
+    #         return {
 
-                "statusCode": 200,
+    #             "statusCode": 200,
 
-                "session_id": session_id,
+    #             "session_id": session_id,
 
-                "response_data": response_data
+    #             "response_data": response_data
 
-            }
+    #         }
 
            
 
-        except Exception as e:
+    #     except Exception as e:
 
-            print(f"Error calling Bedrock for KYC extraction: {e}")
+    #         print(f"Error calling Bedrock for KYC extraction: {e}")
 
-            return {
+    #         return {
 
-                "statusCode": 500,
+    #             "statusCode": 500,
 
-                "error": "Error processing KYC extraction",
+    #             "error": "Error processing KYC extraction",
 
-                "session_id": session_id
+    #             "session_id": session_id
 
-            }
+    #         }
 
        
 
-    except Exception as e:
+    # except Exception as e:
 
-        print(f"Error in KYC extraction API: {e}")
+    #     print(f"Error in KYC extraction API: {e}")
 
-        return {
+    #     return {
 
-            "statusCode": 500,
+    #         "statusCode": 500,
 
-            "error": "Internal server error during KYC extraction",
+    #         "error": "Internal server error during KYC extraction",
 
-            "session_id": session_id if 'session_id' in locals() else str(uuid.uuid4())
+    #         "session_id": session_id if 'session_id' in locals() else str(uuid.uuid4())
 
-        }
+    #     }
+        
     
 
 
@@ -2200,6 +3311,10 @@ def lambda_handler(event, context):
         session_id = event['session_id']   
         connectionId = event["connectionId"]
         print(connectionId,"connectionid_printtt")
+        # Get model from environment variable (defaults to 'claude' if not set)
+        # Can be set to model name like 'us.amazon.nova-pro-v1:0' or just 'nova'/'claude'
+        selected_model = chat_tool_model
+        print(f"Using model from environment variable: {selected_model}")
         chat_history = []
 
 
@@ -2215,26 +3330,41 @@ def lambda_handler(event, context):
 
             if len(history_response) > 0:
                 for chat_session in reversed(history_response):  
-                    chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat_session[0]}]})
-                    chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': chat_session[1]}]})
+                    # Only add non-empty messages to chat history
+                    if chat_session[0] and str(chat_session[0]).strip():
+                        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': str(chat_session[0]).strip()}]})
+                    if chat_session[1] and str(chat_session[1]).strip():
+                        chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': str(chat_session[1]).strip()}]})
         
             #APPENDING CURRENT USER QUESTION
-        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat}]})
+        # Only add non-empty current user question
+        if chat and str(chat).strip():
+            chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': str(chat).strip()}]})
             
         print("CHAT HISTORY : ",chat_history)
 
-        tool_response = agent_invoke_tool(chat_history, session_id,chat,connectionId)
+        # Route to appropriate function based on environment variable
+        # Check if model name contains 'nova' (handles both 'nova' and 'us.amazon.nova-pro-v1:0')
+        if 'nova' in selected_model:
+            print(f"Routing to Nova model handler")
+            tool_response = nova_agent_invoke_tool(chat_history, session_id, chat, connectionId)
+        else:
+            # Default to Claude model (claude 3.5 or any other claude variant)
+            print(f"Routing to Claude model handler")
+            tool_response = agent_invoke_tool(chat_history, session_id, chat, connectionId)
         print("TOOL RESPONSE: ", tool_response)  
-        #insert into chat_history
+        #insert into chat_history_table
         query = f'''
                 INSERT INTO {schema}.{chat_history_table}
                 (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                 VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                 '''
-        # Add error handling for missing keys with default values
+        # Handle missing keys with default values
         input_tokens = tool_response.get('input_tokens', '0')
         output_tokens = tool_response.get('output_tokens', '0')
-        values = (str(session_id), str(chat), str(tool_response['answer']), str(input_tokens), str(output_tokens))
+        answer = tool_response.get('answer', '')
+        
+        values = (str(session_id), str(chat), str(answer), str(input_tokens), str(output_tokens))
         res = insert_db(query, values) 
 
 
@@ -2245,7 +3375,8 @@ def lambda_handler(event, context):
 VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0,%s);'''             
         values = ('',None,'','','',session_id,'','','','','')            
         res = insert_db(insert_query,values)   
-        return tool_response    
+        return tool_response  
+
     elif event_type == 'kyc_extraction':
         return kyc_extraction_api(event)
     if event_type == 'voiceops':
