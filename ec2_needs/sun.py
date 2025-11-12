@@ -917,7 +917,7 @@ def knowledge_base_retrieve_and_generate(query, session_id, kb_id, box_type, pro
                     chat_history_context = "\n".join(history_parts) + "\n\nCurrent Question: "
                     print(f"✅ Retrieved chat history from {schema}.{chat_table_name}")
             except Exception as e:
-                print(f"❌ Error fetching chat history: {e}")
+                print("Error fetching chat history: {e}")
         
         # Combine history context with current query
         full_query = chat_history_context + query if chat_history_context else query
@@ -937,11 +937,11 @@ def knowledge_base_retrieve_and_generate(query, session_id, kb_id, box_type, pro
         # Use retrieve and generate with the knowledge base based on model type
         if is_nova_model:
             print(f"Using Nova model: {selected_model}")
-            # For Nova models, we need to use inference profile ARN format
-            # Nova models require inference profile ARN, not just model ID
+            # For Nova models, try using the model ARN format
+            # Note: Nova models may not be fully supported in retrieve_and_generate
+            # If this fails, we'll fall back to Claude
+            # Use amazon.nova-pro-v1:0 (without 'us.' prefix) in the ARN
             nova_model_id = "us.amazon.nova-pro-v1:0"
-            # Use inference profile ARN format (same account ID as Claude)
-            nova_model_arn = f'arn:aws:bedrock:us-east-1:455389024925:inference-profile/{nova_model_id}'
             try:
                 bedrock_request = {
                     'input': {'text': full_query},
@@ -949,7 +949,7 @@ def knowledge_base_retrieve_and_generate(query, session_id, kb_id, box_type, pro
                         'type': 'KNOWLEDGE_BASE',
                         'knowledgeBaseConfiguration': {
                             'knowledgeBaseId': kb_id,
-                            'modelArn': nova_model_arn,
+                            'modelArn':nova_model_id,
                             'generationConfiguration': {
                                 'promptTemplate': {'textPromptTemplate': prompt_template},
                                 'inferenceConfig': {
@@ -988,7 +988,7 @@ def knowledge_base_retrieve_and_generate(query, session_id, kb_id, box_type, pro
                     'type': 'KNOWLEDGE_BASE',
                     'knowledgeBaseConfiguration': {
                         'knowledgeBaseId': kb_id,
-                        'modelArn': model_id,
+                        'modelArn':model_id,
                         'retrievalConfiguration': {
                             'vectorSearchConfiguration': {
                                 'numberOfResults': 10,
@@ -1123,4 +1123,5 @@ def t_lang():
 if __name__ == '__main__':
     print("TESTTTTTTTT GAAA")
     app.run(host='0.0.0.0', port=8000)
+
 
