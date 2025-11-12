@@ -62,6 +62,7 @@ socket_endpoint = os.environ["socket_endpoint"]
 health_kb_id=os.environ["KB_ID"]
 hospital_chat_history_table=os.environ['chat_history_table']
 # Use environment region instead of hardcoded regions
+chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
 retrieve_client = boto3.client('bedrock-agent-runtime', region_name=region_used)
 bedrock_client = boto3.client('bedrock-runtime', region_name=region_used)
 api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=socket_endpoint)
@@ -991,7 +992,50 @@ these are the keys to be always used while returning response. Strictly do not a
         {prompt_template}
         '''
 
-        response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
+        # - Ensure the email content is formatted correctly with new lines. USE ONLY "\n" for new lines. 
+        #         - Ensure the email content is formatted correctly for new lines instead of using new line characters.
+        # Select model (Nova vs Claude) and call appropriate Bedrock API
+        selected_model = chat_tool_model
+        is_nova_model = (
+            selected_model == 'nova' or
+            selected_model.startswith('us.amazon.nova') or
+            selected_model.startswith('nova-') or
+            ('.nova' in selected_model and 'claude' not in selected_model)
+        )
+
+        import boto3
+        bedrock_client = boto3.client("bedrock-runtime", region_name=region_used)
+
+        if is_nova_model:
+            print(f"Using Nova model for retail summary: {selected_model}")
+            response = bedrock_client.converse(
+                modelId=selected_model,
+                system=[{"text": prompt_template}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": template}
+                        ]
+                    }
+                ],
+                inferenceConfig={
+                    "maxTokens": 4000,
+                    "temperature": 0.7
+                }
+            )
+
+            # Extract Nova reply text
+            try:
+                out = response.get("output", {}).get("message", {}).get("content", [])[0].get("text", "")
+            except Exception as e:
+                print(f"Error extracting Nova response: {e}")
+                import traceback
+                print(f"Full traceback: {traceback.format_exc()}")
+                out = ""
+        else:
+            print(f"Using Claude model for retail summary: {model_id}")
+            response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
             "anthropic_version": "bedrock-2023-05-31",  
             "max_tokens": 4000,     
             "messages": [
@@ -1004,9 +1048,11 @@ these are the keys to be always used while returning response. Strictly do not a
             ],
         }), modelId=model_id)                                                                                                                       
 
-        inference_result = response['body'].read().decode('utf-8')
-        final = json.loads(inference_result)
-        out = final['content'][0]['text']
+            inference_result = response['body'].read().decode('utf-8')
+            final = json.loads(inference_result)
+            out = final['content'][0]['text']
+
+
         print(out)
         llm_out = extract_sections(out)
         
@@ -1256,8 +1302,27 @@ def healthcare_chat_tool_handler(event):
             
         print("CHAT HISTORY : ", chat_history)
 
-        # Call the hospital agent tool
-        tool_response = hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId)
+        # Get model from environment variable (defaults to 'claude' if not set)
+        # Can be set to model name like 'us.amazon.nova-pro-v1:0' or just 'nova'/'claude'
+        selected_model = chat_tool_model
+        print(f"Using model from environment variable: {selected_model}")
+        
+        # Check if Nova model should be used (same logic as chat_tool, banking_chat_tool, and retail_chat_tool)
+        is_nova_model = (
+            selected_model == 'nova' or  # Exact match for 'nova'
+            selected_model.startswith('us.amazon.nova') or  # Nova model ID
+            selected_model.startswith('nova-') or  # Nova variant
+            ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
+        )
+        
+        # Route to appropriate function based on model type
+        if is_nova_model:
+            # Use Nova Converse API
+            tool_response = nova_hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId)
+        else:
+            # Use Claude Messages API (default)
+            tool_response = hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId)
+        
         print("TOOL RESPONSE: ", tool_response)  
         
         # Insert into hospital_chat_history_table
@@ -4630,3 +4695,1622 @@ Remember: Always use exact tool responses. Intelligently interpret dates from co
             "input_tokens": "0",
             "output_tokens": "0"
         }   
+
+def nova_hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId):
+    """
+    Nova model hospital agent invoke tool function using AWS Bedrock Converse API.
+    Uses the same tools and logic as hospital_agent_invoke_tool but adapted for Nova Converse API.
+    """
+    try:
+        # Start keepalive thread
+        #keepalive_thread = send_keepalive(connectionId, 30)
+        import uuid
+        import random
+        import re
+        from datetime import datetime
+        
+        # Hardcoded patient data (same as hospital_agent_invoke_tool)
+        patients = {
+            "PAT1001": {
+                "dob": "1985-03-15",
+                "name": "John Smith",
+                "email": "john.smith@email.com",
+                "phone": "91234567"
+            },
+            "PAT1002": {
+                "dob": "1990-07-22",
+                "name": "Sarah Johnson",
+                "email": "sarah.johnson@email.com",
+                "phone": "98765432"
+            },
+            "PAT1003": {
+                "dob": "1978-11-08",
+                "name": "Michael Brown",
+                "email": "michael.brown@email.com",
+                "phone": "83456721"
+            },
+            "PAT1004": {
+                "dob": "1992-05-14",
+                "name": "Emily Davis",
+                "email": "emily.davis@email.com",
+                "phone": "97651823"
+            },
+            "PAT1005": {
+                "dob": "1983-09-30",
+                "name": "David Wilson",
+                "email": "david.wilson@email.com",
+                "phone": "84569034"
+            }
+        }
+        
+        # Centralized department doctors data structure (same as hospital_agent_invoke_tool)
+        DEPARTMENT_DOCTORS = {
+            "Cardiology": [
+                {"name": "Dr. Sarah Johnson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Alex Thompson", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
+                {"name": "Dr. Emily Rodriguez", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
+            ],
+            "Psychology": [
+                {"name": "Dr. Mark Johnson", "available_times": ["10:00 AM", "11:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
+                {"name": "Dr. Lisa Thompson", "available_times": ["09:00 AM", "12:30 PM", "01:30 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]},
+                {"name": "Dr. Robert Davis", "available_times": ["08:00 AM", "10:30 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]}
+            ],
+            "Neurology": [
+                {"name": "Dr. Amanda Foster", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
+                {"name": "Dr. Kevin Park", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]},
+                {"name": "Dr. Maria Garcia", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
+            ],
+            "Orthopedics": [
+                {"name": "Dr. David Miller", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
+                {"name": "Dr. Alex Thompson", "available_times": ["09:00 AM", "11:00 AM", "02:00 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]},
+                {"name": "Dr. Rachel Green", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
+                {"name": "Dr. Mark Johnson", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-25"]}
+            ],
+            "Dermatology": [
+                {"name": "Dr. Emma Wilson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
+                {"name": "Dr. Mark Taylor", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Sarah Kim", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
+            ],
+            "Pediatrics": [
+                {"name": "Dr. David Rodriguez", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-20", "2025-09-21", "2025-09-25"]},
+                {"name": "Dr. Anna Martinez", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-24"]},
+                {"name": "Dr. Chris Anderson", "available_times": ["08:30 AM", "10:30 AM", "01:30 PM", "03:30 PM"], "available_dates": ["2025-09-21", "2025-09-23", "2025-09-25"]}
+            ],
+            "Internal Medicine": [
+                {"name": "Dr. Thomas Anderson", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-20", "2025-09-24"]},
+                {"name": "Dr. Jessica Brown", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Christopher Davis", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
+            ],
+            "Oncology": [
+                {"name": "Dr. Patricia Moore", "available_times": ["09:00 AM", "10:30 AM", "02:00 PM", "03:30 PM"], "available_dates": ["2025-09-19", "2025-09-21", "2025-09-24"]},
+                {"name": "Dr. Steven Clark", "available_times": ["08:30 AM", "11:00 AM", "01:30 PM", "04:00 PM"], "available_dates": ["2025-09-20", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Catherine Reed", "available_times": ["09:30 AM", "12:00 PM", "02:30 PM", "05:00 PM"], "available_dates": ["2025-09-19", "2025-09-23", "2025-09-24"]}
+            ],
+            "Radiology": [
+                {"name": "Dr. Catherine Reed", "available_times": ["08:00 AM", "10:00 AM", "01:00 PM", "03:00 PM"], "available_dates": ["2025-09-19", "2025-09-22", "2025-09-25"]},
+                {"name": "Dr. Daniel Cook", "available_times": ["09:00 AM", "11:30 AM", "02:00 PM", "04:30 PM"], "available_dates": ["2025-09-20", "2025-09-23", "2025-09-24"]},
+                {"name": "Dr. Laura Bell", "available_times": ["08:30 AM", "12:00 PM", "01:30 PM", "05:00 PM"], "available_dates": ["2025-09-21", "2025-09-22", "2025-09-25"]}
+            ]
+        }
+        
+        # Optimized system prompt for Nova Pro (200 lines max)
+        base_prompt = f'''You are MedCare Hospital's Virtual Healthcare Assistant. Handle patient inquiries, appointments, medical records, medications, and general hospital information.
+
+=== RESCHEDULE/CANCEL INITIATION RULE ===
+When user says "reschedule my appointment" or "cancel my appointment":
+1. FIRST ask: "May I please have your Name to get started?"
+2. THEN ask: "Could you share your Phone number so I can verify your details?"
+3. ONLY AFTER getting both name AND phone, call the appropriate tool
+4. NEVER call tools without name and phone for reschedule/cancel actions
+
+=== CRITICAL TOOL CALLING RULES ===
+DEPARTMENT: User says "cardiology" → IMMEDIATELY call get_department_doctors with department="Cardiology". NO text.
+DOCTOR: User says "sarah" → IMMEDIATELY call doctor_availability with doctor_name="Dr. Sarah Johnson". NO "Let me check".
+FAQ: User asks hospital info → IMMEDIATELY call hospital_faq_tool_schema. NO preliminary text.
+RESCHEDULE REQUEST: User says "reschedule my appointment" → Ask for name, then phone, THEN call appointment_scheduler with action="reschedule", name, phone.
+RESCHEDULE CONFIRM: After showing appointment, user says "yes" → IMMEDIATELY call doctor_availability with doctor_name from appointment.
+RESCHEDULE DATE: User provides date → IMMEDIATELY call reschedule_appointment with name, phone, preferred_date.
+RESCHEDULE FINAL: After user selects time → IMMEDIATELY call appointment_scheduler with action="reschedule", name, phone, preferred_date, preferred_time, reason="reschedule confirmed".
+CANCEL REQUEST: User says "cancel my appointment" → Ask for name, then phone, THEN call appointment_scheduler with action="cancel", name, phone.
+CANCEL CONFIRM: After showing appointment, user says "yes"/"cancel"/"just cancel" → IMMEDIATELY call appointment_scheduler with action="cancel", name, phone, reason="User confirmed cancellation".
+
+EXAMPLES:
+RESCHEDULE FULL FLOW:
+User: "reschedule my appointment" → Assistant: "May I please have your Name to get started?"
+User: "emily davis" → Assistant: "Could you share your Phone number so I can verify your details?"
+User: "97651823" → [CALL appointment_scheduler with action="reschedule", name="emily davis", phone="97651823"]
+(Shows: Appointment ID: APT123459, Department: Psychology, Doctor: Dr. Lisa Thompson, Date: 22nd September 2025, Time: 3:00 PM)
+User: "yes" → [CALL doctor_availability with doctor_name="Dr. Lisa Thompson"]
+(Shows available dates: September 20, 2025 | September 23, 2025 | September 25, 2025)
+User: "25th september" → [CALL reschedule_appointment with name="emily davis", phone="97651823", preferred_date="25th september"]
+(Shows available times: 09:00 AM | 12:30 PM | 01:30 PM | 04:30 PM)
+User: "1 30 PM" → [CALL appointment_scheduler with action="reschedule", name="emily davis", phone="97651823", preferred_date="2025-09-25", preferred_time="01:30 PM", reason="reschedule confirmed"]
+
+CANCEL FULL FLOW:
+User: "cancel my appointment" → Assistant: "May I please have your Name to get started?"
+User: "sarah johnson" → Assistant: "Could you share your Phone number so I can verify your details?"
+User: "98765432" → [CALL appointment_scheduler with action="cancel", name="sarah johnson", phone="98765432"]
+(Shows current appointment details)
+User: "cancel" OR "yes" OR "just cancel" → [CALL appointment_scheduler with action="cancel", name="sarah johnson", phone="98765432", reason="User confirmed cancellation"]
+
+User: "What hospital services do you offer?" → [CALL hospital_faq_tool_schema with knowledge_base_retrieval_question="What hospital services do you offer?"]
+User: "cardiology" → [CALL get_department_doctors with department="Cardiology"]
+User: "sarah" → [CALL doctor_availability with doctor_name="Dr. Sarah Johnson"]
+
+PROHIBITED: "Let me check", "I'll help you", "I apologize", "One moment", "I need more information about the date", "I couldn't verify your credentials" (during NEW scheduling)
+
+=== CRITICAL CONFIRMATION HANDLING ===
+When user confirms reschedule with "yes"/"sure"/"okay": IMMEDIATELY call doctor_availability with doctor from current appointment
+When user provides new date during reschedule: IMMEDIATELY call reschedule_appointment with name, phone, preferred_date
+When user provides new time during reschedule: IMMEDIATELY call appointment_scheduler with action="reschedule", name, phone, preferred_date, preferred_time, reason="reschedule confirmed"
+When user confirms cancel with "yes"/"cancel"/"just cancel"/"yep": IMMEDIATELY call appointment_scheduler with action="cancel", name, phone, reason="User confirmed cancellation"
+
+NEVER say "Let me try again" or "I couldn't retrieve information" - ALWAYS call the correct tool immediately.
+
+=== AUTHENTICATION ===
+VALID PATIENTS: John Smith (91234567), Sarah Johnson (98765432), Michael Brown (83456721), Emily Davis (97651823), David Wilson (84569034)
+
+SESSION STATE: Ask name/phone ONCE per session. Store and reuse for entire conversation. Only re-ask if user switches accounts.
+
+AUTHENTICATION REQUIREMENTS:
+- NEW APPOINTMENT (action="schedule"): Collect name/phone, NO validation, proceed with scheduling
+- RESCHEDULE/CANCEL: REQUIRE name/phone verification before proceeding
+- PATIENT RECORDS: REQUIRE name/phone verification before accessing
+- MEDICATIONS: REQUIRE name/phone verification before showing
+- get_doctor_times/hospital_faq: NO authentication needed
+
+=== WORKFLOWS WITH EXAMPLES ===
+
+NEW APPOINTMENT (NO STRICT AUTH):
+User: "I need to schedule an appointment"
+Assistant: "May I please have your Name to get started?"
+User: "John Smith"
+Assistant: "Could you share your Phone number so I can note it for the appointment?"
+User: "91234567"
+Assistant: "I can help you schedule an appointment. Here are our available departments:
+• Cardiology • Psychology • Neurology • Orthopedics • Dermatology • Pediatrics • Internal Medicine • Oncology • Radiology
+Which department would you like to schedule an appointment with?"
+User: "Cardiology"
+Assistant: [CALL get_department_doctors with department="Cardiology"]
+User: "I'd like to see Dr. Sarah Johnson"
+Assistant: [CALL doctor_availability with doctor_name="Dr. Sarah Johnson"]
+User: "30th September"
+Assistant: [CALL appointment_scheduler with action="get_doctor_times" to show available times]
+User: "10:30 AM works for me"
+Assistant: "What is the reason for your visit?"
+User: "Chest pain"
+Assistant: [CALL appointment_scheduler with action="schedule", name="John Smith", phone="91234567", all details]
+
+RESCHEDULE (REQUIRE AUTH):
+User: "I need to reschedule my appointment"
+Assistant: "May I please have your Name to get started?"
+User: "emily davis"
+Assistant: "Could you share your Phone number so I can verify your details?"
+User: "97651823"
+Assistant: [CALL appointment_scheduler with action="reschedule", name="emily davis", phone="97651823"]
+Result: Shows "Appointment ID: APT123459, Department: Psychology, Doctor: Dr. Lisa Thompson, Date: 22nd September 2025, Time: 3:00 PM. Would you like to reschedule this appointment?"
+User: "yes"
+Assistant: [CALL doctor_availability with doctor_name="Dr. Lisa Thompson"]
+Result: Shows "Dr. Lisa Thompson is available on: • September 20, 2025 • September 23, 2025 • September 25, 2025"
+User: "25th september"
+Assistant: [CALL reschedule_appointment with name="emily davis", phone="97651823", preferred_date="25th september"]
+Result: Shows "Available times on September 25: • 09:00 AM • 12:30 PM • 01:30 PM • 04:30 PM"
+User: "1 30 PM"
+Assistant: [CALL appointment_scheduler with action="reschedule", name="emily davis", phone="97651823", preferred_date="2025-09-25", preferred_time="01:30 PM", reason="reschedule confirmed"]
+Result: Confirms reschedule complete
+
+CANCEL (REQUIRE AUTH):
+User: "I need to cancel my appointment"
+Assistant: "May I please have your Name to get started?"
+User: "sarah johnson"
+Assistant: "Could you share your Phone number so I can verify your details?"
+User: "98765432"
+Assistant: [CALL appointment_scheduler with action="cancel", name="sarah johnson", phone="98765432"]
+Result: Shows "Appointment ID: APT123457, Department: Psychology, Doctor: Dr. Lisa Thompson, Date: 20th September 2025, Time: 2:00 PM. Would you like to cancel this appointment?"
+User: "cancel" OR "yes" OR "just cancel"
+Assistant: [CALL appointment_scheduler with action="cancel", name="sarah johnson", phone="98765432", reason="User confirmed cancellation"]
+Result: Confirms cancellation complete
+
+PATIENT RECORDS (REQUIRE AUTH):
+User: "I want to check my medical records"
+Assistant: "May I please have your Name to get started?"
+User: "John Smith"
+Assistant: "Could you share your Phone number so I can verify your details?"
+User: "91234567"
+Assistant: [CALL patient_records with name="John Smith", phone="91234567", record_type="all"]
+
+MEDICATIONS (REQUIRE AUTH):
+User: "What medications am I currently taking?"
+Assistant: "May I please have your Name to get started?"
+User: "John Smith"
+Assistant: "Could you share your Phone number so I can verify your details?"
+User: "91234567"
+Assistant: [CALL medication_tracker with name="John Smith", phone="91234567", action="get_medications"]
+
+FAQ (NO AUTH):
+User: "What are your visiting hours?"
+Assistant: [CALL hospital_faq_tool_schema immediately and provide visiting hours]
+
+=== RESCHEDULE STEP-BY-STEP ===
+User: "reschedule my appointment"
+Step 1: Ask "May I please have your Name to get started?"
+User: "emily davis"
+Step 2: Ask "Could you share your Phone number so I can verify your details?"
+User: "97651823"
+Step 3: CALL appointment_scheduler(action="reschedule", name="emily davis", phone="97651823") → Shows current appointment
+User: "yes"
+Step 4: CALL doctor_availability(doctor_name="Dr. Lisa Thompson") → Shows available dates
+User: "25th september"
+Step 5: CALL reschedule_appointment(name="emily davis", phone="97651823", preferred_date="25th september") → Shows available times
+User: "1 30 PM"
+Step 6: CALL appointment_scheduler(action="reschedule", name="emily davis", phone="97651823", preferred_date="2025-09-25", preferred_time="01:30 PM", reason="reschedule confirmed") → Completes reschedule
+
+=== CANCEL STEP-BY-STEP ===
+User: "cancel my appointment"
+Step 1: Ask "May I please have your Name to get started?"
+User: "sarah johnson"
+Step 2: Ask "Could you share your Phone number so I can verify your details?"
+User: "98765432"
+Step 3: CALL appointment_scheduler(action="cancel", name="sarah johnson", phone="98765432") → Shows current appointment
+User: "yes" OR "cancel" OR "just cancel"
+Step 4: CALL appointment_scheduler(action="cancel", name="sarah johnson", phone="98765432", reason="User confirmed cancellation") → Completes cancellation
+
+=== TOOLS & AUTH REQUIREMENTS ===
+hospital_faq_tool_schema: NO auth
+get_department_doctors: NO auth
+doctor_availability: NO auth
+appointment_scheduler:
+  - action="schedule": Collect name/phone, NO validation
+  - action="reschedule": REQUIRE auth
+  - action="cancel": REQUIRE auth
+  - action="get_doctor_times": NO auth
+reschedule_appointment: REQUIRE auth
+patient_records: REQUIRE auth
+medication_tracker: REQUIRE auth
+
+=== DATA COLLECTION (ONE AT A TIME) ===
+1. Name (if not in session)
+2. Phone (if not in session)
+3. Department (show list first)
+4. Doctor (after get_department_doctors)
+5. Date (after doctor_availability)
+6. Time (after get_doctor_times)
+7. Reason (for new appointments)
+
+ALWAYS extract name/phone from conversation history for tool calls. Check entire message for all fields before asking.
+
+=== EXAMPLES OF TOOL CALLS ===
+User: "ill go with sarah" → [CALL doctor_availability with doctor_name="Dr. Sarah Johnson"]
+User: "emily rodriguez" → [CALL doctor_availability with doctor_name="Dr. Emily Rodriguez"]
+User: "alex thompson" → [CALL doctor_availability with doctor_name="Dr. Alex Thompson"]
+User: "20th September" → [CALL reschedule_appointment with name, phone, preferred_date="20th September"]
+User: "25 would be cool" → [CALL reschedule_appointment with name, phone, preferred_date="25 would be cool"]
+
+=== PROHIBITIONS ===
+NEVER generate dates without tools
+NEVER show fake doctor names (use get_department_doctors)
+NEVER validate phone manually (system handles it)
+NEVER display valid patient lists
+NEVER ask date format clarification during reschedule
+NEVER say preliminary messages before tools
+NEVER ask same question twice in session
+NEVER proceed with patient_records/medication_tracker without authentication
+NEVER proceed with reschedule/cancel without authentication
+
+=== RESPONSE FORMAT ===
+Bullet points (• or -) for all lists
+Short, direct responses
+No unnecessary greetings
+Warm, professional tone
+Only apologize for actual errors
+
+=== PARAMETER EXTRACTION ===
+Scan conversation for name and phone. Include in ALL appointment_scheduler calls (except get_doctor_times).
+
+Example: If user said "John Smith" and "91234567" earlier, include name="John Smith", phone="91234567" in tool calls.
+
+=== CRITICAL AUTH FLOW ===
+For patient-specific requests (reschedule/cancel/records/medications):
+1. Check session for existing name/phone
+2. If missing, ask for name
+3. If missing, ask for phone
+4. VERIFY name+phone combination is valid
+5. Proceed with tool call only after verification
+6. Store credentials for session
+
+For new scheduling:
+1. Collect name/phone (no verification)
+2. Proceed directly with scheduling flow
+
+=== SECURITY ===
+Verify name+phone for reschedule/cancel/records/medications
+Never display patient credential lists
+Maintain session state
+Treat all patient data as confidential
+'''
+
+        
+        # Hospital tool schema - converted to Nova's toolSpec format
+        hospital_tools_nova = [
+            {
+                "toolSpec": {
+                    "name": "hospital_faq_tool_schema",
+                    "description": "Retrieve answers from the hospital knowledge base for general questions, services, departments, visiting hours, policies, and hospital information",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "knowledge_base_retrieval_question": {
+                                    "type": "string",
+                                    "description": "A question to retrieve from the hospital knowledge base about hospital services, departments, policies, procedures, or general information."
+                                }
+                            },
+                            "required": ["knowledge_base_retrieval_question"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "get_department_doctors",
+                    "description": "Get the list of available doctors for a specific department - MANDATORY tool for department selection",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "department": {
+                                    "type": "string",
+                                    "description": "Medical department name",
+                                    "enum": ["Cardiology", "Psychology", "Neurology", "Orthopedics", "Dermatology", "Pediatrics", "Internal Medicine", "Oncology", "Radiology"]
+                                }
+                            },
+                            "required": ["department"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "doctor_availability",
+                    "description": "Get available dates and times for a specific doctor",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "doctor_name": {
+                                    "type": "string",
+                                    "description": "Doctor's full name (e.g., Dr. Sarah Johnson)"
+                                }
+                            },
+                            "required": ["doctor_name"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "reschedule_appointment",
+                    "description": "Dedicated tool for handling appointment rescheduling with flexible date parsing. Use this tool when user provides any date during rescheduling.",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Patient's full name"
+                                },
+                                "phone": {
+                                    "type": "string",
+                                    "description": "Patient's phone number (8 digits)"
+                                },
+                                "preferred_date": {
+                                    "type": "string",
+                                    "description": "Preferred appointment date in any format (e.g., 'September 22 would be great', '22nd September', '22/09/2025')"
+                                }
+                            },
+                            "required": ["name", "phone", "preferred_date"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "appointment_scheduler",
+                    "description": "Schedule, reschedule, or cancel medical appointments for patients",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Patient's full name (e.g., John Smith)"
+                                },
+                                "phone": {
+                                    "type": "string",
+                                    "description": "Patient's phone number (e.g., 91234567)"
+                                },
+                                "department": {
+                                    "type": "string",
+                                    "description": "Medical department (e.g., Cardiology, Psychology, Neurology, Orthopedics, Dermatology, Pediatrics, Internal Medicine, Emergency Medicine)",
+                                    "enum": ["Cardiology", "Psychology", "Neurology", "Orthopedics", "Dermatology", "Pediatrics", "Internal Medicine", "Oncology", "Radiology"]
+                                },
+                                "doctor_name": {
+                                    "type": "string",
+                                    "description": "Preferred doctor name (optional - will show available doctors if not specified)"
+                                },
+                                "preferred_date": {
+                                    "type": "string",
+                                    "description": "Preferred appointment date (format: YYYY-MM-DD)"
+                                },
+                                "preferred_day": {
+                                    "type": "string",
+                                    "description": "Preferred appointment day (e.g., Monday, Tuesday, Wednesday)"
+                                },
+                                "preferred_time": {
+                                    "type": "string",
+                                    "description": "Preferred appointment time (format: HH:MM AM/PM)"
+                                },
+                                "reason": {
+                                    "type": "string",
+                                    "description": "Reason for the appointment"
+                                },
+                                "action": {
+                                    "type": "string",
+                                    "description": "Action to perform: schedule, reschedule, cancel, check_availability, get_doctor_times. Note: get_doctor_times only requires doctor_name parameter",
+                                    "enum": ["schedule", "reschedule", "cancel", "check_availability", "get_doctor_times"]
+                                }
+                            },
+                            "required": ["action"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "patient_records",
+                    "description": "Access patient medical records, history, and health information (requires Name and Phone)",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Patient's full name (e.g., John Smith)"
+                                },
+                                "phone": {
+                                    "type": "string",
+                                    "description": "Patient's phone number (e.g., 91234567)"
+                                },
+                                "record_type": {
+                                    "type": "string",
+                                    "description": "Type of record to retrieve",
+                                    "enum": ["all", "recent", "specific"]
+                                }
+                            },
+                            "required": ["name", "phone", "record_type"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "medication_tracker",
+                    "description": "Manage patient medications, prescriptions, and medication schedules (requires Name and Phone)",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Patient's full name (e.g., John Smith)"
+                                },
+                                "phone": {
+                                    "type": "string",
+                                    "description": "Patient's phone number (e.g., 91234567)"
+                                },
+                                "action": {
+                                    "type": "string",
+                                    "description": "Action to perform",
+                                    "enum": ["get_medications", "add_medication", "update_medication", "remove_medication"]
+                                },
+                                "medication_name": {
+                                    "type": "string",
+                                    "description": "Name of the medication (required for add/update/remove actions)"
+                                },
+                                "dosage": {
+                                    "type": "string",
+                                    "description": "Medication dosage (required for add/update actions)"
+                                },
+                                "schedule": {
+                                    "type": "string",
+                                    "description": "Medication schedule (required for add/update actions)"
+                                }
+                            },
+                            "required": ["name", "phone", "action"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "emergency_response",
+                    "description": "Handle medical emergencies and urgent situations",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "emergency_type": {
+                                    "type": "string",
+                                    "description": "Type of emergency",
+                                    "enum": ["medical", "trauma", "cardiac", "respiratory", "other"]
+                                },
+                                "severity": {
+                                    "type": "string",
+                                    "description": "Severity level",
+                                    "enum": ["low", "medium", "high", "critical"]
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "description": "Description of the emergency situation"
+                                },
+                                "location": {
+                                    "type": "string",
+                                    "description": "Location of the emergency"
+                                }
+                            },
+                            "required": ["emergency_type", "severity", "description"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "symptom_checker",
+                    "description": "Provide preliminary symptom analysis and guidance",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "symptoms": {
+                                    "type": "string",
+                                    "description": "Description of symptoms"
+                                },
+                                "duration": {
+                                    "type": "string",
+                                    "description": "How long symptoms have been present"
+                                },
+                                "severity": {
+                                    "type": "string",
+                                    "description": "Severity of symptoms",
+                                    "enum": ["mild", "moderate", "severe"]
+                                },
+                                "additional_info": {
+                                    "type": "string",
+                                    "description": "Any additional relevant information"
+                                }
+                            },
+                            "required": ["symptoms"]
+                        }
+                    }
+                }
+            }
+        ]
+        
+        # Extract name and phone from chat history for context
+        extracted_name = None
+        extracted_phone = None
+        for message in chat_history:
+            if message['role'] == 'user':
+                content_text = message['content'][0]['text'] if isinstance(message['content'], list) and len(message['content']) > 0 and 'text' in message['content'][0] else str(message.get('content', ''))
+                # Try to extract name (simple pattern matching)
+                name_patterns = [r'\b(John Smith|Sarah Johnson|Michael Brown|Emily Davis|David Wilson)\b']
+                for pattern in name_patterns:
+                    name_match = re.search(pattern, content_text, re.IGNORECASE)
+                    if name_match:
+                        extracted_name = name_match.group(1)
+                        break
+                # Try to extract phone (8 digits)
+                phone_match = re.search(r'\b(\d{8})\b', content_text)
+                if phone_match:
+                    extracted_phone = phone_match.group(1)
+        
+        # Enhance system prompt with name/phone context if available
+        enhanced_prompt = base_prompt
+        if extracted_name:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The patient's name is {extracted_name}. Use this name automatically for any tool calls that require it without asking again."
+        if extracted_phone:
+            enhanced_prompt = enhanced_prompt + f"\n\nIMPORTANT: The patient's phone number is {extracted_phone}. Use this phone number automatically for any tool calls that require it without asking again."
+        
+        # Convert chat history format for Nova Converse API
+        message_history = []
+        for msg in chat_history:
+            if msg['role'] in ['user', 'assistant']:
+                content_items = msg.get('content', [])
+                text_content = None
+                
+                if isinstance(content_items, list) and len(content_items) > 0:
+                    for content_item in content_items:
+                        if isinstance(content_item, dict):
+                            if 'type' in content_item and content_item['type'] == 'text':
+                                text_content = content_item.get('text', '')
+                                break
+                            elif 'text' in content_item:
+                                text_content = content_item['text']
+                                break
+                
+                if text_content and text_content.strip():
+                    message_history.append({
+                        'role': msg['role'],
+                        'content': [{'text': text_content.strip()}]
+                    })
+        
+        print("Nova Hospital Model - Chat History: ", message_history)
+        
+        # Nova model configuration
+        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_region = os.environ.get("region_used", region_used)
+        nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
+        
+        input_tokens = 0
+        output_tokens = 0
+        
+        # First API call to get initial response
+        try:
+            response = nova_bedrock_client.converse(
+                modelId=nova_model_name,
+                messages=message_history,
+                system=[{"text": enhanced_prompt}],
+                inferenceConfig={
+                    "temperature": 0,
+                    "topP": 0.9
+                },
+                toolConfig={
+                    "tools": hospital_tools_nova
+                }
+            )
+            
+            print("Nova Hospital Model Response: ", response)
+            
+            # Parse the response
+            assistant_response = []
+            output_msg = (response.get('output') or {}).get('message') or {}
+            content_items = output_msg.get('content') or []
+            
+            for item in content_items:
+                if 'text' in item:
+                    # Filter out thinking tags from Nova responses
+                    text_content = item['text']
+                    text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL)
+                    text_content = text_content.strip()
+                    if text_content:
+                        assistant_response.append({"text": text_content})
+                elif 'toolUse' in item:
+                    tu = item['toolUse'] or {}
+                    assistant_response.append({
+                        "toolUse": {
+                            "name": tu.get('name'),
+                            "toolUseId": tu.get('toolUseId'),
+                            "input": tu.get('input', {})
+                        }
+                    })
+            
+            usage = response.get('usage') or {}
+            input_tokens += usage.get('inputTokens', 0)
+            output_tokens += usage.get('outputTokens', 0)
+            
+            # Append assistant response to chat history
+            message_history.append({'role': 'assistant', 'content': assistant_response})
+            
+            # Check if any tools were called
+            tool_calls = [a for a in assistant_response if 'toolUse' in a]
+            print("Nova Hospital Tool calls: ", tool_calls)
+            
+            if tool_calls:
+                # Process all tool calls
+                tools_used = []
+                tool_results = []
+                
+                for tool_call_item in tool_calls:
+                    tool_call = tool_call_item['toolUse']
+                    tool_name = tool_call.get('name')
+                    tool_input = tool_call.get('input', {})
+                    tool_use_id = tool_call.get('toolUseId')
+                    tool_result = None
+                    
+                    tools_used.append(tool_name)
+                    
+                    # Send a heartbeat to keep WebSocket alive during tool execution
+                    try:
+                        heartbeat = {'type': 'heartbeat'}
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                    except Exception as e:
+                        print(f"Heartbeat send error: {e}")
+                    
+                    # Execute the appropriate hospital tool (same logic as hospital_agent_invoke_tool)
+                    if tool_name == 'hospital_faq_tool_schema':
+                        print("hospital_faq is called ...")
+                        # Send another heartbeat before FAQ retrieval
+                        try:
+                            heartbeat = {'type': 'heartbeat'}
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                        except Exception as e:
+                            print(f"Hospital FAQ heartbeat send error: {e}")
+                        
+                        tool_result = get_hospital_faq_chunks(tool_input['knowledge_base_retrieval_question'])
+                        
+                        # If FAQ tool returns empty or no results, provide fallback
+                        if not tool_result or len(tool_result) == 0:
+                            tool_result = ["I don't have specific information about that in our current hospital knowledge base. Please contact our hospital directly for detailed information."]
+                    
+                    elif tool_name == 'get_department_doctors':
+                        # Handle department doctors tool - MANDATORY for department selection
+                        department = tool_input.get("department", "")
+                        
+                        # Use centralized department doctors data
+                        department_doctors = DEPARTMENT_DOCTORS
+                        
+                        if department in department_doctors:
+                            doctors = department_doctors[department]
+                            doctor_list = []
+                            for doctor in doctors:
+                                doctor_list.append(f"• {doctor['name']}")
+                            
+                            tool_result = [f"Here are the available doctors in our {department} department:\n\n" + "\n".join(doctor_list) + "\n\nWhich doctor would you prefer to see?"]
+                        else:
+                            tool_result = [f"I'm sorry, but {department} is not a valid department. Please select from: Cardiology, Psychology, Neurology, Orthopedics, Dermatology, Pediatrics, Internal Medicine, Oncology, or Radiology."]
+                    
+                    elif tool_name == 'doctor_availability':
+                        # Get doctor availability - simple tool that only requires doctor name
+                        doctor_name = tool_input.get("doctor_name", "")
+                        
+                        # Use centralized department doctors data
+                        department_doctors = DEPARTMENT_DOCTORS
+                        
+                        # Search for the doctor across all departments
+                        selected_doctor = None
+                        found_department = None
+                        
+                        for dept_name, doctors in department_doctors.items():
+                            for doctor in doctors:
+                                if doctor_name.lower() in doctor['name'].lower():
+                                    selected_doctor = doctor
+                                    found_department = dept_name
+                                    break
+                            if selected_doctor:
+                                break
+                        
+                        if selected_doctor:
+                            # Convert available dates to readable format
+                            readable_dates = []
+                            for date_str in selected_doctor['available_dates']:
+                                try:
+                                    dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                    readable_dates.append(dt.strftime('%B %d, %Y'))
+                                except Exception as e:
+                                    print(f"Date parsing error for {date_str}: {e}")
+                                    readable_dates.append(date_str)
+                            
+                            available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
+                            tool_result = [f"Dr. {selected_doctor['name']} is available on:\n\n{available_dates_str}\n\nWhat is your preferred date for the appointment?"]
+                        else:
+                            tool_result = [f"Doctor {doctor_name} not found. Please select from the available doctors."]
+                    
+                    elif tool_name == 'reschedule_appointment':
+                        # Dedicated tool for handling rescheduling with flexible date parsing
+                        name = tool_input.get("name", "") or extracted_name
+                        phone = tool_input.get("phone", "") or extracted_phone
+                        preferred_date = tool_input.get("preferred_date", "")
+                        
+                        print(f"Reschedule appointment called with: name={name}, phone={phone}, preferred_date={preferred_date}")
+                        
+                        # Validate phone number format
+                        is_valid_phone, phone_result = validate_phone_number(phone)
+                        if not is_valid_phone:
+                            tool_result = [phone_result]
+                        else:
+                            phone = phone_result
+                            
+                            # Parse the date using flexible parsing
+                            formatted_date = parse_date_flexible(preferred_date)
+                            
+                            if not formatted_date:
+                                tool_result = [f"Could not parse the date '{preferred_date}'. Please provide a date in a format like 'September 22' or '22nd September'."]
+                            else:
+                                # Map Name and Phone to patient key
+                                patient_key = None
+                                for k, v in patients.items():
+                                    if v['name'].lower() == name.lower() and v['phone'].replace(' ', '') == phone.replace(' ', ''):
+                                        patient_key = k
+                                        break
+                                
+                                # Define patient appointments data (same as hospital_agent_invoke_tool)
+                                patient_appointments = {
+                                    "PAT1001": [
+                                        {"id": "APT123456", "department": "Cardiology", "doctor": "Dr. Sarah Johnson", "date": "2025-09-19", "time": "10:00 AM", "reason": "Follow-up consultation"}
+                                    ],
+                                    "PAT1002": [
+                                        {"id": "APT123457", "department": "Psychology", "doctor": "Dr. Lisa Thompson", "date": "2025-09-20", "time": "2:00 PM", "reason": "Prenatal checkup"}
+                                    ],
+                                    "PAT1003": [
+                                        {"id": "APT123458", "department": "Orthopedics", "doctor": "Dr. David Miller", "date": "2025-09-21", "time": "11:30 AM", "reason": "Physical therapy session"}
+                                    ],
+                                    "PAT1004": [
+                                        {"id": "APT123459", "department": "Psychology", "doctor": "Dr. Lisa Thompson", "date": "2025-09-22", "time": "3:00 PM", "reason": "Therapy session"}
+                                    ],
+                                    "PAT1005": [
+                                        {"id": "APT123460", "department": "Neurology", "doctor": "Dr. Amanda Foster", "date": "2025-09-23", "time": "9:30 AM", "reason": "Neurological consultation"}
+                                    ]
+                                }
+                                
+                                if not patient_key or patient_key not in patient_appointments or not patient_appointments[patient_key]:
+                                    tool_result = ["No existing appointment found. Please contact the hospital directly."]
+                                else:
+                                    existing_appointment = patient_appointments[patient_key][0]
+                                    existing_doctor = existing_appointment['doctor']
+                                    existing_department = existing_appointment['department']
+                                    
+                                    # Use centralized department doctors data
+                                    department_doctors = DEPARTMENT_DOCTORS
+                                    
+                                    # Find the doctor in the department
+                                    selected_doctor = None
+                                    if existing_department in department_doctors:
+                                        for doctor in department_doctors[existing_department]:
+                                            if doctor['name'] == existing_doctor:
+                                                selected_doctor = doctor
+                                                break
+                                    
+                                    if not selected_doctor:
+                                        tool_result = [f"Doctor {existing_doctor} not found. Please contact the hospital directly."]
+                                    else:
+                                        # Check if the formatted date is available
+                                        if formatted_date in selected_doctor['available_dates']:
+                                            # Date is available, show available times
+                                            available_times = selected_doctor['available_times']
+                                            times_list = "\n".join([f"• {time}" for time in available_times])
+                                            
+                                            # Convert date to readable format
+                                            try:
+                                                dt = datetime.strptime(formatted_date, '%Y-%m-%d')
+                                                readable_date = dt.strftime('%B %d, %Y')
+                                            except:
+                                                readable_date = formatted_date
+                                            
+                                            tool_result = [f"Great! Dr. {existing_doctor} is available on {readable_date}. Here are the available times:\n\n{times_list}\n\nWhat time would you prefer for your appointment?"]
+                                        else:
+                                            # Date not available, show available dates
+                                            readable_dates = []
+                                            for date_str in selected_doctor['available_dates']:
+                                                try:
+                                                    dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                                    readable_dates.append(dt.strftime('%B %d, %Y'))
+                                                except:
+                                                    readable_dates.append(date_str)
+                                            available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
+                                            
+                                            # Convert user's date to readable format for error message
+                                            try:
+                                                dt = datetime.strptime(formatted_date, '%Y-%m-%d')
+                                                user_readable_date = dt.strftime('%B %d, %Y')
+                                            except:
+                                                user_readable_date = preferred_date
+                                            
+                                            tool_result = [f"I'm sorry, but Dr. {existing_doctor} is not available on {user_readable_date}. Here are the available dates:\n\n{available_dates_str}\n\nPlease choose one of these dates."]
+                    
+                    elif tool_name == 'appointment_scheduler':
+                        # Use the same appointment_scheduler logic as hospital_agent_invoke_tool
+                        # This is a complex tool - we'll use a simplified version here
+                        # For full implementation, refer to hospital_agent_invoke_tool lines 14596-15036
+                        name = tool_input.get("name", "") or extracted_name
+                        phone = tool_input.get("phone", "") or extracted_phone
+                        department = tool_input.get("department", "")
+                        doctor_name = tool_input.get("doctor_name", "")
+                        preferred_date = tool_input.get("preferred_date", "")
+                        preferred_time = tool_input.get("preferred_time", "")
+                        preferred_day = tool_input.get("preferred_day", "")
+                        reason = tool_input.get("reason", "")
+                        action_type = tool_input.get("action", "schedule")
+                        
+                        # For get_doctor_times action, skip phone validation as it doesn't require authentication
+                        if action_type != "get_doctor_times":
+                            # Check if name and phone are provided
+                            if not name or not phone:
+                                missing_params = []
+                                if not name:
+                                    missing_params.append("name")
+                                if not phone:
+                                    missing_params.append("phone")
+                                tool_result = [f"Missing required parameters: {', '.join(missing_params)}. Please provide the missing information."]
+                            else:
+                                # Validate phone number format
+                                is_valid_phone, phone_result = validate_phone_number(phone)
+                                if not is_valid_phone:
+                                    tool_result = [phone_result]
+                                else:
+                                    phone = phone_result
+                        
+                        # Use centralized department doctors data
+                        department_doctors = DEPARTMENT_DOCTORS
+                        
+                        # Handle different action types (simplified - full logic in hospital_agent_invoke_tool)
+                        if action_type == "get_doctor_times":
+                            selected_doctor = None
+                            for dept_name, doctors in department_doctors.items():
+                                for doctor in doctors:
+                                    if doctor_name.lower() in doctor['name'].lower():
+                                        selected_doctor = doctor
+                                        break
+                                if selected_doctor:
+                                    break
+                            
+                            if selected_doctor:
+                                readable_dates = []
+                                for date_str in selected_doctor['available_dates']:
+                                    try:
+                                        dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                        readable_dates.append(dt.strftime('%B %d, %Y'))
+                                    except:
+                                        readable_dates.append(date_str)
+                                available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
+                                tool_result = [f"Dr. {selected_doctor['name']} is available on:\n\n{available_dates_str}\n\nWhat is your preferred date for the appointment?"]
+                            else:
+                                tool_result = [f"Doctor {doctor_name} not found. Please select from the available doctors."]
+                        elif action_type == "check_availability":
+                            if department and department in department_doctors:
+                                doctors_info = ""
+                                for doctor in department_doctors[department]:
+                                    doctors_info += f"\n• {doctor['name']}"
+                                tool_result = [f"Available doctors in {department} department:{doctors_info}\n\nWhich doctor would you prefer to see?"]
+                            else:
+                                available_departments = ", ".join(department_doctors.keys())
+                                tool_result = [f"Please select a department first. Available departments: {available_departments}"]
+                        elif action_type == "schedule":
+                            if not department:
+                                available_departments = ", ".join(department_doctors.keys())
+                                tool_result = [f"Please select a department first. Available departments: {available_departments}"]
+                            elif department not in department_doctors:
+                                tool_result = [f"Invalid department. Available departments: {', '.join(department_doctors.keys())}"]
+                            else:
+                                # Find the selected doctor or assign one
+                                selected_doctor = None
+                                if doctor_name:
+                                    for doctor in department_doctors[department]:
+                                        if doctor_name.lower() in doctor['name'].lower():
+                                            selected_doctor = doctor
+                                            break
+                                if not selected_doctor:
+                                    selected_doctor = department_doctors[department][0]
+                                
+                                # Validate preferred_date against doctor's available_dates
+                                if preferred_date and preferred_date not in selected_doctor['available_dates']:
+                                    readable_dates = []
+                                    for date_str in selected_doctor['available_dates']:
+                                        try:
+                                            dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                            readable_dates.append(dt.strftime('%B %d, %Y'))
+                                        except:
+                                            readable_dates.append(date_str)
+                                    available_dates_str = ', '.join(readable_dates)
+                                    tool_result = [f"Sorry, {preferred_date} is not available for {selected_doctor['name']}. Available dates are: {available_dates_str}. Please choose one of these dates."]
+                                else:
+                                    appointment_id = f"APT{random.randint(100000, 999999)}"
+                                    display_date = preferred_date
+                                    if preferred_date:
+                                        try:
+                                            dt = datetime.strptime(preferred_date, '%Y-%m-%d')
+                                            display_date = dt.strftime('%B %d, %Y')
+                                        except:
+                                            display_date = preferred_date
+                                    tool_result = [f"Appointment scheduled successfully!\n\nAppointment ID: {appointment_id}\nDepartment: {department}\nDoctor: {selected_doctor['name']}\nDate: {display_date}\nTime: {preferred_time}\nReason: {reason}\n\nPlease arrive 15 minutes early for your appointment."]
+                        elif action_type == "reschedule":
+                            # Simplified reschedule logic - full implementation in hospital_agent_invoke_tool
+                            patient_appointments = {
+                                "PAT1001": [{"id": "APT123456", "department": "Cardiology", "doctor": "Dr. Sarah Johnson", "date": "2025-09-19", "time": "10:00 AM", "reason": "Follow-up consultation"}],
+                                "PAT1002": [{"id": "APT123457", "department": "Psychology", "doctor": "Dr. Lisa Thompson", "date": "2025-09-20", "time": "2:00 PM", "reason": "Prenatal checkup"}],
+                                "PAT1003": [{"id": "APT123458", "department": "Orthopedics", "doctor": "Dr. David Miller", "date": "2025-09-21", "time": "11:30 AM", "reason": "Physical therapy session"}],
+                                "PAT1004": [{"id": "APT123459", "department": "Psychology", "doctor": "Dr. Lisa Thompson", "date": "2025-09-22", "time": "3:00 PM", "reason": "Therapy session"}],
+                                "PAT1005": [{"id": "APT123460", "department": "Neurology", "doctor": "Dr. Kevin Park", "date": "2025-09-23", "time": "9:00 AM", "reason": "Migraine follow-up"}]
+                            }
+                            patient_key = None
+                            for k, v in patients.items():
+                                if v['name'].lower() == name.lower() and v['phone'].replace(' ', '') == phone.replace(' ', ''):
+                                    patient_key = k
+                                    break
+                            if patient_key and patient_key in patient_appointments and patient_appointments[patient_key]:
+                                existing_appointment = patient_appointments[patient_key][0]
+                                if not preferred_date and not preferred_time and reason:
+                                    confirmation = reason.lower()
+                                    if any(word in confirmation for word in ['yes', 'yep', 'sure', 'okay', 'ok', 'reschedule', 'change']):
+                                        existing_doctor = existing_appointment['doctor']
+                                        existing_department = existing_appointment['department']
+                                        if existing_department in department_doctors:
+                                            selected_doctor = None
+                                            for doctor in department_doctors[existing_department]:
+                                                if doctor['name'] == existing_doctor:
+                                                    selected_doctor = doctor
+                                                    break
+                                            if selected_doctor:
+                                                readable_dates = []
+                                                for date_str in selected_doctor['available_dates']:
+                                                    try:
+                                                        dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                                        readable_dates.append(dt.strftime('%B %d, %Y'))
+                                                    except:
+                                                        readable_dates.append(date_str)
+                                                available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
+                                                tool_result = [f"Great! Here are the available dates for Dr. {existing_doctor}:\n\n{available_dates_str}\n\nWhat date would you prefer for your rescheduled appointment?"]
+                                            else:
+                                                tool_result = [f"Doctor {existing_doctor} not found. Please contact the hospital directly."]
+                                        else:
+                                            tool_result = [f"Department {existing_department} not found. Please contact the hospital directly."]
+                                    else:
+                                        tool_result = ["Thank you. Your appointment remains as scheduled. Is there anything else I can help you with?"]
+                                else:
+                                    def ordinal(n):
+                                        return "%d%s" % (n, "th" if 11<=n%100<=13 else {1:"st",2:"nd",3:"rd"}.get(n%10, "th"))
+                                    try:
+                                        dt = datetime.strptime(existing_appointment['date'], '%Y-%m-%d')
+                                        human_date = f"{ordinal(dt.day)} {dt.strftime('%B %Y')}"
+                                    except Exception:
+                                        human_date = existing_appointment['date']
+                                    tool_result = [f"Current Appointment Details:\n\n• Appointment ID: {existing_appointment['id']}\n• Department: {existing_appointment['department']}\n• Doctor: {existing_appointment['doctor']}\n• Date: {human_date}\n• Time: {existing_appointment['time']}\n• Reason: {existing_appointment['reason']}\n\nWould you like to reschedule this appointment?"]
+                            else:
+                                tool_result = ["No existing appointments found to reschedule. Would you like to schedule a new appointment instead?"]
+                        elif action_type == "cancel":
+                            # Simplified cancel logic
+                            patient_appointments = {
+                                "PAT1001": [{"id": "APT123456", "department": "Cardiology", "doctor": "Dr. Sarah Johnson", "date": "2025-09-19", "time": "10:00 AM", "reason": "Follow-up consultation"}],
+                                "PAT1002": [{"id": "APT123457", "department": "Psychology", "doctor": "Dr. Lisa Thompson", "date": "2025-09-20", "time": "2:00 PM", "reason": "Prenatal checkup"}],
+                                "PAT1003": [{"id": "APT123458", "department": "Orthopedics", "doctor": "Dr. David Miller", "date": "2025-09-21", "time": "11:30 AM", "reason": "Physical therapy session"}],
+                                "PAT1004": [{"id": "APT123459", "department": "Psychology", "doctor": "Dr. Lisa Thompson", "date": "2025-09-22", "time": "3:00 PM", "reason": "Therapy session"}],
+                                "PAT1005": [{"id": "APT123460", "department": "Neurology", "doctor": "Dr. Kevin Park", "date": "2025-09-23", "time": "9:00 AM", "reason": "Migraine follow-up"}]
+                            }
+                            patient_key = None
+                            for k, v in patients.items():
+                                if v['name'].lower() == name.lower() and v['phone'].replace(' ', '') == phone.replace(' ', ''):
+                                    patient_key = k
+                                    break
+                            if patient_key and patient_key in patient_appointments and patient_appointments[patient_key]:
+                                appointments = patient_appointments[patient_key]
+                                user_confirmation = tool_input.get("reason", "").lower()
+                                user_confirms = any(phrase in user_confirmation for phrase in ["yes", "yep", "yeah", "sure", "ok", "okay", "cancel", "cancelled", "cancellation", "confirm", "confirmed", "confirmation", "i would like to", "i want to", "i'd like to", "please cancel", "go ahead", "proceed"])
+                                if (preferred_date and preferred_time) or user_confirms:
+                                    appointment_to_cancel = appointments[0] if not (preferred_date and preferred_time) else None
+                                    if appointment_to_cancel:
+                                        tool_result = [f"Appointment Cancelled Successfully!\n\nCancelled Appointment Details:\n- Appointment ID: {appointment_to_cancel['id']}\n- Department: {appointment_to_cancel['department']}\n- Doctor: {appointment_to_cancel['doctor']}\n- Date: {appointment_to_cancel['date']}\n- Time: {appointment_to_cancel['time']}\n- Reason: {appointment_to_cancel['reason']}\n\nYour appointment has been cancelled. If you need to reschedule, please call our appointment line at (555) 123-4567 or use our online booking system.\n\nWe hope to serve you again soon!"]
+                                    else:
+                                        tool_result = [f"No appointment found matching {preferred_date} at {preferred_time}. Please check your appointment details and try again."]
+                                else:
+                                    if len(appointments) == 1:
+                                        appointment = appointments[0]
+                                        def ordinal(n):
+                                            return "%d%s" % (n, "th" if 11<=n%100<=13 else {1:"st",2:"nd",3:"rd"}.get(n%10, "th"))
+                                        try:
+                                            dt = datetime.strptime(appointment['date'], '%Y-%m-%d')
+                                            human_date = f"{ordinal(dt.day)} {dt.strftime('%B %Y')}"
+                                        except Exception:
+                                            human_date = appointment['date']
+                                        tool_result = [f"Current Appointment Details:\n\nAppointment ID: {appointment['id']}\nDepartment: {appointment['department']}\nDoctor: {appointment['doctor']}\nDate: {human_date}\nTime: {appointment['time']}\nReason: {appointment['reason']}\n\nWould you like to cancel this appointment? Please confirm by saying 'yes' or 'cancel'."]
+                                    else:
+                                        appointments_list = "\n".join([f"{i+1}. {apt['department']} - {apt['doctor']} - {apt['date']} at {apt['time']}" for i, apt in enumerate(appointments)])
+                                        tool_result = [f"Here are your current appointments:\n\n{appointments_list}\n\nWhich appointment would you like to cancel? Please specify the number (1, 2, etc.) or provide the department/doctor name."]
+                            else:
+                                tool_result = ["No existing appointments found to cancel. If you need to schedule a new appointment, I'd be happy to help you with that."]
+                        else:
+                            tool_result = ["Appointment action completed successfully."]
+                    
+                    elif tool_name == 'patient_records':
+                        # Simulate patient records access
+                        name = tool_input.get("name", "") or extracted_name
+                        phone = tool_input.get("phone", "") or extracted_phone
+                        record_type = tool_input.get("record_type", "all")
+                        
+                        # Validate phone number format
+                        is_valid_phone, phone_result = validate_phone_number(phone)
+                        if not is_valid_phone:
+                            tool_result = [phone_result]
+                        else:
+                            phone = phone_result
+                            
+                            # Validate patient credentials
+                            valid_patients = {p['name']: p['phone'] for p in patients.values()}
+                            if name in valid_patients and valid_patients[name] == phone:
+                                # Patient-specific medical records (same as hospital_agent_invoke_tool)
+                                patient_records_data = {
+                                    "PAT1001": {
+                                        "name": "John Smith", "age": 39,
+                                        "recent_visits": ["Cardiology consultation (2024-01-15) - Chest pain evaluation", "General checkup (2023-12-10) - Annual physical", "Lab tests (2023-11-20) - Cholesterol and blood sugar screening"],
+                                        "medications": ["Lisinopril 10mg daily - Blood pressure management", "Metformin 500mg twice daily - Diabetes management", "Atorvastatin 20mg daily - Cholesterol control"],
+                                        "allergies": ["Penicillin", "Shellfish"],
+                                        "conditions": ["Hypertension", "Type 2 Diabetes", "High Cholesterol"],
+                                        "next_appointment": "Cardiology follow-up (2025-10-15)"
+                                    },
+                                    "PAT1002": {
+                                        "name": "Sarah Johnson", "age": 34,
+                                        "recent_visits": ["Dermatology consultation (2024-02-10) - Skin check", "Gynecology exam (2024-01-20) - Annual screening", "Lab tests (2024-01-15) - Routine blood work"],
+                                        "medications": ["Prenatal vitamins daily - Pregnancy support", "Folic acid 400mcg daily - Pregnancy preparation"],
+                                        "allergies": ["Latex", "Iodine contrast"],
+                                        "conditions": ["Pregnancy (12 weeks)", "Mild anemia"],
+                                        "next_appointment": "Obstetrics follow-up (2025-11-20)"
+                                    },
+                                    "PAT1003": {
+                                        "name": "Michael Brown", "age": 46,
+                                        "recent_visits": ["Orthopedics consultation (2024-02-05) - Knee pain evaluation", "Physical therapy (2024-01-25) - Post-surgery rehabilitation", "Surgery follow-up (2024-01-10) - ACL reconstruction"],
+                                        "medications": ["Ibuprofen 400mg as needed - Pain management", "Acetaminophen 500mg as needed - Pain relief"],
+                                        "allergies": ["Morphine", "Codeine"],
+                                        "conditions": ["ACL tear (post-surgery)", "Osteoarthritis"],
+                                        "next_appointment": "Physical therapy session (2025-10-30)"
+                                    },
+                                    "PAT1004": {
+                                        "name": "Emily Davis", "age": 32,
+                                        "recent_visits": ["Psychology consultation (2024-02-12) - Anxiety management", "Primary care visit (2024-01-30) - General health check", "Lab tests (2024-01-25) - Thyroid function test"],
+                                        "medications": ["Sertraline 50mg daily - Anxiety and depression", "Lorazepam 0.5mg as needed - Anxiety relief"],
+                                        "allergies": ["Sulfa drugs", "Aspirin"],
+                                        "conditions": ["Generalized Anxiety Disorder", "Mild Depression", "Hypothyroidism"],
+                                        "next_appointment": "Psychology follow-up (2025-10-05)"
+                                    },
+                                    "PAT1005": {
+                                        "name": "David Wilson", "age": 41,
+                                        "recent_visits": ["Neurology consultation (2024-02-08) - Migraine evaluation", "Emergency visit (2024-01-18) - Severe headache episode", "MRI scan (2024-01-20) - Brain imaging"],
+                                        "medications": ["Sumatriptan 50mg as needed - Migraine treatment", "Propranolol 40mg twice daily - Migraine prevention", "Magnesium 400mg daily - Migraine support"],
+                                        "allergies": ["NSAIDs", "Contrast dye"],
+                                        "conditions": ["Chronic Migraine", "Tension Headaches"],
+                                        "next_appointment": "Neurology follow-up (2025-11-15)"
+                                    }
+                                }
+                                
+                                # Map Name and Phone to patient key
+                                patient_key = None
+                                for k, v in patients.items():
+                                    if v['name'].lower() == name.lower() and v['phone'].replace(' ', '') == phone.replace(' ', ''):
+                                        patient_key = k
+                                        break
+                                
+                                if patient_key and patient_key in patient_records_data:
+                                    patient = patient_records_data[patient_key]
+                                    recent_visits = "\n".join([f"- {visit}" for visit in patient["recent_visits"]])
+                                    medications = "\n".join([f"- {med}" for med in patient["medications"]])
+                                    allergies = "\n".join([f"- {allergy}" for allergy in patient["allergies"]])
+                                    conditions = "\n".join([f"- {condition}" for condition in patient["conditions"]])
+                                    tool_result = [f"Patient Records for {patient_key} ({patient['name']}, Age {patient['age']}):\n\nRecent Visits:\n{recent_visits}\n\nCurrent Medications:\n{medications}\n\nMedical Conditions:\n{conditions}\n\nAllergies:\n{allergies}\n\nNext Appointment:\n- {patient['next_appointment']}"]
+                                else:
+                                    tool_result = ["Patient records not found. Please contact the hospital directly."]
+                            else:
+                                tool_result = ["Invalid patient credentials. Please verify your Name and Phone Number."]
+                    
+                    elif tool_name == 'medication_tracker':
+                        # Simulate medication tracking
+                        name = tool_input.get("name", "") or extracted_name
+                        phone = tool_input.get("phone", "") or extracted_phone
+                        action_type = tool_input.get("action", "get_medications")
+                        
+                        # Validate phone number format
+                        is_valid_phone, phone_result = validate_phone_number(phone)
+                        if not is_valid_phone:
+                            tool_result = [phone_result]
+                        else:
+                            phone = phone_result
+                            
+                            # Validate patient credentials
+                            valid_patients = {p['name']: p['phone'] for p in patients.values()}
+                            if name in valid_patients and valid_patients[name] == phone:
+                                # Patient-specific medication information (same as hospital_agent_invoke_tool)
+                                patient_medications = {
+                                    "PAT1001": {
+                                        "medications": ["Lisinopril 10mg - Take once daily in the morning for blood pressure", "Metformin 500mg - Take twice daily with meals for diabetes", "Atorvastatin 20mg - Take once daily in the evening for cholesterol"],
+                                        "refill_dates": ["Lisinopril: 2025-10-20", "Metformin: 2025-10-18", "Atorvastatin: 2025-10-22"]
+                                    },
+                                    "PAT1002": {
+                                        "medications": ["Prenatal vitamins - Take once daily with breakfast", "Folic acid 400mcg - Take once daily for pregnancy support"],
+                                        "refill_dates": ["Prenatal vitamins: 2025-11-15", "Folic acid: 2025-11-10"]
+                                    },
+                                    "PAT1003": {
+                                        "medications": ["Ibuprofen 400mg - Take as needed for pain (max 3 times daily)", "Acetaminophen 500mg - Take as needed for pain relief"],
+                                        "refill_dates": ["Ibuprofen: 2025-10-25", "Acetaminophen: 2025-10-28"]
+                                    },
+                                    "PAT1004": {
+                                        "medications": ["Sertraline 50mg - Take once daily in the morning for anxiety", "Lorazepam 0.5mg - Take as needed for anxiety relief (max 2 times daily)"],
+                                        "refill_dates": ["Sertraline: 2025-11-05", "Lorazepam: 2025-10-20"]
+                                    },
+                                    "PAT1005": {
+                                        "medications": ["Sumatriptan 50mg - Take as needed for migraine treatment", "Propranolol 40mg - Take twice daily for migraine prevention", "Magnesium 400mg - Take once daily for migraine support"],
+                                        "refill_dates": ["Sumatriptan: 2025-11-01", "Propranolol: 2025-10-25", "Magnesium: 2025-11-10"]
+                                    }
+                                }
+                                
+                                # Map Name and Phone to patient key
+                                patient_key = None
+                                for k, v in patients.items():
+                                    if v['name'].lower() == name.lower() and v['phone'].replace(' ', '') == phone.replace(' ', ''):
+                                        patient_key = k
+                                        break
+                                
+                                if action_type == "get_medications":
+                                    if patient_key and patient_key in patient_medications:
+                                        patient_meds = patient_medications[patient_key]
+                                        med_list = "\n".join([f"{i+1}. {med}" for i, med in enumerate(patient_meds["medications"])])
+                                        refill_list = "\n".join([f"- {refill}" for refill in patient_meds["refill_dates"]])
+                                        tool_result = [f"Current Medications:\n\n{med_list}\n\nNext refill dates:\n{refill_list}"]
+                                    else:
+                                        tool_result = ["No medications found for this patient."]
+                                elif action_type == "add_medication":
+                                    medication_name = tool_input.get("medication_name", "")
+                                    dosage = tool_input.get("dosage", "")
+                                    schedule = tool_input.get("schedule", "")
+                                    tool_result = [f"Medication added successfully: {medication_name} {dosage} - {schedule}"]
+                                elif action_type == "update_medication":
+                                    medication_name = tool_input.get("medication_name", "")
+                                    dosage = tool_input.get("dosage", "")
+                                    schedule = tool_input.get("schedule", "")
+                                    tool_result = [f"Medication updated successfully: {medication_name} {dosage} - {schedule}"]
+                                elif action_type == "remove_medication":
+                                    medication_name = tool_input.get("medication_name", "")
+                                    tool_result = [f"Medication {medication_name} has been removed from your list."]
+                                else:
+                                    tool_result = ["Medication action completed successfully."]
+                            else:
+                                tool_result = ["Invalid patient credentials. Please verify your Name and Phone Number."]
+                    
+                    elif tool_name == 'emergency_response':
+                        # Handle emergency situations
+                        emergency_type = tool_input.get("emergency_type", "")
+                        severity = tool_input.get("severity", "")
+                        description = tool_input.get("description", "")
+                        location = tool_input.get("location", "")
+                        
+                        if severity in ["high", "critical"]:
+                            tool_result = [f"EMERGENCY ALERT: {severity.upper()} {emergency_type} emergency reported. Description: {description}. Location: {location}. Emergency services have been notified. Please call 911 immediately if this is a life-threatening emergency."]
+                        else:
+                            tool_result = [f"Emergency situation logged: {emergency_type} - {severity} severity. Description: {description}. Location: {location}. Please proceed to the emergency department or call our emergency line."]
+                    
+                    elif tool_name == 'symptom_checker':
+                        # Provide symptom analysis
+                        symptoms = tool_input.get("symptoms", "")
+                        duration = tool_input.get("duration", "")
+                        severity = tool_input.get("severity", "")
+                        additional_info = tool_input.get("additional_info", "")
+                        
+                        tool_result = [f"Based on your symptoms: {symptoms}\nDuration: {duration}\nSeverity: {severity}\n\nPreliminary Assessment:\nThis appears to be a {severity} condition that has been present for {duration}. Based on the symptoms described, I recommend:\n\n1. Monitor your symptoms closely\n2. Rest and stay hydrated\n3. If symptoms worsen or persist, please schedule an appointment with your doctor\n4. For severe symptoms, consider visiting the emergency department\n\nNote: This is preliminary guidance only. Please consult with a healthcare professional for proper diagnosis and treatment."]
+                    
+                    else:
+                        # Unknown tool
+                        tool_result = ["I'm here to help with your hospital needs. How can I assist you today?"]
+                    
+                    # Create tool result block for Nova Converse API
+                    try:
+                        print(f"Tool result type: {type(tool_result)}")
+                        print(f"Tool result content: {tool_result}")
+                        
+                        # Handle different types of tool results
+                        if isinstance(tool_result, list) and tool_result:
+                            if isinstance(tool_result[0], dict):
+                                # Format list of dictionaries
+                                formatted_results = []
+                                for item in tool_result:
+                                    if isinstance(item, dict):
+                                        formatted_item = []
+                                        for key, value in item.items():
+                                            formatted_item.append(f"{key.replace('_', ' ').title()}: {value}")
+                                        formatted_results.append("\n".join(formatted_item))
+                                    else:
+                                        formatted_results.append(str(item))
+                                content_text = "\n\n".join(formatted_results)
+                            else:
+                                # Handle list of strings
+                                content_text = "\n".join(str(item) for item in tool_result)
+                        else:
+                            content_text = str(tool_result) if tool_result else "No information available"
+                        
+                        # Create tool result block for Nova Converse API
+                        tool_result_block = {
+                            "toolResult": {
+                                "toolUseId": tool_use_id,
+                                "content": [{"text": content_text}],
+                                "status": "success"
+                            }
+                        }
+                        tool_results.append(tool_result_block)
+                        print(f"Tool response created successfully")
+                        
+                    except Exception as e:
+                        print(f"Error creating tool response: {e}")
+                        print(f"Tool result type: {type(tool_result)}")
+                        print(f"Tool result content: {tool_result}")
+                        import traceback
+                        print(f"Traceback: {traceback.format_exc()}")
+                        # Skip this tool result instead of crashing
+                        continue
+                
+                # Validate and add tool results to message history
+                if tool_results:
+                    print(f"Tool results to validate: {tool_results}")
+                    # Validate tool results before adding to chat history
+                    valid_tool_results = []
+                    for tool_result in tool_results:
+                        print(f"Validating tool result: {tool_result}")
+                        if (tool_result and 
+                            isinstance(tool_result, dict) and 
+                            'toolResult' in tool_result and 
+                            tool_result['toolResult'].get('content') and 
+                            len(tool_result['toolResult']['content']) > 0 and
+                            tool_result['toolResult']['content'][0].get('text', '').strip()):
+                            valid_tool_results.append(tool_result)
+                            print(f"Tool result is valid: {tool_result}")
+                        else:
+                            print(f"Tool result is invalid: {tool_result}")
+                    
+                    # Only add tool results if we have valid ones
+                    if valid_tool_results:
+                        print(f"Adding {len(valid_tool_results)} valid tool results to chat history")
+                        message_history.append({
+                            "role": "user",
+                            "content": valid_tool_results
+                        })
+                    else:
+                        print("No valid tool results to add to chat history")
+                
+                # Make second API call with tool results
+                try:
+                    final_response = nova_bedrock_client.converse(
+                        modelId=nova_model_name,
+                        messages=message_history,
+                        system=[{"text": enhanced_prompt}],
+                        inferenceConfig={
+                            "temperature": 0,
+                            "topP": 0.9
+                        },
+                        toolConfig={
+                            "tools": hospital_tools_nova
+                        }
+                    )
+                    
+                    # Extract final answer (take first text response only)
+                    final_output_msg = (final_response.get('output') or {}).get('message') or {}
+                    final_content_items = final_output_msg.get('content') or []
+                    final_answer = ""
+                    
+                    # Take the first text response only
+                    for item in final_content_items:
+                        if 'text' in item:
+                            # Filter out thinking tags from Nova responses
+                            text_content = item['text']
+                            text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL)
+                            text_content = text_content.strip()
+                            if text_content:
+                                final_answer = text_content  # Take first text response only, don't concatenate
+                                break  # Break after first text response
+                    
+                    # If no text response, provide fallback
+                    if not final_answer:
+                        final_answer = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
+                    
+                    # Send response via WebSocket in streaming format
+                    # Since Nova Converse API doesn't support streaming, simulate it by sending in chunks
+                    try:
+                        # Send the answer in chunks to simulate streaming (frontend expects content_block_delta format)
+                        words = final_answer.split()
+                        for i, word in enumerate(words):
+                            delta_message = {
+                                'type': 'content_block_delta',
+                                'index': 0,
+                                'delta': {
+                                    'type': 'text_delta',
+                                    'text': word + (' ' if i < len(words) - 1 else '')
+                                }
+                            }
+                            try:
+                                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta_message))
+                            except api_gateway_client.exceptions.GoneException:
+                                print(f"Connection {connectionId} is closed (GoneException) - delta message (Nova Hospital)")
+                            except Exception as e:
+                                print(f"WebSocket send error (delta, Nova Hospital): {e}")
+                        
+                        # Send content_block_stop message
+                        stop_message = {'type': 'content_block_stop', 'index': 0}
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_message))
+                        except api_gateway_client.exceptions.GoneException:
+                            print(f"Connection {connectionId} is closed (GoneException) - stop message (Nova Hospital)")
+                        except Exception as e:
+                            print(f"WebSocket send error (stop, Nova Hospital): {e}")
+                        
+                        # Send message_stop message
+                        message_stop = {
+                            'type': 'message_stop',
+                            'amazon-bedrock-invocationMetrics': {
+                                'inputTokenCount': input_tokens,
+                                'outputTokenCount': output_tokens
+                            }
+                        }
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                        except api_gateway_client.exceptions.GoneException:
+                            print(f"Connection {connectionId} is closed (GoneException) - message_stop (Nova Hospital)")
+                        except Exception as e:
+                            print(f"WebSocket send error (message_stop, Nova Hospital): {e}")
+                    except Exception as e:
+                        print(f"Error sending WebSocket messages for Nova Hospital: {e}")
+                    
+                    # Update token counts
+                    final_usage = final_response.get('usage') or {}
+                    input_tokens += final_usage.get('inputTokens', 0)
+                    output_tokens += final_usage.get('outputTokens', 0)
+                    
+                    return {
+                        "answer": final_answer,
+                        "question": chat,
+                        "session_id": session_id,
+                        "input_tokens": str(input_tokens),
+                        "output_tokens": str(output_tokens)
+                    }
+                except Exception as e:
+                    print(f"Error in second API call for Nova Hospital: {e}")
+                    import traceback
+                    print(f"Traceback: {traceback.format_exc()}")
+                    # Send error response via WebSocket
+                    error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+                    for word in error_response.split():
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                        except:
+                            pass
+                    stop_answer = {'type': 'content_block_stop', 'index': 0}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                    except:
+                        pass
+                    return {
+                        "answer": error_response,
+                        "question": chat,
+                        "session_id": session_id,
+                        "input_tokens": str(input_tokens),
+                        "output_tokens": str(output_tokens)
+                    }
+            else:
+                # No tools called - return text response directly
+                final_answer = ""
+                for item in assistant_response:
+                    if 'text' in item:
+                        text_content = item['text']
+                        text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL)
+                        text_content = text_content.strip()
+                        if text_content:
+                            final_answer = text_content
+                            break
+                
+                # If no text response, provide fallback
+                if not final_answer:
+                    final_answer = "I'm here to help with your hospital needs. How can I assist you today?"
+                
+                # Send response via WebSocket in streaming format
+                try:
+                    words = final_answer.split()
+                    for i, word in enumerate(words):
+                        delta_message = {
+                            'type': 'content_block_delta',
+                            'index': 0,
+                            'delta': {
+                                'type': 'text_delta',
+                                'text': word + (' ' if i < len(words) - 1 else '')
+                            }
+                        }
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta_message))
+                        except api_gateway_client.exceptions.GoneException:
+                            print(f"Connection {connectionId} is closed (GoneException) - delta message (Nova Hospital)")
+                        except Exception as e:
+                            print(f"WebSocket send error (delta, Nova Hospital): {e}")
+                    
+                    # Send content_block_stop message
+                    stop_message = {'type': 'content_block_stop', 'index': 0}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_message))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - stop message (Nova Hospital)")
+                    except Exception as e:
+                        print(f"WebSocket send error (stop, Nova Hospital): {e}")
+                    
+                    # Send message_stop message
+                    message_stop = {
+                        'type': 'message_stop',
+                        'amazon-bedrock-invocationMetrics': {
+                            'inputTokenCount': input_tokens,
+                            'outputTokenCount': output_tokens
+                        }
+                    }
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                    except api_gateway_client.exceptions.GoneException:
+                        print(f"Connection {connectionId} is closed (GoneException) - message_stop (Nova Hospital)")
+                    except Exception as e:
+                        print(f"WebSocket send error (message_stop, Nova Hospital): {e}")
+                except Exception as e:
+                    print(f"Error sending WebSocket messages for Nova Hospital: {e}")
+                
+                return {
+                    "answer": final_answer,
+                    "question": chat,
+                    "session_id": session_id,
+                    "input_tokens": str(input_tokens),
+                    "output_tokens": str(output_tokens)
+                }
+        except Exception as e:
+            print(f"Error in first API call for Nova Hospital: {e}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+            # Send error response via WebSocket
+            try:
+                words = error_response.split()
+                for i, word in enumerate(words):
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    except:
+                        pass
+                stop_answer = {'type': 'content_block_stop', 'index': 0}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+            except:
+                pass
+            return {
+                "answer": error_response,
+                "question": chat,
+                "session_id": session_id,
+                "input_tokens": "0",
+                "output_tokens": "0"
+            }
+    
+    except Exception as e:
+        print(f"Error in Nova Hospital agent invoke tool: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        error_response = "I apologize, but I'm having trouble processing your request right now. Please try again in a moment."
+        
+        # Send error response via WebSocket
+        try:
+            words = error_response.split()
+            for i, word in enumerate(words):
+                delta = {
+                    'type': 'content_block_delta',
+                    'index': 0,
+                    'delta': {
+                        'type': 'text_delta',
+                        'text': word + (' ' if i < len(words) - 1 else '')
+                    }
+                }
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                except:
+                    pass
+            
+            stop_answer = {'type': 'content_block_stop', 'index': 0}
+            try:
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+            except:
+                pass
+            
+            message_stop = {
+                'type': 'message_stop',
+                'amazon-bedrock-invocationMetrics': {
+                    'inputTokenCount': 0,
+                    'outputTokenCount': 0
+                }
+            }
+            try:
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+            except:
+                pass
+        except Exception as ws_error:
+            print(f"Error sending WebSocket error message: {ws_error}")
+        
+        return {
+            "answer": error_response,
+            "question": chat,
+            "session_id": session_id,
+            "input_tokens": "0",
+            "output_tokens": "0"
+        }
