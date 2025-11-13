@@ -38,6 +38,7 @@ logger.setLevel(logging.INFO)
 region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
 voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
 ec2_instance_ip = os.environ.get("ec2_instance_ip", "")  # Elastic IP of the T3 medium instance
+S3_BUCKET = os.environ.get('S3_BUCKET', '')  # S3 bucket name for visual product search
 
 # Function to get database password from Secrets Manager
 def get_db_password():
@@ -5406,27 +5407,50 @@ def lambda_handler(event, context):
     # OpenSearch Visual Product Search Functions (defined inside lambda_handler)
     def create_opensearch_client():
         """Create and return OpenSearch client with AWS authentication"""
-        region = "us-west-2"
-        HOST = "of7eg8ly1gkaw3uv9527.us-west-2.aoss.amazonaws.com"
-        INDEX_NAME = "visualproductsearchmod"
+        # Get OpenSearch configuration from environment variables
+        opensearch_host = os.getenv('OPENSEARCH_HOST', '')
+        opensearch_region = os.getenv('OPENSEARCH_REGION', 'us-east-1')
+        
+        if not opensearch_host:
+            raise Exception("OPENSEARCH_HOST environment variable is not set")
+        
+        # Extract hostname from URL (remove https:// prefix if present)
+        if opensearch_host.startswith('https://'):
+            HOST = opensearch_host.replace('https://', '')
+        elif opensearch_host.startswith('http://'):
+            HOST = opensearch_host.replace('http://', '')
+        else:
+            HOST = opensearch_host
+        
+        # Remove trailing slash if present
+        HOST = HOST.rstrip('/')
+        
+        print(f"🔍 OpenSearch Configuration:")
+        print(f"   - Host: {HOST}")
+        print(f"   - Region: {opensearch_region}")
         
         # Use IAM role authentication for Lambda
         import boto3
         
-        # Get credentials from the current session (which already has session credentials)
+        # CRITICAL FIX: Refresh credentials to avoid 403 Forbidden errors
+        # Get fresh credentials from the current session
         session = boto3.Session()
         credentials = session.get_credentials()
         
         if credentials is None:
             raise Exception("No AWS credentials found. Please ensure Lambda has proper IAM role attached.")
         
-        # Use the existing session credentials
+        # IMPORTANT: Refresh credentials to get the latest token
+        # This prevents 403 errors when credentials become stale
+        frozen_credentials = credentials.get_frozen_credentials()
+        
+        # Use the refreshed session credentials
         auth = AWS4Auth(
-            credentials.access_key,
-            credentials.secret_key,
-            region,
+            frozen_credentials.access_key,
+            frozen_credentials.secret_key,
+            opensearch_region,
             'aoss',
-            session_token=credentials.token
+            session_token=frozen_credentials.token
         )
 
         client = OpenSearch(
@@ -5584,6 +5608,10 @@ def lambda_handler(event, context):
     def search_products_text_opensearch(search_query, limit=5):
         """Search products using text query in OpenSearch"""
         try:
+            # Get OpenSearch index from environment variable
+            opensearch_index = os.getenv('OPENSEARCH_INDEX', 'visualproductsearchmod')
+            print(f"🔍 Using OpenSearch index: {opensearch_index}")
+            
             client = create_opensearch_client()
             
             # Create text embedding
@@ -5609,8 +5637,8 @@ def lambda_handler(event, context):
                 "_source": ["product_description", "s3_uri", "type"]
             }
             
-            print("Searching OpenSearch for text query...")
-            response = client.search(index="visualproductsearchmod", body=body)
+            print(f"Searching OpenSearch index '{opensearch_index}' for text query...")
+            response = client.search(index=opensearch_index, body=body)
             
             results = []
             for hit in response['hits']['hits']:
@@ -5642,6 +5670,10 @@ def lambda_handler(event, context):
         - Enhanced logging for debugging and monitoring
         """
         try:
+            # Get OpenSearch index from environment variable
+            opensearch_index = os.getenv('OPENSEARCH_INDEX', 'visualproductsearchmod')
+            print(f"🔍 Using OpenSearch index: {opensearch_index}")
+            
             client = create_opensearch_client()
             
             # Create image embedding
@@ -5678,8 +5710,8 @@ def lambda_handler(event, context):
                 "_source": ["product_description", "s3_uri", "type"]
             }
             
-            print("Searching OpenSearch for image query...")
-            response = client.search(index="visualproductsearchmod", body=body)
+            print(f"Searching OpenSearch index '{opensearch_index}' for image query...")
+            response = client.search(index=opensearch_index, body=body)
             
             results = []
             for hit in response['hits']['hits']:
@@ -5782,7 +5814,7 @@ def lambda_handler(event, context):
             print(f"Error during image search: {e}")
             return []
 
-    def validate_search_results_with_llm(search_query, search_results):
+    def validate_search_results_with_llm(search_query, search_results, chat_model=None):
         """
         Validate search results using LLM to check if they match available product categories
         Available categories: camera, shoe, headsets
@@ -5792,6 +5824,18 @@ def lambda_handler(event, context):
         print(f"🔍 DEBUG: search_query = {search_query}")
         print(f"🔍 DEBUG: search_results type = {type(search_results)}")
         print(f"🔍 DEBUG: search_results = {search_results}")
+        
+        # Determine model based on chat_model parameter or default to chat_tool_model
+        selected_model = chat_model if chat_model else chat_tool_model
+        print(f"Using model: {selected_model}")
+        
+        # Check if Nova model should be used (same logic as other functions)
+        is_nova_model = (
+            selected_model == 'nova' or  # Exact match
+            selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+            selected_model.startswith('nova-') or  # Nova variant pattern
+            ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
+        )
         
         try:
             print(f"🔍 DEBUG: Entering try block")
@@ -5898,35 +5942,57 @@ def lambda_handler(event, context):
             
             print(f"🔍 DEBUG: About to invoke LLM model")
             
-            # Invoke LLM for validation
-            response = bedrock_client.invoke_model(
-                contentType='application/json',
-                body=json.dumps({
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 1000,
-                    "messages": [
+            # Invoke LLM for validation based on model type
+            if is_nova_model:
+                print(f"Using Nova model: {selected_model}")
+                # Get Nova model name
+                nova_model_name = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else "us.amazon.nova-pro-v1:0"
+                
+                # Use Nova Converse API
+                response = bedrock_client.converse(
+                    modelId=nova_model_name,
+                    messages=[
                         {
                             "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt}
-                            ]
+                            "content": [{"text": prompt}]
                         }
                     ],
-                }),
-                modelId="anthropic.claude-3-sonnet-20240229-v1:0"
-            )
+                    inferenceConfig={
+                        "temperature": 0.1,
+                        "topP": 0.9,
+                        "maxTokens": 1000
+                    }
+                )
+                
+                # Extract response from Nova format
+                llm_response = response.get('output', {}).get('message', {}).get('content', [{}])[0].get('text', '')
+            else:
+                print(f"Using Claude model: {selected_model}")
+                # Use Claude API
+                response = bedrock_client.invoke_model(
+                    contentType='application/json',
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 1000,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": prompt}
+                                ]
+                            }
+                        ],
+                    }),
+                    modelId="anthropic.claude-3-sonnet-20240229-v1:0"
+                )
+                
+                # Parse Claude response
+                inference_result = response['body'].read().decode('utf-8')
+                final = json.loads(inference_result)
+                llm_response = final['content'][0]['text']
             
             print(f"🔍 DEBUG: LLM model invoked successfully")
-            
-            # Parse LLM response
-            print(f"🔍 DEBUG: About to parse LLM response")
-            inference_result = response['body'].read().decode('utf-8')
-            print(f"🔍 DEBUG: inference_result = {inference_result}")
-            final = json.loads(inference_result)
-            print(f"🔍 DEBUG: final parsed successfully")
-            llm_response = final['content'][0]['text']
             print(f"🔍 DEBUG: llm_response extracted = {llm_response}")
-            
             print(f"🔍 LLM Validation Response: {llm_response}")
             
             # Parse JSON response from LLM
@@ -6048,15 +6114,25 @@ def lambda_handler(event, context):
                         # Download image from S3
                         import boto3
                         import base64
+                        from botocore.exceptions import ClientError
                         s3_client = boto3.client('s3',
                                                  region_name=region_used)
                         
-                        # Extract bucket and key from S3 URI
+                        # Extract key from S3 URI and use current bucket from environment
                         if image_s3_uri.startswith('s3://'):
                             # Remove 's3://' and split by '/'
                             path_parts = image_s3_uri[5:].split('/', 1)
                             if len(path_parts) == 2:
-                                bucket_name = path_parts[0]
+                                # Use current S3 bucket from environment instead of old bucket from URI
+                                if not S3_BUCKET:
+                                    return {
+                                        'statusCode': 400,
+                                        'body': json.dumps({
+                                            'error': 'S3_BUCKET environment variable is not set'
+                                        })
+                                    }
+                                bucket_name = S3_BUCKET
+                                # Extract the key part (everything after the first '/')
                                 image_key = path_parts[1]
                             else:
                                 return {
@@ -6074,20 +6150,56 @@ def lambda_handler(event, context):
                             }
                         
                         print(f"Downloading from bucket: {bucket_name}, key: {image_key}")
+                        print(f"S3 Region: {region_used}")
                         
                         # Download image data from S3 (same as search_products.py)
-                        image_data = s3_client.get_object(Bucket=bucket_name, Key=image_key)['Body'].read()
-                        image_base64 = base64.b64encode(image_data).decode('utf-8')
-                        
-                        print(f"Downloaded image size: {len(image_data)} bytes")
-                        print(f"Image base64 length: {len(image_base64)} characters")
+                        try:
+                            image_data = s3_client.get_object(Bucket=bucket_name, Key=image_key)['Body'].read()
+                            image_base64 = base64.b64encode(image_data).decode('utf-8')
+                            
+                            print(f"Downloaded image size: {len(image_data)} bytes")
+                            print(f"Image base64 length: {len(image_base64)} characters")
+                        except ClientError as e:
+                            error_code = e.response['Error']['Code']
+                            if error_code == 'AccessDenied':
+                                print(f"❌ Access denied to S3 bucket: {e}")
+                                print(f"Bucket: {bucket_name}, Key: {image_key}")
+                                return {
+                                    'statusCode': 403,
+                                    'body': json.dumps({
+                                        'error': f'Access denied to S3 bucket. Please check IAM permissions for bucket: {bucket_name}. The Lambda execution role needs s3:GetObject permission.',
+                                        'bucket': bucket_name,
+                                        'key': image_key
+                                    })
+                                }
+                            elif error_code == 'NoSuchKey':
+                                print(f"❌ Image not found in S3: {e}")
+                                return {
+                                    'statusCode': 404,
+                                    'body': json.dumps({
+                                        'error': f'Image not found in S3 bucket. Bucket: {bucket_name}, Key: {image_key}'
+                                    })
+                                }
+                            else:
+                                print(f"❌ S3 ClientError: {e}")
+                                return {
+                                    'statusCode': 400,
+                                    'body': json.dumps({
+                                        'error': f'S3 error ({error_code}): {str(e)}',
+                                        'bucket': bucket_name,
+                                        'key': image_key
+                                    })
+                                }
                         
                     except Exception as e:
                         print(f"❌ Error downloading image from S3: {e}")
+                        import traceback
+                        print(f"Full traceback: {traceback.format_exc()}")
                         return {
                             'statusCode': 400,
                             'body': json.dumps({
-                                'error': f'Error downloading image from S3: {str(e)}'
+                                'error': f'Error downloading image from S3: {str(e)}',
+                                'details': 'Please check S3 URI format and IAM permissions'
                             })
                         }
                     
@@ -8443,7 +8555,7 @@ User prompt: "{direct_text}"
             from botocore.exceptions import ClientError
             
             # AWS Configuration
-            AWS_REGION = "us-east-1"
+            AWS_REGION = region_used
             
             # Model Configuration
             NOVA_MODEL_ID = "amazon.nova-canvas-v1:0"
@@ -8463,11 +8575,23 @@ User prompt: "{direct_text}"
                 try:
                     import boto3
                     
-                    # Parse S3 URI
+                    # Get bucket name from environment variable
+                    bucket_name = S3_BUCKET
+                    if not bucket_name:
+                        raise ValueError("S3_BUCKET environment variable is not set")
+                    
+                    # Extract image name from the original S3 URI
+                    # Example: "s3://genaifoundryc-y2t1oh/virtualtryon/person4.jpg" -> "person4.jpg"
                     if s3_uri.startswith('s3://'):
                         s3_uri = s3_uri[5:]  # Remove 's3://' prefix
                     
-                    bucket_name, key = s3_uri.split('/', 1)
+                    # Split and get the image name (last part after the last '/')
+                    image_name = s3_uri.split('/')[-1]
+                    
+                    # Construct new S3 key with virtualtryon prefix
+                    s3_key = f"virtualtryon/{image_name}"
+                    
+                    print(f"Downloading image from bucket: {bucket_name}, key: {s3_key}")
                     
                     # Create S3 client
                     s3_client = boto3.client(
@@ -8476,7 +8600,7 @@ User prompt: "{direct_text}"
                     )
                     
                     # Download image from S3
-                    response = s3_client.get_object(Bucket=bucket_name, Key=key)
+                    response = s3_client.get_object(Bucket=bucket_name, Key=s3_key)
                     image_bytes = response['Body'].read()
                     
                     # Convert to base64
@@ -9833,13 +9957,21 @@ def generate_video_from_image(event):
         prompt = event["prompt"]
         session_id = event["session_id"]
 
-        region = "us-east-1"
-        s3_region = "us-west-2"
+        region = region_used
+        s3_region = region_used
         model_id = "amazon.nova-reel-v1:1"
-        bucket = "genaifoundryc-y2t1oh"
+        bucket = S3_BUCKET
+        if not bucket:
+            return {
+                "status": "error",
+                "message": "S3_BUCKET environment variable is not set"
+            }
         prefix = f"videos/{session_id}"
         s3_uri = f"s3://{bucket}/{prefix}/"
         s3_key = f"{prefix}/output.mp4"
+
+        print(f"Generating video for session {session_id}")
+        print(bucket, prefix, s3_uri, s3_key)
 
         # Construct model input
         model_input = {
@@ -9938,9 +10070,14 @@ def generate_video_from_text(event):
         prompt = event["prompt"]
         session_id = event["session_id"]
 
-        region = "us-east-1"
+        region = region_used
         model_id = "amazon.nova-reel-v1:1"
-        bucket = "genaifoundryc-y2t1oh"
+        bucket = S3_BUCKET
+        if not bucket:
+            return {
+                "status": "error",
+                "message": "S3_BUCKET environment variable is not set"
+            }
         prefix = f"videos/{session_id}"
         s3_uri = f"s3://{bucket}/{prefix}/"
         s3_key = f"{prefix}/output.mp4"
