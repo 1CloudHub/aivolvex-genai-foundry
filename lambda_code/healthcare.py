@@ -692,50 +692,71 @@ The provided document seems like to be set of three documents and there are disc
 """
 
        
+        # Select model (Nova vs Claude) and call appropriate Bedrock API
+        selected_model = chat_tool_model
+        is_nova_model = (
+            selected_model == 'nova' or
+            selected_model.startswith('us.amazon.nova') or
+            selected_model.startswith('nova-') or
+            ('.nova' in selected_model and 'claude' not in selected_model)
+        )
+
+        import boto3
+        bedrock_client = boto3.client("bedrock-runtime", region_name=region_used)
 
         try:
-
-            # Prepare the request body for Bedrock
-
-            body = json.dumps({
-
-                "anthropic_version": "bedrock-2023-05-31",
-
-                "max_tokens": 4000,
-
-                "messages": [
-
-                    {
-
-                        "role": "user",
-
-                        "content": prompt_template
-
+            if is_nova_model:
+                print(f"🤖 Using Nova model for KYC extraction: {selected_model}")
+                
+              
+                
+                # Use Nova Converse API
+                response = bedrock_client.converse(
+                    modelId=chat_tool_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [{"text": prompt_template}]
+                        }
+                    ],
+                    inferenceConfig={
+                        "maxTokens": 4000,
+                        "temperature": 0.1
                     }
+                )
 
-                ]
+                # Extract Nova reply text
+                try:
+                    extracted_data = response.get("output", {}).get("message", {}).get("content", [])[0].get("text", "")
+                except Exception as e:
+                    print(f"Error extracting Nova response: {e}")
+                    import traceback
+                    print(f"Full traceback: {traceback.format_exc()}")
+                    extracted_data = ""
+            else:
+                print(f"🤖 Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                
+                # Prepare the request body for Bedrock (Claude)
+                body = json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4000,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt_template
+                        }
+                    ]
+                })
 
-            })
+                # Call Bedrock using Claude invoke_model API
+                response = bedrock_client.invoke_model(
+                    contentType='application/json',
+                    body=body,
+                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                )
 
-           
-
-            # Call Bedrock using the same pattern as other functions
-
-            response = bedrock_client.invoke_model(
-
-                contentType='application/json',
-
-                body=body,
-
-                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-
-            )
-
-           
-
-            response_body = json.loads(response['body'].read())
-
-            extracted_data = response_body.get('content', [{}])[0].get('text', '')
+                response_body = json.loads(response['body'].read())
+                extracted_data = response_body.get('content', [{}])[0].get('text', '')
 
            
 
@@ -2053,34 +2074,78 @@ Your final research response:
 def call_bedrock_llm_with_prompt(user_input: str, system_prompt: str) -> str:
     """
     Call Bedrock LLM with a custom system prompt
+    Supports both Nova (via Converse API) and Claude (via invoke_model API)
     """
     try:
-        # Prepare the messages for the LLM
-        messages = [
-            {
-                "role": "user",
-                "content": user_input
-            }
-        ]
+        # Get model from environment variable
+        selected_model = chat_tool_model
         
-        # Create the request body
-        request_body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4000,
-            "system": system_prompt,
-            "messages": messages
-        }
-        
-        # Call Bedrock
-        response = bedrock_runtime.invoke_model(
-            modelId="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-            body=json.dumps(request_body),
-            contentType="application/json"
+        # Check if Nova model should be used
+        is_nova_model = (
+            selected_model == 'nova' or
+            selected_model.startswith('us.amazon.nova') or
+            selected_model.startswith('nova-') or
+            ('.nova' in selected_model and 'claude' not in selected_model)
         )
         
-        # Parse response
-        response_body = json.loads(response['body'].read())
-        return response_body['content'][0]['text']
+        if is_nova_model:
+            # Use Nova Converse API
+            print(f"🤖 Using Nova model with system prompt: {selected_model}")
+            
+            # Get actual Nova model ID if using shorthand
+            nova_model_id = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else "us.amazon.nova-pro-v1:0"
+            
+            response = bedrock_runtime.converse(
+                modelId=nova_model_id,
+                system=[{"text": system_prompt}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"text": user_input}]
+                    }
+                ],
+                inferenceConfig={
+                    "maxTokens": 4000,
+                    "temperature": 0.1
+                }
+            )
+            
+            # Extract Nova response
+            try:
+                return response.get('output', {}).get('message', {}).get('content', [{}])[0].get('text', '')
+            except Exception as e:
+                logger.error(f"Error extracting Nova response: {e}")
+                return f"Error extracting Nova response: {str(e)}"
+        else:
+            # Use Claude invoke_model API (existing implementation)
+            print(f"🤖 Using Claude model with system prompt: us.anthropic.claude-3-5-sonnet-20241022-v2:0")
+            
+            # Prepare the messages for the LLM
+            messages = [
+                {
+                    "role": "user",
+                    "content": user_input
+                }
+            ]
+            
+            # Create the request body
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4000,
+                "system": system_prompt,
+                "messages": messages
+            }
+            
+            # Call Bedrock
+            response = bedrock_runtime.invoke_model(
+                modelId="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+                body=json.dumps(request_body),
+                contentType="application/json"
+            )
+            
+            # Parse response
+            response_body = json.loads(response['body'].read())
+            return response_body['content'][0]['text']
         
     except Exception as e:
         logger.error(f"Error calling Bedrock LLM: {e}")
@@ -2158,29 +2223,72 @@ def generate_research_report(query: str, synthesis: Dict, research_results: List
 def call_bedrock_llm(prompt: str, model_id: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0") -> str:
     """
     Call AWS Bedrock LLM for analysis and synthesis
+    Supports both Nova (via Converse API) and Claude (via invoke_model API)
     """
     try:
-        # Prepare the request body for Anthropic Claude
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4000,
-            "temperature": 0.1,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        }
+        # Get model from environment variable (can override with model_id parameter)
+        selected_model = chat_tool_model 
         
-        response = bedrock_runtime.invoke_model(
-            modelId=model_id,
-            body=json.dumps(body),
-            contentType="application/json"
+        # Check if Nova model should be used
+        is_nova_model = (
+            selected_model == 'nova' or
+            selected_model.startswith('us.amazon.nova') or
+            selected_model.startswith('nova-') or
+            ('.nova' in selected_model and 'claude' not in selected_model)
         )
         
-        response_body = json.loads(response['body'].read())
-        return response_body['content'][0]['text']
+        if is_nova_model:
+            # Use Nova Converse API
+            print(f"🤖 Using Nova model for LLM call: {selected_model}")
+            
+            # Get actual Nova model ID if using shorthand
+            nova_model_id = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else "us.amazon.nova-pro-v1:0"
+            
+            response = bedrock_runtime.converse(
+                modelId=nova_model_id,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"text": prompt}]
+                    }
+                ],
+                inferenceConfig={
+                    "maxTokens": 4000,
+                    "temperature": 0.1
+                }
+            )
+            
+            # Extract Nova response
+            try:
+                return response.get('output', {}).get('message', {}).get('content', [{}])[0].get('text', '')
+            except Exception as e:
+                logger.error(f"Error extracting Nova response: {e}")
+                return f"Error extracting Nova response: {str(e)}"
+        else:
+            # Use Claude invoke_model API (existing implementation)
+            print(f"🤖 Using Claude model for LLM call: {model_id}")
+            
+            # Prepare the request body for Anthropic Claude
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4000,
+                "temperature": 0.1,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            }
+            
+            response = bedrock_runtime.invoke_model(
+                modelId=model_id,
+                body=json.dumps(body),
+                contentType="application/json"
+            )
+            
+            response_body = json.loads(response['body'].read())
+            return response_body['content'][0]['text']
         
     except Exception as e:
         logger.error(f"Error calling Bedrock LLM: {e}")
