@@ -3438,33 +3438,33 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
                 
                 Provide a brief, conversational response that directly answers their question.
                 '''
-			chat_model = event.get('chat_model', chat_tool_model)
-            print("chat_model",chat_model)
-            payload = json.dumps({
-            "kb_id": kb_id,
-            "session_id": event['session_id'],
-            "audio": event['audio'],
-            "connection_id":event['connectionId'],
-            "connection_url":event['connection_url'],
-            "box_type": event['box_type'],
-            "prompt_template":prompt_template,
-			"chat_model": chat_model,
-            "bucket_name":voiceops_bucket_name,  # Use the new voice operations bucket
-            "region_name":region_name,
-            "db_cred":{
-            "db_user": db_user,
-            "db_host":db_host,
-            "db_port":db_port,
-            "db_database":db_database,
-            "db_password":db_password}
-            })
-            headers = {
-            'Content-Type': 'application/json'
-            }
-            print(payload)
-            response = requests.request("POST", url, headers=headers, data=payload)
-
-            return response.text
+				chat_model = event.get('chat_model', chat_tool_model)
+	            print("chat_model",chat_model)
+	            payload = json.dumps({
+	            "kb_id": kb_id,
+	            "session_id": event['session_id'],
+	            "audio": event['audio'],
+	            "connection_id":event['connectionId'],
+	            "connection_url":event['connection_url'],
+	            "box_type": event['box_type'],
+	            "prompt_template":prompt_template,
+				"chat_model": chat_model,
+	            "bucket_name":voiceops_bucket_name,  # Use the new voice operations bucket
+	            "region_name":region_name,
+	            "db_cred":{
+	            "db_user": db_user,
+	            "db_host":db_host,
+	            "db_port":db_port,
+	            "db_database":db_database,
+	            "db_password":db_password}
+	            })
+	            headers = {
+	            'Content-Type': 'application/json'
+	            }
+	            print(payload)
+	            response = requests.request("POST", url, headers=headers, data=payload)
+	
+	            return response.text
 
         except Exception as e:
             return {
