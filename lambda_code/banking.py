@@ -26,7 +26,8 @@ db_port = os.environ['db_port']
 db_database = os.environ['db_database']
 region_used = os.environ["region_used"]
 bank_kb_id = os.environ['bank_kb_id']
-
+KB_ID = os.environ['KB_ID']
+chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
 # Get new environment variables for voice operations
 region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
 voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
@@ -50,6 +51,7 @@ db_password = get_db_password()
 schema = os.environ['schema']
 chat_history = os.environ['chat_history']
 banking_chat_history = os.environ['banking_chat_history']
+banking_chat_history_table=os.environ['banking_chat_history_table']
 prompt_metadata_table = os.environ['prompt_metadata_table']
 model_id = os.environ['model_id']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
@@ -468,29 +470,88 @@ Return response in this exact JSON structure:
 Important: Return only the JSON response, no additional text, no markdown formatting, no code blocks, no explanations.
 '''
 
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 2048,
-        "messages": [{"role": "user", "content": prompt}]
-    })
+    # body = json.dumps({
+    #     "anthropic_version": "bedrock-2023-05-31",
+    #     "max_tokens": 2048,
+    #     "messages": [{"role": "user", "content": prompt}]
+    # })
     
-    response = bedrock.invoke_model(
-        modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        body=body,
+    # response = bedrock.invoke_model(
+    #     modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    #     body=body,
+    # )
+    
+    # final_text = str(json.loads(response.get("body").read())["content"][0]["text"])
+    # print("LLM OUTPUT:", final_text)  # Debug print
+
+    # # Try to extract JSON substring if extra text is present
+    # import re
+    # match = re.search(r'({.*})', final_text, re.DOTALL)
+    # if match:
+    #     json_str = match.group(1)
+    # else:
+    #     json_str = final_text  # fallback
+
+    # return json.loads(json_str)
+
+    selected_model = chat_tool_model
+    # selected_model = claude_model_name
+    is_nova_model = (
+        selected_model == 'nova' or
+        selected_model.startswith('us.amazon.nova') or
+        selected_model.startswith('nova-') or
+        ('.nova' in selected_model and 'claude' not in selected_model)
     )
-    
-    final_text = str(json.loads(response.get("body").read())["content"][0]["text"])
-    print("LLM OUTPUT:", final_text)  # Debug print
 
-    # Try to extract JSON substring if extra text is present
-    import re
-    match = re.search(r'({.*})', final_text, re.DOTALL)
-    if match:
-        json_str = match.group(1)
+    if is_nova_model:
+        print(f"Using Nova model for summary generation: {selected_model}")
+
+        response = bedrock_client.converse(
+            modelId=selected_model,
+            system=[{"text": prompt}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"text": "Follow the system instructions."}]
+                }
+            ],
+            inferenceConfig={"maxTokens": 4000, "temperature": 0.7}
+        )
+
+        try:
+            assistant_msg = response["output"]["message"]["content"][0]["text"]
+        except Exception as e:
+            print("Error extracting Nova output:", e)
+            raise
+
+        print("NOVA OUTPUT:", assistant_msg)
+
+        match = re.search(r'({.*})', assistant_msg, re.DOTALL)
+        json_str = match.group(1) if match else assistant_msg
+
+        return json.loads(json_str)
+
     else:
-        json_str = final_text  # fallback
+        print(f"Using Claude model for summary generation: {selected_model}")
 
-    return json.loads(json_str)
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": prompt}]
+        })
+
+        response = bedrock_client.invoke_model(
+            modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            body=body,
+        )
+
+        final_text = json.loads(response.get("body").read())["content"][0]["text"]
+        print("LLM OUTPUT:", final_text)
+
+        match = re.search(r'({.*})', final_text, re.DOTALL)
+        json_str = match.group(1) if match else final_text
+
+        return json.loads(json_str)
 # banking function code ends here .....
 
 
@@ -1232,302 +1293,1136 @@ You have access to comprehensive information about AnyBank SG products including
         }
 
 
-def kyc_extraction_api(event):
-
+def nova_banking_agent_invoke_tool(chat_history, session_id, chat, connectionId):
     """
-
-    KYC Data Extraction API for extracting information from images/documents
-
+    Nova model banking agent invoke tool function using AWS Bedrock Converse API.
+    Uses the same tools and logic as banking_agent_invoke_tool but adapted for Nova Converse API.
     """
-
     try:
+        # Start keepalive thread
+        #keepalive_thread = send_keepalive(connectionId, 30)
+        import uuid
+        import random
+        import re
+        
+        # Fetch base_prompt from the database (same as banking_agent_invoke_tool)
+        select_query = f'''select base_prompt from {schema}.{prompt_metadata_table} where id =3;'''
+        print(select_query)
+        base_prompt = f'''
+        You are a Virtual Banking Assistant for AnyBank SG, a helpful and accurate chatbot for banking customers. You help customers with their banking accounts, transactions, products, and related services.
 
-        # Extract the single variable (document data only)
+## CRITICAL INSTRUCTIONS:
+- **NEVER** reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
+- **NEVER** say "To answer your question about [topic], let me check our knowledge base" or similar phrases.
+- After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
+- If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
+- For general banking questions, IMMEDIATELY use the banking_faq_tool_schema tool WITHOUT any preliminary message.
 
-        document_data = event.get('document_data', '')
+## MANDATORY PRE-TOOL CONFIRMATION (ENFORCE BEFORE ANY ACCOUNT ACCESS):
+- Before returning any account-specific information or invoking any account-related tool (for example: get_account_summary or file_service_request), you MUST ask one concise, explicit confirmation question to the user requesting permission to use any detected or stored credentials and asking which account(s) or summary to retrieve.
+- You MUST wait for an explicit affirmative confirmation from the user (a clear "yes" or an explicit instruction to proceed with the specified Customer ID and account scope) before calling any account-related tool or disclosing any sensitive account data.
+- If the user has not provided verified credentials in this session, first request the Customer ID and PIN and obtain explicit confirmation to use them; do not assume permission from context or previously seen numbers.
+- If the user replies ambiguously or does not explicitly confirm, do NOT call account-related tools and instead clarify what is required (Customer ID, PIN, and which accounts to retrieve).
+- CRITICAL: When a user asks about account-specific information (such as "Can I see my card dues and loan details?" or "What's my account balance?" or "Show me my account summary" or "How do I file a service request?"), you MUST NOT call any account-related tool or provide any account-specific information until you have completed FULL authentication.
 
-        session_id = event.get('session_id', str(uuid.uuid4()))
+## CUSTOMER AUTHENTICATION RULES:
+- **ALWAYS** verify Customer ID and PIN before proceeding with any account-related tools
+- **NEVER** proceed with get_account_summary or file_service_request without successful authentication
+- **ONLY** use tools after confirming the Customer ID and PIN combination is valid
+- If authentication fails, provide a clear error message and ask for correct credentials
 
-       
+## VALID CUSTOMER DATA:
+Use these exact Customer ID and PIN combinations for verification:
+- CUST1001 (Rachel Tan) - PIN: 1023
+- CUST1002 (Jason Lim) - PIN: 7645
+- CUST1003 (Mary Goh) - PIN: 3391
+- CUST1004 (Daniel Ong) - PIN: 5912
+- CUST1005 (Aisha Rahman) - PIN: 8830
 
-        if not document_data:
+## SESSION AUTHENTICATION STATE MANAGEMENT:
+- **MAINTAIN SESSION STATE**: Once a Customer ID and PIN are successfully verified, store this authentication state for the ENTIRE conversation session
+- **NEVER RE-ASK**: Do not ask for Customer ID or PIN again during the same session unless:
+  1. User explicitly provides a different Customer ID
+  2. Authentication explicitly fails during a tool call
+  3. User explicitly requests to switch accounts
 
+## AUTHENTICATION PERSISTENCE RULES:
+- **FIRST AUTHENTICATION**: Ask for Customer ID and PIN only on the first account-related request
+- **SESSION MEMORY**: Remember the authenticated Customer ID throughout the conversation
+- **AUTOMATIC REUSE**: Use the stored authenticated credentials for ALL subsequent account-related tool calls
+- **NO RE-VERIFICATION**: Do not re-verify credentials that have already been successfully authenticated in the current session
+
+## PRE-AUTHENTICATION CHECK:
+Before asking for Customer ID or PIN for ANY account-related request:
+1. **Scan conversation history** for previously provided Customer ID
+2. **Check if PIN was already verified** for that Customer ID in this session
+3. **If both are found and verified**, proceed directly with stored credentials
+4. **Only ask for credentials** that are missing or failed verification
+5. If the identity of the user is not mentioned previously, EXPLICITLY ask the user to confirm which Customer ID to use and verify the PIN before proceeding. 
+
+## CUSTOMER ID AND PIN HANDLING RULES:
+- **SESSION-LEVEL STORAGE**: Once Customer ID is provided and verified, use it for ALL subsequent requests
+- **ONE-TIME PIN**: Ask for PIN only ONCE per Customer ID per session
+- **CONVERSATION CONTEXT**: Check the ENTIRE conversation history for previously provided and verified credentials
+- **SMART REUSE**: If user asks "I gave you before" or similar, acknowledge and proceed with stored credentials
+- **CONTEXT AWARENESS**: Before asking for credentials, always check if they were provided earlier in the conversation
+- When Customer ID is provided, validate it matches the pattern CUST#### (e.g., CUST1001)
+- Use the same Customer ID and PIN for all subsequent tool calls in the session until Customer ID changes
+- **ALWAYS** verify PIN matches the Customer ID before proceeding on first authentication only
+
+## AUTHENTICATION PROCESS:
+1. **Check Session State** - Scan conversation for existing authenticated credentials
+2. **Collect Customer ID** - Ask for Customer ID ONLY if not previously provided and verified
+3. **Validate Customer ID** - Check if it matches one of the valid Customer IDs above
+4. **Collect PIN** - Ask for PIN ONLY if not previously provided and verified for current Customer ID
+5. **Verify PIN** - Check if the PIN matches the Customer ID (only on first authentication)
+6. **Store Authentication State** - Remember successful authentication for entire session
+7. **Proceed with Tools** - Use stored credentials for all subsequent account-related requests
+
+## MANDATORY QUESTION COLLECTION RULES:
+- **ALWAYS** collect ALL required information for any tool before using it
+- **NEVER** skip any required questions, even if the user provides some information
+- **NEVER** assume or guess missing information
+- **NEVER** proceed with incomplete information
+- Ask questions ONE AT A TIME in this exact order:
+
+IMPORTANT: Under no circumstances should the assistant provide account numbers, balances, or any sensitive account details unless the user has explicitly provided and completed authentication (Customer ID + PIN) during this session. If authentication has not been completed, politely request the required credentials first.
+
+### For get_account_summary tool:
+1. **Check session state first** - Use stored Customer ID and PIN if already authenticated
+2. Customer ID - if not already provided and verified in conversation
+3. PIN (4-6 digit number) - only if not already provided and verified for current Customer ID
+4. **VERIFY** Customer ID and PIN combination is valid (only on first authentication)
+5. **ONLY** proceed with tool call after successful authentication
+
+### For file_service_request tool (ask in this exact order):
+1. **Check session state first** - Use stored Customer ID and PIN if already authenticated
+2. Customer ID - if not already provided and verified in conversation
+3. PIN (4-6 digit number) - only if not already provided and verified for current Customer ID
+4. **VERIFY** Customer ID and PIN combination is valid (only on first authentication)
+5. Category (Card Issue, Transaction Dispute, Account Update, etc.)
+6. Description of the issue/request
+7. Preferred contact method (Phone, Email, or WhatsApp)
+8. **ONLY** proceed with tool call after successful authentication
+
+## INPUT VALIDATION RULES:
+- **NEVER** ask for the same Customer ID twice in a session unless user provides different one
+- **NEVER** ask for PIN twice for the same Customer ID in a session
+- Accept Customer ID in format CUST#### or cust#### only
+- Accept PIN as 4 digit numeric value
+- Accept any reasonable category for service requests
+- **NEVER** ask for specific formats - accept what the user provides
+- If validation fails, provide a clear, specific error message with examples
+- **ALWAYS** verify PIN matches the Customer ID before proceeding (only on first authentication)
+
+##NATURAL DATE INTERPRETATION RULE:
+- When collecting a date or time-related input, accept natural expressions such as:
+	
+	“yesterday”, “today”, “tomorrow”, “last night”, etc.
+	
+- Convert these into actual calendar dates based on the current date.
+	
+- If a time of day is mentioned (e.g., “yesterday evening”), assign a random time in that time range:
+	
+	Morning: 8am–12pm
+	
+	Afternoon: 1pm–5pm
+	
+	Evening: 6pm–9pm
+	
+	Night: 9pm–11pm
+	
+- Examples:
+	
+	“yesterday” → 2025-07-30
+	
+	“today afternoon” → 2025-07-31, 2:34 PM (randomized)
+	
+	“tomorrow morning” → 2025-08-01, 9:12 AM (randomized)
+
+
+## AUTHENTICATION ERROR MESSAGES:
+- If Customer ID is invalid: "Invalid Customer ID. Please provide a valid Customer ID (e.g., CUST1001)."
+- If PIN is incorrect: "Incorrect PIN for Customer ID [CUST####]. Please try again."
+- If both are wrong: "Invalid Customer ID and PIN combination. Please check your credentials and try again."
+
+## Tool Usage Rules:
+- When a user asks about account balances, card dues, loan details, or account summary, use get_account_summary tool **AFTER** authentication (use stored credentials if available)
+- When a user needs help with issues, complaints, or service requests, use file_service_request tool **AFTER** authentication (use stored credentials if available)
+- For general banking questions about products, features, or procedures, use the banking_faq_tool_schema tool
+- Do NOT announce that you're using tools or searching for information
+- Simply use the tool and provide the direct answer
+
+## Response Format:
+- ALWAYS answer in the shortest, most direct way possible
+- Do NOT add extra greetings, confirmations, or explanations
+- Do NOT mention backend systems or tools
+- Speak naturally as a helpful banking representative who already knows the information
+- TOOL RESPONSE SUMMARY RULE:
+After completing any tool call (such as retrieving an account summary or filing a service request), always include a clear summary of all user-provided inputs involved in that flow, followed by the final result (e.g., account summary or service request confirmation).
+
+The summary must include:
+
+All collected fields in the order they were asked
+
+The tool output (e.g., account details or service request ID)
+
+Example (for a service request):
+
+Your service request has been filed.
+- Customer ID: CUST1001
+- Category: Card Issue
+- Description: My debit card got blocked after entering wrong PIN
+- Preferred Contact Method: Phone
+- Request ID: SRV23891
+
+Available Tools:
+1. get_account_summary - Retrieve customer's financial summary across all accounts (requires authentication)
+2. file_service_request - File customer service requests for follow-up by support team (requires authentication)
+3. banking_faq_tool_schema - Retrieve answers from the banking knowledge base
+
+## SYSTEMATIC QUESTION COLLECTION:
+- When a user wants account information or needs to file a service request, IMMEDIATELY check session state for existing authentication
+- If already authenticated in session, proceed directly with remaining required information
+- Ask ONLY ONE question at a time
+- After each user response, check what information is still missing
+- Ask for the NEXT missing required field (in the exact order listed above)
+- Do NOT ask multiple questions in one message
+- Do NOT skip any required questions
+- Do NOT proceed until ALL required information is collected
+- **ALWAYS** use stored authentication if available, verify authentication before proceeding with tools only on first authentication
+
+## EXAMPLES OF CORRECT BEHAVIOR:
+
+**First Account-Related Request:**
+User: "What's my account balance?"
+Assistant: "What is your Customer ID?"
+
+User: "CUST1001"
+Assistant: "Please enter your 4 digit PIN."
+
+User: "1023"
+Assistant: [Verify CUST1001 + 1023 is valid, store authentication state, then use get_account_summary tool and provide account summary]
+
+**Subsequent Account-Related Requests in Same Session:**
+User: "What are your loan interest rates?"
+Assistant: [Use banking_faq_tool_schema tool and provide loan information]
+
+User: "Show me my credit card details too"
+Assistant: [Use get_account_summary tool with stored Customer ID and PIN - no need to ask again]
+
+User: "I need help with a blocked card"
+Assistant: "What category best describes your issue? (e.g., Card Issue, Transaction Dispute, Account Update)"
+[Uses stored CUST1001 authentication, only asks for service request details]
+
+**Different Customer ID in Same Session:**
+User: "Can you check account for CUST1002?"
+Assistant: "Please enter your 4 digit PIN for Customer ID CUST1002."
+
+## EXAMPLES OF INCORRECT BEHAVIOR:
+- ❌ "What's your Customer ID, PIN, and issue description?" (asking multiple questions)
+- ❌ Asking for Customer ID again after it was already provided and verified in the session
+- ❌ Asking for PIN again for the same Customer ID in the same session
+- ❌ Skipping PIN verification on first authentication
+- ❌ Proceeding with incomplete information
+- ❌ Not checking conversation history for existing authentication
+- ❌ Re-asking for credentials after using FAQ tool
+
+## SECURITY GUIDELINES:
+- Require PIN verification only once per Customer ID in each session
+- Never store or reference PIN values in conversation history for security
+- If user switches to a different Customer ID, ask for the corresponding PIN
+- Treat all financial information as sensitive and confidential
+- **ALWAYS** verify Customer ID and PIN combination before first account access
+- **MAINTAIN** authentication state throughout session for user experience
+
+## PRODUCT KNOWLEDGE:
+You have access to comprehensive information about AnyBank SG products including:
+- Savings Accounts (eSaver Plus, Young Savers)
+- Current Accounts (Everyday Current, Expat Current)
+- Credit Cards (Rewards+, Cashback Max)
+- Loans (Personal Loan, HDB Home Loan)
+- Digital banking features and services
+
+## RESPONSE GUIDELINES:
+- Handle greetings warmly and ask how you can help with their banking needs today
+- For product inquiries, provide specific details from the knowledge base
+- For account-specific queries, always use appropriate tools with proper authentication
+- For service issues, efficiently collect information and file requests
+- Keep responses concise and actionable
+- Never leave users without a clear next step or resolution
+
+## WHATSAPP MESSAGE FORMATTING:
+- Write WhatsApp messages as natural, conversational text
+- Use proper paragraph spacing instead of \n characters
+- Avoid any escape sequences or formatting codes
+- Keep messages clean and readable without technical formatting
+- Use natural line breaks and spacing for readability
+- **NEVER** include literal \n characters in WhatsApp messages
+- Use actual line breaks and proper spacing for message formatting
+- Ensure WhatsApp messages are formatted naturally without escape sequences
+- **CRITICAL**: When generating WhatsApp messages, use actual line breaks and spacing, NOT escape sequences
+- Format messages with natural paragraph breaks and proper spacing
+- Write messages exactly as they should appear to the user, without any technical formatting codes
+'''
+        print(base_prompt)
+        print('base_prompt is fetched from db')
+        
+        # Banking tool schema - converted to Nova's toolSpec format
+        banking_tools_nova = [
+            {
+                "toolSpec": {
+                    "name": "get_account_summary",
+                    "description": "Retrieve customer's financial summary across savings, current, credit card, and loan accounts",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "customer_id": {"type": "string", "description": "Unique customer identifier (e.g., CUST1001)"},
+                                "pin": {"type": "string", "description": "4-6 digit numeric PIN for authentication"}
+                            },
+                            "required": ["customer_id", "pin"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "file_service_request",
+                    "description": "File a customer service request for follow-up by AnyBank SG's support team",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "customer_id": {"type": "string", "description": "Unique customer identifier (e.g., CUST1001)"},
+                                "pin": {"type": "string", "description": "4-digit PIN for authentication"},
+                                "category": {"type": "string", "description": "Type of request (e.g., Card Issue, Transaction Dispute, Account Update)"},
+                                "description": {"type": "string", "description": "User-provided description of the issue/request"},
+                                "preferred_contact_method": {"type": "string", "description": "User's preferred way of follow-up: Phone, Email, or WhatsApp"}
+                            },
+                            "required": ["customer_id", "pin", "category", "description", "preferred_contact_method"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "banking_faq_tool_schema",
+                    "description": "Retrieve answers from the banking knowledge base for general banking questions, policies, and procedures",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "knowledge_base_retrieval_question": {"type": "string", "description": "A question to retrieve from the banking knowledge base about banking services, policies, procedures, or general information."}
+                            },
+                            "required": ["knowledge_base_retrieval_question"]
+                        }
+                    }
+                }
+            }
+        ]
+        
+        # --- Customer Authentication Data ---
+        valid_customers = {
+            "CUST1001": {"name": "Rachel Tan", "pin": "1023"},
+            "CUST1002": {"name": "Jason Lim", "pin": "7645"},
+            "CUST1003": {"name": "Mary Goh", "pin": "3391"},
+            "CUST1004": {"name": "Daniel Ong", "pin": "5912"},
+            "CUST1005": {"name": "Aisha Rahman", "pin": "8830"}
+        }
+
+        def authenticate_customer(customer_id, pin):
+            """Authenticate customer ID and PIN combination"""
+            if customer_id not in valid_customers:
+                return False, "Invalid Customer ID. Please provide a valid Customer ID (e.g., CUST1001)."
+            
+            if valid_customers[customer_id]["pin"] != pin:
+                return False, f"Incorrect PIN for Customer ID {customer_id}. Please try again."
+            
+            return True, f"Authentication successful for {valid_customers[customer_id]['name']}"
+
+
+        # --- Mock banking tool implementations ---
+        def get_account_summary(customer_id, pin):
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(customer_id, pin)
+            if not auth_success:
+                return {"error": auth_message}
+            mock_accounts = {
+                "CUST1001": [
+                    {
+                        "account_type": "savings",
+                        "account_name": "eSaver Plus",
+                        "account_number": "XXXXXX4321",
+                        "balance": 10452.75,
+                        "currency": "SGD",
+                        "status": "Active"
+                    },
+                    {
+                        "account_type": "credit_card",
+                        "account_name": "Rewards+ Card",
+                        "account_number": "XXXXXX9876",
+                        "outstanding_balance": 1880.10,
+                        "credit_limit": 12000.00,
+                        "payment_due_date": get_dynamic_date(3),
+                        "currency": "SGD",
+                        "status": "Active"
+                    },
+                    {
+                        "account_type": "loan",
+                        "account_name": "Personal Loan",
+                        "account_number": "LN-984521",
+                        "outstanding_balance": 14600.00,
+                        "monthly_installment": 630.50,
+                        "tenure_remaining_months": 28,
+                        "interest_rate": "7.2% EIR",
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ],
+                "CUST1002": [
+                    {
+                        "account_type": "savings",
+                        "account_name": "Young Savers",
+                        "account_number": "XXXXXX3344",
+                        "balance": 1850.40,
+                        "currency": "SGD",
+                        "status": "Active"
+                    },
+                    {
+                        "account_type": "credit_card",
+                        "account_name": "Cashback Max Card",
+                        "account_number": "XXXXXX6543",
+                        "outstanding_balance": 390.20,
+                        "credit_limit": 6000.00,
+                        "payment_due_date": get_dynamic_date(3),
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ],
+                "CUST1003": [
+                    {
+                        "account_type": "current",
+                        "account_name": "Everyday Current Account",
+                        "account_number": "XXXXXX2233",
+                        "balance": 4250.00,
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ],
+                "CUST1004": [
+                    {
+                        "account_type": "loan",
+                        "account_name": "HDB Home Loan",
+                        "account_number": "LN-225577",
+                        "outstanding_balance": 285000.00,
+                        "monthly_installment": 1450.00,
+                        "tenure_remaining_months": 180,
+                        "interest_rate": "2.50% (Fixed)",
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ],
+                "CUST1005": [
+                    {
+                        "account_type": "credit_card",
+                        "account_name": "Rewards+ Card",
+                        "account_number": "XXXXXX7890",
+                        "outstanding_balance": 0.00,
+                        "credit_limit": 10000.00,
+                        "payment_due_date": get_dynamic_date(3),
+                        "currency": "SGD",
+                        "status": "Active"
+                    }
+                ]
+            }
+            return mock_accounts.get(customer_id, [])
+
+        def file_service_request(customer_id, pin, category, description, preferred_contact_method):
+        
+            # Authenticate customer first
+            auth_success, auth_message = authenticate_customer(customer_id, pin)
+            if not auth_success:
+                return {"error": auth_message}
+            ticket_id = f"SRQ-{str(uuid.uuid4())[:6].upper()}"
             return {
-
-                "statusCode": 400,
-
-                "error": "document_data is required",
-
-                "session_id": session_id
-
+                "ticket_id": ticket_id,
+                "status": "Received",
+                "assigned_team": "Customer Support – Cards",
+                "expected_callback": get_dynamic_datetime(2),
+                "summary": f"{category} issue filed for review"
             }
 
-       
+        def get_banking_faq_chunks(query, model_type='nova'):
+            try:
+                print("IN BANKING FAQ: ", query)
+                chunks = []
+                # Use the banking knowledge base ID from environment
+                banking_kb_id = os.environ['bank_kb_id']
+                
+                # Use text-based retrieval (same as get_FAQ_chunks_tool)
+                # The knowledge base handles embeddings internally if configured
+                response_chunks = retrieve_client.retrieve(
+                    retrievalQuery={                                                                                
+                        'text': query
+                    },
+                    knowledgeBaseId=banking_kb_id,
+                    retrievalConfiguration={
+                        'vectorSearchConfiguration': {                          
+                            'numberOfResults': 10,                                                                                              
+                            'overrideSearchType': 'HYBRID'
+                        }
+                    }
+                )
+               
+                for item in response_chunks['retrievalResults']:
+                    if 'content' in item and 'text' in item['content']:
+                        chunks.append(item['content']['text'])
+                print('BANKING FAQ CHUNKS: ', chunks)  
+                return chunks
+            except Exception as e:
+                print("An exception occurred while retrieving banking FAQ chunks:", e)
+                return []
 
+        input_tokens = 0
+        output_tokens = 0
+        print("In nova_banking_agent_invoke_tool (Banking Bot - Nova)")
+
+        
+        # Extract customer ID and PIN from chat history
+        extracted_customer_id = None
+        extracted_pin = None
+        
+        for message in chat_history:
+            if message['role'] == 'user':
+                content_text = message['content'][0]['text']
+                
+                # Extract customer ID (CUST followed by 4 digits)
+                customer_id_match = re.search(r'\b(CUST\d{4})\b', content_text.upper())
+                if customer_id_match:
+                    extracted_customer_id = customer_id_match.group(1)
+                    print(f"Extracted Customer ID from chat history: {extracted_customer_id}")
+                
+                # Extract PIN (4-6 digit number) - look for patterns like "PIN 1234" or just "1234"
+                pin_match = re.search(r'\b(\d{4,6})\b', content_text)
+                if pin_match:
+                    # Additional check to make sure it's likely a PIN (not part of other numbers)
+                    potential_pin = pin_match.group(1)
+                    # If it's 4-6 digits and not part of a larger number, consider it a PIN
+                    if len(potential_pin) >= 4 and len(potential_pin) <= 6:
+                        extracted_pin = potential_pin
+                        print(f"Extracted PIN from chat history: {extracted_pin}")
+                
+                # If we found both, we can break
+                if extracted_customer_id and extracted_pin:
+                    break
+        
+        # Enhance system prompt with customer ID and PIN context (same as banking_agent_invoke_tool)
+        if extracted_customer_id and extracted_pin:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's ID is {extracted_customer_id} and PIN is {extracted_pin}. Use these credentials automatically for any tool calls that require them without asking again."
+            print(f"Enhanced prompt with Customer ID: {extracted_customer_id} and PIN: {extracted_pin}")
+        elif extracted_customer_id:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's ID is {extracted_customer_id}. Use this ID automatically for any tool calls that require it without asking again."
+            print(f"Enhanced prompt with Customer ID: {extracted_customer_id}")
+        elif extracted_pin:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's PIN is {extracted_pin}. Use this PIN automatically for any tool calls that require it without asking again."
+            print(f"Enhanced prompt with PIN: {extracted_pin}")
+        else:
+            enhanced_prompt = base_prompt
+        
+        # Use the enhanced_prompt instead of base_prompt
+        prompt = enhanced_prompt
+        
+        # Convert chat history format for Nova Converse API
+        message_history = []
+        for msg in chat_history:
+            if msg['role'] in ['user', 'assistant']:
+                content_items = msg.get('content', [])
+                text_content = None
+                
+                if isinstance(content_items, list) and len(content_items) > 0:
+                    for content_item in content_items:
+                        if isinstance(content_item, dict):
+                            if 'type' in content_item and content_item['type'] == 'text':
+                                text_content = content_item.get('text', '')
+                                break
+                            elif 'text' in content_item:
+                                text_content = content_item['text']
+                                break
+                
+                if text_content and text_content.strip():
+                    message_history.append({
+                        'role': msg['role'],
+                        'content': [{'text': text_content.strip()}]
+                    })
+        
+        print("Nova Banking Model - Chat History: ", message_history)
+        
+        # Nova model configuration
+        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_region = os.environ.get("region_used", region_used)
+        nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
+        
+        # First API call to get initial response
+        try:
+            response = nova_bedrock_client.converse(
+                modelId=nova_model_name,
+                messages=message_history,
+                system=[{"text": prompt}],
+                inferenceConfig={
+                    "temperature": 0,
+                    "topP": 0.9
+                },
+                toolConfig={
+                    "tools": banking_tools_nova
+                }
+            )
+            
+            print("Nova Banking Model Response: ", response)
+            
+            # Parse the response
+            assistant_response = []
+            output_msg = (response.get('output') or {}).get('message') or {}
+            content_items = output_msg.get('content') or []
+            
+            for item in content_items:
+                if item.get('text'):
+                    assistant_response.append({'type': 'text', 'text': item['text']})
+                elif item.get('toolUse'):
+                    tool_use = item['toolUse']
+                    assistant_response.append({
+                        'type': 'tool_use',
+                        'id': tool_use.get('toolUseId'),
+                        'name': tool_use.get('name'),
+                        'input': tool_use.get('input', {})
+                    })
+            
+            # Filter out <thinking> tags from text responses
+            for item in assistant_response:
+                if item.get('type') == 'text' and 'text' in item:
+                    item['text'] = re.sub(r'<thinking>.*?</thinking>', '', item['text'], flags=re.DOTALL | re.IGNORECASE).strip()
+            
+            # Check if any tools were called
+            tools_used = []
+            tool_results = []
+            
+            for action in assistant_response:
+                if action.get('type') == 'tool_use':
+                    tools_used.append(action['name'])
+                    tool_name = action['name']
+                    tool_input = action.get('input', {})
+                    tool_use_id = action.get('id')
+                    tool_result = None
+                    
+                    # Send a heartbeat to keep WebSocket alive during tool execution
+                    try:
+                        heartbeat = {'type': 'heartbeat'}
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                    except Exception as e:
+                        print(f"Heartbeat send error: {e}")
+                    
+                    # Execute the appropriate banking tool
+                    if tool_name == 'get_account_summary':
+                        print("get_account_summary is called..")
+                        tool_result = get_account_summary(tool_input.get('customer_id'), tool_input.get('pin'))
+                        # Check for authentication error
+                        if isinstance(tool_result, dict) and 'error' in tool_result:
+                            print(f"Authentication failed for get_account_summary: {tool_result['error']}")
+                    elif tool_name == 'file_service_request':
+                        tool_result = file_service_request(
+                            tool_input.get('customer_id'),
+                            tool_input.get('pin'),
+                            tool_input.get('category'),
+                            tool_input.get('description'),
+                            tool_input.get('preferred_contact_method')
+                        )
+                        # Check for authentication error
+                        if isinstance(tool_result, dict) and 'error' in tool_result:
+                            print(f"Authentication failed for file_service_request: {tool_result['error']}")
+                    elif tool_name == 'banking_faq_tool_schema':
+                        print("banking_faq is called ...")
+                        # Send another heartbeat before FAQ retrieval
+                        try:
+                            heartbeat = {'type': 'heartbeat'}
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                        except Exception as e:
+                            print(f"Banking FAQ heartbeat send error: {e}")
+                        
+                        tool_result = get_banking_faq_chunks(tool_input.get('knowledge_base_retrieval_question'), model_type='nova')
+                        
+                        # If FAQ tool returns empty or no results, provide fallback
+                        if not tool_result or len(tool_result) == 0:
+                            tool_result = ["I don't have specific information about that in our current banking knowledge base. Let me schedule a callback with one of our banking agents who can provide detailed information."]
+                    
+                    # Create tool result message (handle both strings and dictionaries)
+                    try:
+                        print(f"Tool result type: {type(tool_result)}")
+                        print(f"Tool result content: {tool_result}")
+                        
+                        # Handle different types of tool results
+                        if isinstance(tool_result, list) and tool_result:
+                            if isinstance(tool_result[0], dict):
+                                # Format list of dictionaries (like account data)
+                                formatted_results = []
+                                for item in tool_result:
+                                    if isinstance(item, dict):
+                                        formatted_item = []
+                                        for key, value in item.items():
+                                            formatted_item.append(f"{key.replace('_', ' ').title()}: {value}")
+                                        formatted_results.append("\n".join(formatted_item))
+                                    else:
+                                        formatted_results.append(str(item))
+                                content_text = "\n\n".join(formatted_results)
+                            else:
+                                # Handle list of strings
+                                content_text = "\n".join(str(item) for item in tool_result)
+                        else:
+                            content_text = str(tool_result) if tool_result else "No information available"
+                        
+                        # Create tool result block for Nova Converse API
+                        tool_result_block = {
+                            "toolResult": {
+                                "toolUseId": tool_use_id,
+                                "content": [{"text": content_text}],
+                                "status": "success"
+                            }
+                        }
+                        tool_results.append(tool_result_block)
+                        print(f"Tool response created successfully")
+                        
+                    except Exception as e:
+                        print(f"Error creating tool response: {e}")
+                        print(f"Tool result type: {type(tool_result)}")
+                        print(f"Tool result content: {tool_result}")
+                        import traceback
+                        print(f"Traceback: {traceback.format_exc()}")
+                        continue
+            
+            # If tools were used, add tool results to chat history and make second API call
+            if tools_used:
+                # First, add the assistant's message with tool uses to message history
+                # Extract tool uses from the assistant response in the correct format
+                assistant_message_content = []
+                for action in assistant_response:
+                    if action.get('type') == 'tool_use':
+                        assistant_message_content.append({
+                            'toolUse': {
+                                'toolUseId': action.get('id'),
+                                'name': action.get('name'),
+                                'input': action.get('input', {})
+                            }
+                        })
+                
+                # Only add assistant message if we have tool uses
+                if assistant_message_content:
+                    message_history.append({
+                        'role': 'assistant',
+                        'content': assistant_message_content
+                    })
+                    print(f"Added assistant message with {len(assistant_message_content)} tool uses to message history")
+                
+                # Then add tool results to message history for Nova
+                # Ensure we have exactly one tool result per tool use
+                if tool_results and len(tool_results) == len(assistant_message_content):
+                    # Format tool results correctly for Nova Converse API
+                    formatted_tool_results = []
+                    for tool_result_block in tool_results:
+                        if 'toolResult' in tool_result_block:
+                            formatted_tool_results.append(tool_result_block)
+                    
+                    if formatted_tool_results:
+                        message_history.append({
+                            'role': 'user',
+                            'content': formatted_tool_results
+                        })
+                        print(f"Added user message with {len(formatted_tool_results)} tool results to message history")
+                else:
+                    print(f"Warning: Tool results count ({len(tool_results) if tool_results else 0}) doesn't match tool uses count ({len(assistant_message_content)})")
+                
+                # Make second API call with tool results
+                try:
+                    final_response = nova_bedrock_client.converse(
+                        modelId=nova_model_name,
+                        messages=message_history,
+                        system=[{"text": prompt}],
+                        inferenceConfig={
+                            "temperature": 0,
+                            "topP": 0.9
+                        },
+                        toolConfig={
+                            "tools": banking_tools_nova
+                        }
+                    )
+                    
+                    print("Nova Banking Model Final Response: ", final_response)
+                    
+                    # Extract final answer from Nova response
+                    final_output_msg = (final_response.get('output') or {}).get('message') or {}
+                    final_content_items = final_output_msg.get('content') or []
+                    
+                    final_ans = ""
+                    for item in final_content_items:
+                        if item.get('text'):
+                            text_content = item['text']
+                            # Filter out <thinking> tags
+                            text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL | re.IGNORECASE).strip()
+                            if text_content:
+                                final_ans = text_content
+                                break
+                    
+                    # If no text response, provide fallback
+                    if not final_ans:
+                        final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
+                    
+                    # Simulate streaming by sending chunks via WebSocket
+                    words = final_ans.split()
+                    for word in words:
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                        except Exception as e:
+                            print(f"WebSocket send error (delta): {e}")
+                    
+                    # Send content_block_stop
+                    stop_msg = {'type': 'content_block_stop', 'index': 0}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_msg))
+                    except Exception as e:
+                        print(f"WebSocket send error (stop): {e}")
+                    
+                    # Send message_stop
+                    message_stop = {'type': 'message_stop'}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                    except Exception as e:
+                        print(f"WebSocket send error (message_stop): {e}")
+                    
+                    # Get token usage from response
+                    usage = final_response.get('usage', {})
+                    input_tokens = usage.get('inputTokens', 0)
+                    output_tokens = usage.get('outputTokens', 0)
+                    
+                    return {"statusCode": "200", "answer": final_ans, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+                    
+                except Exception as e:
+                    print(f"Error in final Nova banking response: {e}")
+                    import traceback
+                    print(f"Full traceback: {traceback.format_exc()}")
+                    # Send error response via WebSocket
+                    error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+                    words = error_response.split()
+                    for word in words:
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                        except:
+                            pass
+                    stop_msg = {'type': 'content_block_stop', 'index': 0}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_msg))
+                    except:
+                        pass
+                    message_stop = {'type': 'message_stop'}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                    except:
+                        pass
+                    return {"answer": error_response, "question": chat, "session_id": session_id}
+            else:
+                # No tools called, handle normal response
+                final_ans = ""
+                for item in assistant_response:
+                    if item.get('type') == 'text' and 'text' in item:
+                        final_ans = item['text']
+                        break
+                
+                # If no text response, provide fallback
+                if not final_ans:
+                    final_ans = "I'm here to help with your banking needs. How can I assist you today?"
+                
+                # Simulate streaming by sending chunks via WebSocket
+                words = final_ans.split()
+                for word in words:
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    except Exception as e:
+                        print(f"WebSocket send error (delta): {e}")
+                
+                # Send content_block_stop
+                stop_msg = {'type': 'content_block_stop', 'index': 0}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_msg))
+                except Exception as e:
+                    print(f"WebSocket send error (stop): {e}")
+                
+                # Send message_stop
+                message_stop = {'type': 'message_stop'}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                except Exception as e:
+                    print(f"WebSocket send error (message_stop): {e}")
+                
+                # Get token usage from response
+                usage = response.get('usage', {})
+                input_tokens = usage.get('inputTokens', 0)
+                output_tokens = usage.get('outputTokens', 0)
+                
+                return {"statusCode": "200", "answer": final_ans, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+                
+        except Exception as e:
+            print(f"Error invoking Nova banking model: {e}")
+            import traceback
+            print(f"Full traceback: {traceback.format_exc()}")
+            # Send error response via WebSocket
+            error_response = "We are unable to assist right now please try again after few minutes"
+            words = error_response.split()
+            for word in words:
+                delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                except:
+                    pass
+            stop_msg = {'type': 'content_block_stop', 'index': 0}
+            try:
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_msg))
+            except:
+                pass
+            message_stop = {'type': 'message_stop'}
+            try:
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+            except:
+                pass
+            return {"answer": error_response, "question": chat, "session_id": session_id}
+            
+    except Exception as e:
+        print(f"Unexpected error in nova_banking_agent_invoke_tool: {e}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
+        # Send error response via WebSocket
+        error_response = "An Unknown error occurred. Please try again after some time."
+        try:
+            words = error_response.split()
+            for word in words:
+                delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                except:
+                    pass
+            stop_msg = {'type': 'content_block_stop', 'index': 0}
+            try:
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_msg))
+            except:
+                pass
+            message_stop = {'type': 'message_stop'}
+            try:
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+            except:
+                pass
+        except:
+            pass
+        return {
+            "statusCode": "500",
+            "answer": error_response,
+            "question": chat,
+            "session_id": session_id,
+            "input_tokens": "0",
+            "output_tokens": "0"
+        }
+
+
+def kyc_extraction_api(event):
+    """
+    KYC Data Extraction API for extracting information from images/documents
+    """
+    try:
+        # Extract the single variable (document data only)
+        document_data = event.get('document_data', '')
+        session_id = event.get('session_id', str(uuid.uuid4()))
+        
+        if not document_data:
+            return {
+                "statusCode": 400,
+                "error": "document_data is required",
+                "session_id": session_id
+            }
+        
         # Use the existing Bedrock client to process the KYC extraction
-
         prompt_template = f"""You are a document data viewer, your task is to view the information provided to you. Before providing your answer, provide your reasoning or approach as if you have viewed the document and extracted that information in a  neat and clear manner.
-
-        below is the document data
-
+        below is the document data 
         {document_data}
-
 <reasoning>
-
 This is the obtained document that contains the information to be processed. My reasoning approach is to systematically scan through the document content and identify all relevant data fields, structured information, and key details present in the provided document.
-
 </reasoning>
 
-
-
-Please extract the information from the provided data like the sample data provided below
-
+Please extract the information from the provided data like the sample data provided below 
 <sample1>:
-
 <Reasoning>
-
-The document data have been provided and it seems like an identification card and iam going to extract the important fields from the provided document
-
+The document data have been provided and it seems like an identification card and iam going to extract the important fields from the provided document 
 </Reasoning>
-
 <information>
-
 Identity Card Number: 123456789
-
 Name: MARIE JUMIO
-
 Race: CHINESE
-
 Sex: F
-
 Date of Birth: 1975-01-01
-
 Country of Birth: SINGAPORE
-
 </information>
-
 </sample1>
-
 <sample2>:
-
 <Reasoning>
-
-The provided document seems like to be set of three documents and there are discrepencies and matches present and they are
-
+The provided document seems like to be set of three documents and there are discrepencies and matches present and they are 
 </Reasoning>
-
 <information>
-
-
 
 ## Matching Items
-
 - **Document Numbers**: PO-2025072401, INV-2025072401, and GRN-2025072401 match across all three documents
-
 - **Vendor**: FastSupply Co. is consistent across all documents
-
 - **Wireless Speaker Quantity**: 10 units consistently across all documents
-
 - **Wireless Speaker Price**: S$1,250.00 consistently across all documents
 
-
-
 ## Discrepancies Found
-
 1. **USB Cable Quantity**:
-
    - Purchase Order: 50 units
-
    - Sales Invoice: 50 units
-
    - Delivery Receipt: 48 units (2 units short)
 
-
-
 2. **USB Cable Price**:
-
    - Purchase Order: S$45.00 per unit
-
    - Sales Invoice: S$47.00 per unit (S$2.00 higher)
-
    - Delivery Receipt: S$45.00 per unit
 
-
-
 3. **USB Cable Total**:
-
    - Purchase Order: S$2,250.00
-
    - Sales Invoice: S$2,350.00
-
    - Delivery Receipt: S$2,160.00
 
-
-
 4. **Grand Total**:
-
    - Purchase Order: S$14,750.00
-
    - Sales Invoice: S$14,850.00
-
    - Delivery Receipt: S$14,660.00
 
-
-
 </information>
-
 <sample2>
-
 <Note>
-
 1.Make sure to keep it soft and crisp and act like you are thinking and providing the information in  a neat and clean manner.
-
-2.Do not provide tags while responding and provide the response in mark down format
-
+2.Do not provide tags while responding and provide the response in mark down format 
 3.Never show the information in table instead show it as list
-
+4.Do NOT include any tags (for example <information> or <Reasoning>). These Tags are absolutely unnecessary, avoid them completely. Provide your response in markdown format and act like you are thinking.
 """
-
-       
-
+        
         try:
-
-            # Prepare the request body for Bedrock
-
-            body = json.dumps({
-
-                "anthropic_version": "bedrock-2023-05-31",
-
-                "max_tokens": 4000,
-
-                "messages": [
-
-                    {
-
-                        "role": "user",
-
-                        "content": prompt_template
-
-                    }
-
-                ]
-
-            })
-
-           
-
-            # Call Bedrock using the same pattern as other functions
-
-            response = bedrock_client.invoke_model(
-
-                contentType='application/json',
-
-                body=body,
-
-                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
-
+            # Check if Nova model should be used for KYC extraction
+            selected_model = chat_tool_model
+            is_nova_model = (
+                selected_model == 'nova' or  # Exact match
+                selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+                selected_model.startswith('nova-') or  # Nova variant pattern
+                ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
             )
-
-           
-
-            response_body = json.loads(response['body'].read())
-
-            extracted_data = response_body.get('content', [{}])[0].get('text', '')
-
-           
-
-            # Create response data
-
-            response_data = {
-
-                "extracted_kyc_data": extracted_data,
-
-                "timestamp": datetime.now().isoformat(),
-
-                "session_id": session_id
-
-            }
-
-           
-
-            # Log the KYC extraction
-
-            try:
-
-                log_query = """
-
-                    INSERT INTO {}.{} (session_id, query, response, timestamp, api_type)
-
-                    VALUES (%s, %s, %s, %s, %s)
-
-                """.format(schema, CHAT_LOG_TABLE)
-
-               
-
-                log_values = (
-
-                    session_id,
-
-                    json.dumps({"document_data": bool(document_data)}),
-
-                    json.dumps(response_data),
-
-                    datetime.now(),
-
-                    'kyc_extraction'
-
+            
+            # Use appropriate API based on model type
+            if is_nova_model:
+                print(f"Using Nova model for KYC extraction: {selected_model}")
+                # Use Nova Converse API
+                response = bedrock_client.converse(
+                    modelId=selected_model,
+                    system=[
+                        {"text": "You are a document data viewer, your task is to view the information provided to you and extract relevant information in a neat and clear manner."}
+                    ],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"text": prompt_template}
+                            ]
+                        }
+                    ],
+                    inferenceConfig={
+                        "maxTokens": 4000,
+                        "temperature": 0.1
+                    }
                 )
-
-               
-
-                insert_db(log_query, log_values)
-
-            except Exception as e:
-
-                print(f"Error logging KYC extraction: {e}")
-
-           
-
-            return {
-
-                "statusCode": 200,
-
-                "session_id": session_id,
-
-                "response_data": response_data
-
-            }
-
-           
-
-        except Exception as e:
-
-            print(f"Error calling Bedrock for KYC extraction: {e}")
-
-            return {
-
-                "statusCode": 500,
-
-                "error": "Error processing KYC extraction",
-
+                
+                # Extract Nova reply text
+                try:
+                    extracted_data = response.get("output", {}).get("message", {}).get("content", [])[0].get("text", "")
+                except Exception as e:
+                    print(f"Error extracting Nova response: {e}")
+                    import traceback
+                    print(f"Full traceback: {traceback.format_exc()}")
+                    extracted_data = ""
+            else:  
+                print(f"Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                # Use Claude invoke_model API (existing implementation)
+            # Prepare the request body for Bedrock
+                body = json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4000,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt_template
+                        }
+                    ]
+                })
+            
+                # Call Bedrock using the same pattern as other functions
+                response = bedrock_client.invoke_model(
+                    contentType='application/json',
+                    body=body,
+                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                )
+            
+                response_body = json.loads(response['body'].read())
+                extracted_data = response_body.get('content', [{}])[0].get('text', '')
+            
+            # Create response data
+            response_data = {
+                "extracted_kyc_data": extracted_data,
+                "timestamp": datetime.now().isoformat(),
                 "session_id": session_id
-
             }
-
-       
-
+            
+            # Log the KYC extraction
+            try:
+                log_query = """
+                    INSERT INTO {}.{} (session_id, query, response, timestamp, api_type)
+                    VALUES (%s, %s, %s, %s, %s)
+                """.format(schema, CHAT_LOG_TABLE)
+                
+                log_values = (
+                    session_id,
+                    json.dumps({"document_data": bool(document_data)}),
+                    json.dumps(response_data),
+                    datetime.now(),
+                    'kyc_extraction'
+                )
+                
+                insert_db(log_query, log_values)
+            except Exception as e:
+                print(f"Error logging KYC extraction: {e}")
+            
+            return {
+                "statusCode": 200,
+                "session_id": session_id,
+                "response_data": response_data
+            }
+            
+        except Exception as e:
+            print(f"Error calling Bedrock for KYC extraction: {e}")
+            return {
+                "statusCode": 500,
+                "error": "Error processing KYC extraction",
+                "session_id": session_id
+            }
+        
     except Exception as e:
-
         print(f"Error in KYC extraction API: {e}")
-
         return {
-
             "statusCode": 500,
-
             "error": "Internal server error during KYC extraction",
-
             "session_id": session_id if 'session_id' in locals() else str(uuid.uuid4())
-
         }
 
 
@@ -1562,7 +2457,7 @@ def lambda_handler(event, context):
         
         else:
             query = f'''select question,answer 
-                    from {schema}.{banking_chat_history} 
+                    from {schema}.{banking_chat_history_table} 
                     where session_id = '{session_id}' 
                     order by created_on desc;'''
             history_response = select_db(query)
@@ -1570,26 +2465,54 @@ def lambda_handler(event, context):
 
             if len(history_response) > 0:
                 for chat_session in reversed(history_response):  
-                    chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat_session[0]}]})
-                    chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': chat_session[1]}]})
+                    # Only add non-empty messages to chat history
+                    if chat_session[0] and str(chat_session[0]).strip():
+                        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': str(chat_session[0]).strip()}]})
+                    if chat_session[1] and str(chat_session[1]).strip():
+                        chat_history.append({'role': 'assistant', 'content': [{"type" : "text",'text': str(chat_session[1]).strip()}]})
         
-            #APPENDING CURRENT USER QUESTION
-        chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': chat}]})
+        #APPENDING CURRENT USER QUESTION
+        # Only add non-empty current user question
+        if chat and str(chat).strip():
+            chat_history.append({'role': 'user', 'content': [{"type" : "text",'text': str(chat).strip()}]})
             
         print("CHAT HISTORY : ",chat_history)
 
-        tool_response = banking_agent_invoke_tool(chat_history, session_id,chat,connectionId)
+        # Get model from environment variable (defaults to 'claude' if not set)
+        # Can be set to model name like 'us.amazon.nova-pro-v1:0' or just 'nova'/'claude'
+        selected_model = chat_tool_model
+        print(f"Using model from environment variable: {selected_model}")
+        
+        # Check if Nova model should be used (same logic as chat_tool)
+        is_nova_model = (
+            selected_model == 'nova' or  # Exact match
+            selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+            selected_model.startswith('nova-') or  # Nova variant pattern
+            ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
+        )
+        
+        # Route to appropriate function based on model type
+        if is_nova_model:
+            print(f"Routing to Nova banking model handler (detected model: {selected_model})")
+            tool_response = nova_banking_agent_invoke_tool(chat_history, session_id, chat, connectionId)
+        else:
+            # Default to Claude model (claude 3.5 or any other claude variant)
+            print(f"Routing to Claude banking model handler (detected model: {selected_model})")
+            tool_response = banking_agent_invoke_tool(chat_history, session_id, chat, connectionId)
+        
         print("TOOL RESPONSE: ", tool_response)  
-        #insert into banking_chat_history
+        #insert into banking_chat_history_table
         query = f'''
-                INSERT INTO {schema}.{banking_chat_history}
+                INSERT INTO {schema}.{banking_chat_history_table}
                 (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                 VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                 '''
-        # Add error handling for missing keys with default values
+        # Handle missing keys with default values
         input_tokens = tool_response.get('input_tokens', '0')
         output_tokens = tool_response.get('output_tokens', '0')
-        values = (str(session_id), str(chat), str(tool_response['answer']), str(input_tokens), str(output_tokens))
+        answer = tool_response.get('answer', '')
+        
+        values = (str(session_id), str(chat), str(answer), str(input_tokens), str(output_tokens))
         res = insert_db(query, values)
         print("response:",res)
 
@@ -1602,10 +2525,11 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
         values = ('',None,'','','',session_id,'','','','','')            
         res = insert_db(insert_query,values)   
         return tool_response
+
     elif event_type == 'kyc_extraction':
         return kyc_extraction_api(event)
 
-    if event_type == 'voiceops':
+    elif event_type == 'voiceops':
         try:
             url =f"http://{ec2_instance_ip}:8000/transcribe"
             kb_id=''
@@ -1696,13 +2620,13 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
                     'error': str(e)
                 })
             }
-    if event_type == "generate_banking_summary":     
+    elif event_type == "generate_banking_summary":     
         
         print("BANKING SUMMARY GENERATION ")
         session_id = event["session_id"]
         chat_query = f'''
         SELECT question,answer
-        FROM {schema}.{banking_chat_history}    
+        FROM {schema}.{banking_chat_history_table}    
         WHERE session_id = '{session_id}';
         '''
     
@@ -1831,10 +2755,58 @@ these are the keys to be always used while returning response. Strictly do not a
         </Conversation>
         {prompt_template}
         '''
+
+        # Check if Nova model should be used for summary generation
+        selected_model = chat_tool_model
+        is_nova_model = (
+            selected_model == 'nova' or  # Exact match
+            selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+            selected_model.startswith('nova-') or  # Nova variant pattern
+            ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
+        )
+
+        import boto3 
+         # Initialize bedrock_client BEFORE branching so both paths can use it
+        bedrock_client = boto3.client("bedrock-runtime", region_name=region_used)
+
+        # Use appropriate API based on model type
+        if is_nova_model:
+            print(f"Using Nova model for summary generation: {selected_model}")
+            # Use Nova Converse API
+            
+            response = bedrock_client.converse(
+                modelId=selected_model,
+                system=[
+                    {"text": prompt_template}
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": template}
+                        ]
+                    }
+                ],
+                inferenceConfig={
+                    "maxTokens": 4000,
+                    "temperature": 0.7
+                }
+            )
+            
+            # Extract Nova reply text
+            try:
+                out = response.get("output", {}).get("message", {}).get("content", [])[0].get("text", "")
+            except Exception as e:
+                print(f"Error extracting Nova response: {e}")
+                import traceback
+                print(f"Full traceback: {traceback.format_exc()}")
+                out = ""
     
         # - Ensure the email content is formatted correctly with new lines. USE ONLY "\n" for new lines. 
         #         - Ensure the email content is formatted correctly for new lines instead of using new line characters.
-        response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
+        else:
+            print(f"Using Claude model for summary generation: {model_id}")
+            response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
             "anthropic_version": "bedrock-2023-05-31",  
             "max_tokens": 4000,     
             "messages": [
@@ -1845,11 +2817,13 @@ these are the keys to be always used while returning response. Strictly do not a
                     ]
                 }
             ],
-        }), modelId=model_id)                                                                                                                       
+        }), modelId=model_id)
     
-        inference_result = response['body'].read().decode('utf-8')
-        final = json.loads(inference_result)
-        out=final['content'][0]['text']
+            # Extract Claude reply text
+            inference_result = response['body'].read().decode('utf-8')
+            final = json.loads(inference_result)
+            out = final['content'][0]['text']
+        
         print(out)
         llm_out = extract_sections(out)
         
@@ -1974,7 +2948,7 @@ these are the keys to be always used while returning response. Strictly do not a
                 "message" : "Banking Summary Successfully Generated"
             }
 
-    if event_type == 'list_banking_summary':
+    elif event_type == 'list_banking_summary':
         session_id = event['session_id']
         chat_query = f'''
         SELECT question,answer
