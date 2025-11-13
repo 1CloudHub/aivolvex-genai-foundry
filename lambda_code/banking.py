@@ -26,7 +26,7 @@ db_port = os.environ['db_port']
 db_database = os.environ['db_database']
 region_used = os.environ["region_used"]
 bank_kb_id = os.environ['bank_kb_id']
-KB_ID = os.environ['KB_ID']
+# KB_ID = os.environ['KB_ID']
 chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
 # Get new environment variables for voice operations
 region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
@@ -50,8 +50,8 @@ db_password = get_db_password()
 
 schema = os.environ['schema']
 chat_history = os.environ['chat_history']
-banking_chat_history = os.environ['banking_chat_history']
-banking_chat_history_table=os.environ['banking_chat_history_table']
+# banking_chat_history = os.environ['banking_chat_history']
+banking_chat_history=os.environ['banking_chat_history']
 prompt_metadata_table = os.environ['prompt_metadata_table']
 model_id = os.environ['model_id']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
@@ -2457,7 +2457,7 @@ def lambda_handler(event, context):
         
         else:
             query = f'''select question,answer 
-                    from {schema}.{banking_chat_history_table} 
+                    from {schema}.{banking_chat_history} 
                     where session_id = '{session_id}' 
                     order by created_on desc;'''
             history_response = select_db(query)
@@ -2501,9 +2501,9 @@ def lambda_handler(event, context):
             tool_response = banking_agent_invoke_tool(chat_history, session_id, chat, connectionId)
         
         print("TOOL RESPONSE: ", tool_response)  
-        #insert into banking_chat_history_table
+        #insert into banking_chat_history
         query = f'''
-                INSERT INTO {schema}.{banking_chat_history_table}
+                INSERT INTO {schema}.{banking_chat_history}
                 (session_id, question, answer, input_tokens, output_tokens, created_on, updated_on)
                 VALUES( %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
                 '''
@@ -2626,7 +2626,7 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
         session_id = event["session_id"]
         chat_query = f'''
         SELECT question,answer
-        FROM {schema}.{banking_chat_history_table}    
+        FROM {schema}.{banking_chat_history}    
         WHERE session_id = '{session_id}';
         '''
     
