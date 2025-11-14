@@ -28,6 +28,7 @@ region_used = os.environ["region_used"]
 bank_kb_id = os.environ['bank_kb_id']
 # KB_ID = os.environ['KB_ID']
 chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
+nova_model_name = os.environ.get("nova_model_name")
 # Get new environment variables for voice operations
 region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
 voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
@@ -1452,12 +1453,17 @@ IMPORTANT: Under no circumstances should the assistant provide account numbers, 
 - For general banking questions about products, features, or procedures, use the banking_faq_tool_schema tool
 - Do NOT announce that you're using tools or searching for information
 - Simply use the tool and provide the direct answer
+- **CRITICAL: AFTER TOOL RESPONSE**: Provide ONLY the direct answer from the tool. Do NOT add follow-up questions like "Would you like to open this account?", "Would you like help with anything else?", "Would you like to see another account?", or any other extra questions. Just give the information and stop.
+
+
 
 ## Response Format:
 - ALWAYS answer in the shortest, most direct way possible
 - Do NOT add extra greetings, confirmations, or explanations
 - Do NOT mention backend systems or tools
 - Speak naturally as a helpful banking representative who already knows the information
+- **NO FOLLOW-UP QUESTIONS RULE**: After providing the requested information, end your response immediately. Do NOT ask follow-up questions like "Would you like help with any transactions today?", "Would you like to make a payment now?", "Would you like to open this account?", "Would you like to see another account?", or any other questions. Simply provide the requested information and stop. Only respond to what the user explicitly asked for.
+- **CRITICAL: NEVER ASK EXTRA QUESTIONS**: After answering the user's query, DO NOT add any follow-up questions, suggestions, or offers. End your response immediately after providing the information requested.
 - TOOL RESPONSE SUMMARY RULE:
 After completing any tool call (such as retrieving an account summary or filing a service request), always include a clear summary of all user-provided inputs involved in that flow, followed by the final result (e.g., account summary or service request confirmation).
 
@@ -1859,7 +1865,7 @@ You have access to comprehensive information about AnyBank SG products including
         print("Nova Banking Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-premier-v1:0")
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
@@ -2074,10 +2080,28 @@ You have access to comprehensive information about AnyBank SG products including
                     if not final_ans:
                         final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
                     
-                    # Simulate streaming by sending chunks via WebSocket
-                    words = final_ans.split()
+                    # Format response to ensure proper markdown with line breaks
+                    # Ensure each bullet point is on a separate line
+                    final_ans = final_ans.replace(' - ', '\n- ')  # Add line break before bullets if missing
+                    # If response starts with a dash after initial text, ensure line break
+                    final_ans = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_ans)
+                    # Ensure double line break before first bullet point after intro text
+                    final_ans = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_ans)
+                    # Clean up any triple+ newlines to max double
+                    final_ans = re.sub(r'\n{3,}', '\n\n', final_ans)
+                    
+                    # Stream response preserving newlines - split by whitespace but keep newlines
+                    # Replace newlines with a special marker temporarily
+                    streaming_text = final_ans.replace('\n', ' <NEWLINE> ')
+                    words = streaming_text.split()
+                    
                     for word in words:
-                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                        if word == '<NEWLINE>':
+                            # Send actual newline character
+                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                        else:
+                            # Send word with space
+                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
                         try:
                             api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                         except Exception as e:
@@ -2140,10 +2164,28 @@ You have access to comprehensive information about AnyBank SG products including
                 if not final_ans:
                     final_ans = "I'm here to help with your banking needs. How can I assist you today?"
                 
-                # Simulate streaming by sending chunks via WebSocket
-                words = final_ans.split()
+                # Format response to ensure proper markdown with line breaks
+                # Ensure each bullet point is on a separate line
+                final_ans = final_ans.replace(' - ', '\n- ')  # Add line break before bullets if missing
+                # If response starts with a dash after initial text, ensure line break
+                final_ans = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_ans)
+                # Ensure double line break before first bullet point after intro text
+                final_ans = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_ans)
+                # Clean up any triple+ newlines to max double
+                final_ans = re.sub(r'\n{3,}', '\n\n', final_ans)
+                
+                # Stream response preserving newlines - split by whitespace but keep newlines
+                # Replace newlines with a special marker temporarily
+                streaming_text = final_ans.replace('\n', ' <NEWLINE> ')
+                words = streaming_text.split()
+                
                 for word in words:
-                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    if word == '<NEWLINE>':
+                        # Send actual newline character
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                    else:
+                        # Send word with space
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
                     try:
                         api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                     except Exception as e:

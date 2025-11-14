@@ -4904,6 +4904,22 @@ def nova_hospital_agent_invoke_tool(chat_history, session_id, chat, connectionId
         # Optimized system prompt for Nova Pro (200 lines max)
         base_prompt = f'''You are MedCare Hospital's Virtual Healthcare Assistant. Handle patient inquiries, appointments, medical records, medications, and general hospital information.
 
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║ ⚠️  ABSOLUTE PROHIBITION - NO FOLLOW-UP QUESTIONS                            ║
+║                                                                               ║
+║ After providing ANY information or completing ANY task, YOU MUST STOP.       ║
+║                                                                               ║
+║ ❌ NEVER ASK: "Would you like assistance with anything else?"                ║
+║ ❌ NEVER ASK: "Need any other changes?"                                      ║
+║ ❌ NEVER ASK: "Is there anything else I can help with?"                      ║
+║ ❌ NEVER ASK: "Would you like help with anything else today?"                ║
+║ ❌ NEVER ASK: "Can I assist you with anything else?"                         ║
+║ ❌ NEVER OFFER additional services after answering                           ║
+║                                                                               ║
+║ ✅ CORRECT: Provide the answer/information and STOP immediately              ║
+║ ✅ Your last sentence must be the actual answer - nothing after it           ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
 === RESCHEDULE/CANCEL INITIATION RULE ===
 When user says "reschedule my appointment" or "cancel my appointment":
 1. FIRST ask: "May I please have your Name to get started?"
@@ -4915,6 +4931,8 @@ When user says "reschedule my appointment" or "cancel my appointment":
 DEPARTMENT: User says "cardiology" → IMMEDIATELY call get_department_doctors with department="Cardiology". NO text.
 DOCTOR: User says "sarah" → IMMEDIATELY call doctor_availability with doctor_name="Dr. Sarah Johnson". NO "Let me check".
 FAQ: User asks hospital info → IMMEDIATELY call hospital_faq_tool_schema. NO preliminary text.
+NEW APPOINTMENT DATE: During NEW appointment booking, when user provides a date → IMMEDIATELY call appointment_scheduler with action="get_doctor_times", doctor_name, preferred_date. NO text.
+NEW APPOINTMENT TIME: During NEW appointment, when user provides time → Ask for reason if not provided, then call appointment_scheduler with action="schedule" and all details.
 RESCHEDULE REQUEST: User says "reschedule my appointment" → Ask for name, then phone, THEN call appointment_scheduler with action="reschedule", name, phone.
 RESCHEDULE CONFIRM: After showing appointment, user says "yes" → IMMEDIATELY call doctor_availability with doctor_name from appointment.
 RESCHEDULE DATE: User provides date → IMMEDIATELY call reschedule_appointment with name, phone, preferred_date.
@@ -4923,6 +4941,16 @@ CANCEL REQUEST: User says "cancel my appointment" → Ask for name, then phone, 
 CANCEL CONFIRM: After showing appointment, user says "yes"/"cancel"/"just cancel" → IMMEDIATELY call appointment_scheduler with action="cancel", name, phone, reason="User confirmed cancellation".
 
 EXAMPLES:
+NEW APPOINTMENT FLOW:
+User: "I want to book an appointment" → Assistant: "May I please have your Name to get started?"
+User: "John Smith" → Assistant: "Could you share your Phone number so I can note it for the appointment?"
+User: "91234567" → Show department list
+User: "Cardiology" → [CALL get_department_doctors with department="Cardiology"]
+User: "Dr. Sarah Johnson" → [CALL doctor_availability with doctor_name="Dr. Sarah Johnson"]
+User: "September 22" OR "22nd September" → [CALL appointment_scheduler with action="get_doctor_times", doctor_name="Dr. Sarah Johnson", preferred_date="September 22"]
+User: "10:30 AM" → Ask for reason if not provided
+User: "Chest pain" → [CALL appointment_scheduler with action="schedule", name="John Smith", phone="91234567", department="Cardiology", doctor_name="Dr. Sarah Johnson", preferred_date="2025-09-22", preferred_time="10:30 AM", reason="Chest pain"]
+
 RESCHEDULE FULL FLOW:
 User: "reschedule my appointment" → Assistant: "May I please have your Name to get started?"
 User: "emily davis" → Assistant: "Could you share your Phone number so I can verify your details?"
@@ -5091,8 +5119,10 @@ ALWAYS extract name/phone from conversation history for tool calls. Check entire
 User: "ill go with sarah" → [CALL doctor_availability with doctor_name="Dr. Sarah Johnson"]
 User: "emily rodriguez" → [CALL doctor_availability with doctor_name="Dr. Emily Rodriguez"]
 User: "alex thompson" → [CALL doctor_availability with doctor_name="Dr. Alex Thompson"]
-User: "20th September" → [CALL reschedule_appointment with name, phone, preferred_date="20th September"]
-User: "25 would be cool" → [CALL reschedule_appointment with name, phone, preferred_date="25 would be cool"]
+User: "20th September" (during NEW appointment) → [CALL appointment_scheduler with action="get_doctor_times", doctor_name from context, preferred_date="20th September"]
+User: "September 25" (during NEW appointment) → [CALL appointment_scheduler with action="get_doctor_times", doctor_name from context, preferred_date="September 25"]
+User: "20th September" (during reschedule) → [CALL reschedule_appointment with name, phone, preferred_date="20th September"]
+User: "25 would be cool" (during reschedule) → [CALL reschedule_appointment with name, phone, preferred_date="25 would be cool"]
 
 === PROHIBITIONS ===
 NEVER generate dates without tools
@@ -5135,6 +5165,19 @@ Verify name+phone for reschedule/cancel/records/medications
 Never display patient credential lists
 Maintain session state
 Treat all patient data as confidential
+
+**CRITICAL: NEVER ASK EXTRA QUESTIONS**:
+- After answering the user's query, DO NOT add any follow-up questions, suggestions, or offers
+- End your response immediately after providing the information requested
+- DO NOT ask "Need any other changes?", "Would you like help with anything else?", "Is there anything else I can assist you with?", or any similar questions
+- DO NOT offer additional services or ask if the user needs further assistance
+- Simply provide the requested information and STOP
+
+**CRITICAL: AFTER TOOL RESPONSE**:
+- Provide ONLY the direct answer from the tool
+- Do NOT add follow-up questions like "Would you like to reschedule?", "Need help with anything else?", "Would you like to see another doctor?", or any other extra questions
+- Just give the information from the tool and STOP immediately
+- Your response must end with the tool's information - nothing more
 '''
 
         
@@ -5319,7 +5362,7 @@ Treat all patient data as confidential
                                 "action": {
                                     "type": "string",
                                     "description": "Action to perform",
-                                    "enum": ["get_medications", "add_medication", "update_medication", "remove_medication"]
+                                    "enum": ["get_medications"]
                                 },
                                 "medication_name": {
                                     "type": "string",
@@ -5455,7 +5498,7 @@ Treat all patient data as confidential
         print("Nova Hospital Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_model_name = "us.amazon.nova-premier-v1:0"
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
@@ -5752,15 +5795,55 @@ Treat all patient data as confidential
                                     break
                             
                             if selected_doctor:
-                                readable_dates = []
-                                for date_str in selected_doctor['available_dates']:
-                                    try:
-                                        dt = datetime.strptime(date_str, '%Y-%m-%d')
-                                        readable_dates.append(dt.strftime('%B %d, %Y'))
-                                    except:
-                                        readable_dates.append(date_str)
-                                available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
-                                tool_result = [f"Dr. {selected_doctor['name']} is available on:\n\n{available_dates_str}\n\nWhat is your preferred date for the appointment?"]
+                                # If preferred_date is provided, parse it and show available times for that date
+                                if preferred_date:
+                                    # Parse the date using flexible parsing
+                                    formatted_date = parse_date_flexible(preferred_date)
+                                    
+                                    if formatted_date and formatted_date in selected_doctor['available_dates']:
+                                        # Date is available, show times for this date
+                                        available_times = selected_doctor['available_times']
+                                        times_list = "\n".join([f"• {time}" for time in available_times])
+                                        
+                                        # Convert date to readable format
+                                        try:
+                                            dt = datetime.strptime(formatted_date, '%Y-%m-%d')
+                                            readable_date = dt.strftime('%B %d, %Y')
+                                        except:
+                                            readable_date = formatted_date
+                                        
+                                        tool_result = [f"Great! Dr. {selected_doctor['name']} is available on {readable_date}. Here are the available times:\n\n{times_list}\n\nWhat time would you prefer for your appointment?"]
+                                    else:
+                                        # Date not available or couldn't be parsed, show available dates
+                                        readable_dates = []
+                                        for date_str in selected_doctor['available_dates']:
+                                            try:
+                                                dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                                readable_dates.append(dt.strftime('%B %d, %Y'))
+                                            except:
+                                                readable_dates.append(date_str)
+                                        available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
+                                        
+                                        if formatted_date:
+                                            try:
+                                                dt = datetime.strptime(formatted_date, '%Y-%m-%d')
+                                                user_readable_date = dt.strftime('%B %d, %Y')
+                                            except:
+                                                user_readable_date = preferred_date
+                                            tool_result = [f"I'm sorry, but Dr. {selected_doctor['name']} is not available on {user_readable_date}. Here are the available dates:\n\n{available_dates_str}\n\nPlease choose one of these dates."]
+                                        else:
+                                            tool_result = [f"Could not parse the date '{preferred_date}'. Here are Dr. {selected_doctor['name']}'s available dates:\n\n{available_dates_str}\n\nPlease choose one of these dates."]
+                                else:
+                                    # No date provided, show available dates
+                                    readable_dates = []
+                                    for date_str in selected_doctor['available_dates']:
+                                        try:
+                                            dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                            readable_dates.append(dt.strftime('%B %d, %Y'))
+                                        except:
+                                            readable_dates.append(date_str)
+                                    available_dates_str = "\n".join([f"• {date}" for date in readable_dates])
+                                    tool_result = [f"Dr. {selected_doctor['name']} is available on:\n\n{available_dates_str}\n\nWhat is your preferred date for the appointment?"]
                             else:
                                 tool_result = [f"Doctor {doctor_name} not found. Please select from the available doctors."]
                         elif action_type == "check_availability":
@@ -6182,7 +6265,7 @@ Treat all patient data as confidential
                         if 'text' in item:
                             # Filter out thinking tags from Nova responses
                             text_content = item['text']
-                            text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL)
+                            text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL | re.IGNORECASE)
                             text_content = text_content.strip()
                             if text_content:
                                 final_answer = text_content  # Take first text response only, don't concatenate
@@ -6192,20 +6275,48 @@ Treat all patient data as confidential
                     if not final_answer:
                         final_answer = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
                     
+                    # Format response to ensure proper markdown with line breaks
+                    # Ensure each bullet point is on a separate line
+                    final_answer = final_answer.replace(' - ', '\n- ')  # Add line break before bullets if missing
+                    
+                    # If response starts with a dash after initial text, ensure line break
+                    final_answer = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_answer)
+                    
+                    # Ensure double line break before first bullet point after intro text
+                    final_answer = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_answer)
+                    
+                    # Clean up any triple+ newlines to max double
+                    final_answer = re.sub(r'\n{3,}', '\n\n', final_answer)
+                    
                     # Send response via WebSocket in streaming format
                     # Since Nova Converse API doesn't support streaming, simulate it by sending in chunks
                     try:
-                        # Send the answer in chunks to simulate streaming (frontend expects content_block_delta format)
-                        words = final_answer.split()
-                        for i, word in enumerate(words):
-                            delta_message = {
-                                'type': 'content_block_delta',
-                                'index': 0,
-                                'delta': {
-                                    'type': 'text_delta',
-                                    'text': word + (' ' if i < len(words) - 1 else '')
+                        # Stream response preserving newlines - split by whitespace but keep newlines
+                        # Replace newlines with a special marker temporarily
+                        streaming_text = final_answer.replace('\n', ' <NEWLINE> ')
+                        words = streaming_text.split()
+                        
+                        for word in words:
+                            if word == '<NEWLINE>':
+                                # Send actual newline character
+                                delta_message = {
+                                    'type': 'content_block_delta',
+                                    'index': 0,
+                                    'delta': {
+                                        'type': 'text_delta',
+                                        'text': '\n'
+                                    }
                                 }
-                            }
+                            else:
+                                # Send word with space
+                                delta_message = {
+                                    'type': 'content_block_delta',
+                                    'index': 0,
+                                    'delta': {
+                                        'type': 'text_delta',
+                                        'text': word + ' '
+                                    }
+                                }
                             try:
                                 api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta_message))
                             except api_gateway_client.exceptions.GoneException:
@@ -6257,17 +6368,37 @@ Treat all patient data as confidential
                     print(f"Traceback: {traceback.format_exc()}")
                     # Send error response via WebSocket
                     error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
-                    for word in error_response.split():
-                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    
+                    # Stream response preserving newlines - split by whitespace but keep newlines
+                    streaming_text = error_response.replace('\n', ' <NEWLINE> ')
+                    words = streaming_text.split()
+                    
+                    for word in words:
+                        if word == '<NEWLINE>':
+                            # Send actual newline character
+                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                        else:
+                            # Send word with space
+                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
                         try:
                             api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                         except:
                             pass
-                    stop_answer = {'type': 'content_block_stop', 'index': 0}
+                    
+                    # Send content_block_stop
+                    stop_msg = {'type': 'content_block_stop', 'index': 0}
                     try:
-                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_msg))
                     except:
                         pass
+                    
+                    # Send message_stop
+                    message_stop = {'type': 'message_stop'}
+                    try:
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                    except:
+                        pass
+                    
                     return {
                         "answer": error_response,
                         "question": chat,
@@ -6281,7 +6412,7 @@ Treat all patient data as confidential
                 for item in assistant_response:
                     if 'text' in item:
                         text_content = item['text']
-                        text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL)
+                        text_content = re.sub(r'<thinking>.*?</thinking>', '', text_content, flags=re.DOTALL | re.IGNORECASE)
                         text_content = text_content.strip()
                         if text_content:
                             final_answer = text_content
@@ -6291,18 +6422,47 @@ Treat all patient data as confidential
                 if not final_answer:
                     final_answer = "I'm here to help with your hospital needs. How can I assist you today?"
                 
+                # Format response to ensure proper markdown with line breaks
+                # Ensure each bullet point is on a separate line
+                final_answer = final_answer.replace(' - ', '\n- ')  # Add line break before bullets if missing
+                
+                # If response starts with a dash after initial text, ensure line break
+                final_answer = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_answer)
+                
+                # Ensure double line break before first bullet point after intro text
+                final_answer = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_answer)
+                
+                # Clean up any triple+ newlines to max double
+                final_answer = re.sub(r'\n{3,}', '\n\n', final_answer)
+                
                 # Send response via WebSocket in streaming format
                 try:
-                    words = final_answer.split()
-                    for i, word in enumerate(words):
-                        delta_message = {
-                            'type': 'content_block_delta',
-                            'index': 0,
-                            'delta': {
-                                'type': 'text_delta',
-                                'text': word + (' ' if i < len(words) - 1 else '')
+                    # Stream response preserving newlines - split by whitespace but keep newlines
+                    # Replace newlines with a special marker temporarily
+                    streaming_text = final_answer.replace('\n', ' <NEWLINE> ')
+                    words = streaming_text.split()
+                    
+                    for word in words:
+                        if word == '<NEWLINE>':
+                            # Send actual newline character
+                            delta_message = {
+                                'type': 'content_block_delta',
+                                'index': 0,
+                                'delta': {
+                                    'type': 'text_delta',
+                                    'text': '\n'
+                                }
                             }
-                        }
+                        else:
+                            # Send word with space
+                            delta_message = {
+                                'type': 'content_block_delta',
+                                'index': 0,
+                                'delta': {
+                                    'type': 'text_delta',
+                                    'text': word + ' '
+                                }
+                            }
                         try:
                             api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta_message))
                         except api_gateway_client.exceptions.GoneException:
@@ -6350,16 +6510,33 @@ Treat all patient data as confidential
             error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
             # Send error response via WebSocket
             try:
-                words = error_response.split()
-                for i, word in enumerate(words):
-                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                # Stream response preserving newlines - split by whitespace but keep newlines
+                streaming_text = error_response.replace('\n', ' <NEWLINE> ')
+                words = streaming_text.split()
+                
+                for word in words:
+                    if word == '<NEWLINE>':
+                        # Send actual newline character
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                    else:
+                        # Send word with space
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
                     try:
                         api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                     except:
                         pass
-                stop_answer = {'type': 'content_block_stop', 'index': 0}
+                
+                # Send content_block_stop
+                stop_msg = {'type': 'content_block_stop', 'index': 0}
                 try:
-                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_msg))
+                except:
+                    pass
+                
+                # Send message_stop
+                message_stop = {'type': 'message_stop'}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
                 except:
                     pass
             except:
@@ -6380,27 +6557,44 @@ Treat all patient data as confidential
         
         # Send error response via WebSocket
         try:
-            words = error_response.split()
-            for i, word in enumerate(words):
-                delta = {
-                    'type': 'content_block_delta',
-                    'index': 0,
-                    'delta': {
-                        'type': 'text_delta',
-                        'text': word + (' ' if i < len(words) - 1 else '')
+            # Stream response preserving newlines - split by whitespace but keep newlines
+            streaming_text = error_response.replace('\n', ' <NEWLINE> ')
+            words = streaming_text.split()
+            
+            for word in words:
+                if word == '<NEWLINE>':
+                    # Send actual newline character
+                    delta = {
+                        'type': 'content_block_delta',
+                        'index': 0,
+                        'delta': {
+                            'type': 'text_delta',
+                            'text': '\n'
+                        }
                     }
-                }
+                else:
+                    # Send word with space
+                    delta = {
+                        'type': 'content_block_delta',
+                        'index': 0,
+                        'delta': {
+                            'type': 'text_delta',
+                            'text': word + ' '
+                        }
+                    }
                 try:
                     api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                 except:
                     pass
             
-            stop_answer = {'type': 'content_block_stop', 'index': 0}
+            # Send content_block_stop
+            stop_msg = {'type': 'content_block_stop', 'index': 0}
             try:
-                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_msg))
             except:
                 pass
             
+            # Send message_stop
             message_stop = {
                 'type': 'message_stop',
                 'amazon-bedrock-invocationMetrics': {
