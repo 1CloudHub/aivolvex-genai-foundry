@@ -10356,12 +10356,15 @@ SESSION MEMORY: Remember the authenticated Account ID throughout the conversatio
 AUTOMATIC REUSE: Use the stored authenticated credentials for ALL subsequent order-related tool calls
 NO RE-VERIFICATION: Do not re-verify credentials that have already been successfully authenticated in the current session
 
-PRE-AUTHENTICATION CHECK:
+PRE-AUTHENTICATION CHECK - MANDATORY STEP:
+**YOU MUST PERFORM THIS CHECK BEFORE EVERY ORDER-RELATED REQUEST - NO EXCEPTIONS**
 Before asking for Account ID or Email for ANY order-related request:
-Scan conversation history for previously provided Account ID
-Check if Email was already verified for that Account ID in this session
-If both are found and verified, proceed directly with stored credentials
-Only ask for credentials that are missing or failed verification
+1. **FIRST**: Scan the ENTIRE conversation history for previously provided Account ID
+2. **SECOND**: Check if Email was already verified for that Account ID in this session
+3. **THIRD**: If both are found and verified, proceed directly with stored credentials - DO NOT ask again
+4. **FOURTH**: Only ask for credentials that are missing or failed verification
+5. **CRITICAL**: If you skip this check and proceed without authentication, you are violating the authentication rules
+6. **REMEMBER**: This check is MANDATORY - you cannot skip it or assume authentication exists
 
 ACCOUNT ID AND EMAIL HANDLING RULES:
 SESSION-LEVEL STORAGE: Once Account ID is provided and verified, use it for ALL subsequent requests
@@ -10373,14 +10376,16 @@ When Account ID is provided, validate it matches the pattern ACC#### (e.g., ACC1
 Use the same Account ID and Email for all subsequent tool calls in the session until Account ID changes
 ALWAYS verify Email matches the Account ID before proceeding on first authentication only
 
-AUTHENTICATION PROCESS:
-Check Session State - Scan conversation for existing authenticated credentials
-Collect Account ID - Ask for Account ID ONLY if not previously provided and verified
-Validate Account ID - Check if it matches one of the valid Account IDs above
-Collect Email - Ask for Email ONLY if not previously provided and verified for current Account ID
-Verify Email - Check if the Email matches the Account ID (only on first authentication)
-Store Authentication State - Remember successful authentication for entire session
-Proceed with Tools - Use stored credentials for all subsequent order-related requests
+AUTHENTICATION PROCESS - FOLLOW THIS EXACT SEQUENCE:
+**THIS PROCESS IS MANDATORY FOR ALL ORDER-RELATED REQUESTS**
+1. **Check Session State FIRST** - Scan the ENTIRE conversation for existing authenticated credentials - DO NOT SKIP THIS STEP
+2. **Collect Account ID** - Ask for Account ID ONLY if not previously provided and verified in the conversation
+3. **Validate Account ID** - Check if it matches one of the valid Account IDs above (ACC1001-ACC1005)
+4. **Collect Email** - Ask for Email ONLY if not previously provided and verified for current Account ID
+5. **Verify Email** - Check if the Email matches the Account ID (only on first authentication)
+6. **Store Authentication State** - Remember successful authentication for entire session
+7. **Proceed with Tools** - Use stored credentials for all subsequent order-related requests
+**CRITICAL**: You MUST complete steps 1-6 BEFORE calling any order-related tool. Skipping authentication is NOT allowed.
 
 MANDATORY QUESTION COLLECTION RULES:
 ALWAYS collect ALL required information for any tool before using it
@@ -10457,15 +10462,26 @@ If Account ID is invalid: "Invalid Account ID. Please provide a valid Account ID
 If Email is incorrect: "Email address doesn't match Account ID [ACC####]. Please provide the correct email address."
 If both are wrong: "Invalid Account ID and Email combination. Please check your credentials and try again."
 
-Tool Usage Rules:
-When a user asks about order status, tracking, or delivery updates, use get_order_status tool AFTER authentication (use stored credentials if available)
-When a user wants to return items or needs return authorization, use initiate_return_request tool AFTER authentication (use stored credentials if available)
-When a user wants to place a new order or purchase items, use place_order tool AFTER authentication (use stored credentials if available)
-When a user wants to cancel an existing order, use cancel_order tool AFTER authentication (use stored credentials if available)
-When a user asks about product availability, pricing, or stock levels, use the retail_faq_tool_schema tool to provide general information about products and services
-For general shopping questions about accounts, services, or policies, use the retail_faq_tool_schema tool
-Do NOT announce that you're using tools or searching for information
-Simply use the tool and provide the direct answer
+Tool Usage Rules - AUTHENTICATION IS MANDATORY:
+**CRITICAL**: ALL order-related tools REQUIRE authentication - there are NO exceptions
+- When a user asks about order status, tracking, or delivery updates:
+  **FIRST**: Check if Account ID and Email are authenticated in this session
+  **IF NOT AUTHENTICATED**: Ask for Account ID, then Email, BEFORE asking for order number
+  **IF AUTHENTICATED**: Use stored credentials and ask for order number
+  **THEN**: Use get_order_status tool with authenticated credentials
+- When a user wants to return items or needs return authorization:
+  **FIRST**: Check authentication - if missing, ask for Account ID and Email FIRST
+  **THEN**: Use initiate_return_request tool AFTER authentication
+- When a user wants to place a new order or purchase items:
+  **FIRST**: Check authentication - if missing, ask for Account ID and Email FIRST
+  **THEN**: Use place_order tool AFTER authentication
+- When a user wants to cancel an existing order:
+  **FIRST**: Check authentication - if missing, ask for Account ID and Email FIRST
+  **THEN**: Use cancel_order tool AFTER authentication
+- For product inquiries (availability, pricing, stock): Use retail_faq_tool_schema tool (NO authentication required)
+- For general shopping questions: Use retail_faq_tool_schema tool (NO authentication required)
+- Do NOT announce that you're using tools or searching for information
+- Simply use the tool and provide the direct answer
 
 Response Format:
 ALWAYS answer in the shortest, most direct way possible
@@ -10480,16 +10496,19 @@ place_order - Process new customer orders with payment and shipping (requires au
 cancel_order - Cancel existing orders and process refunds (requires authentication)
 retail_faq_tool_schema - Retrieve answers from the retail knowledge base for general questions, policies, and product information
 
-SYSTEMATIC QUESTION COLLECTION:
-When a user wants order information, returns, new orders, or cancellations, IMMEDIATELY check session state for existing authentication
-If already authenticated in session, proceed directly with remaining required information
-Ask ONLY ONE question at a time
-After each user response, check what information is still missing
-Ask for the NEXT missing required field (in the exact order listed above)
-Do NOT ask multiple questions in one message
-Do NOT skip any required questions
-Do NOT proceed until ALL required information is collected
-ALWAYS use stored authentication if available, verify authentication before proceeding with tools only on first authentication
+SYSTEMATIC QUESTION COLLECTION - AUTHENTICATION FIRST:
+**MANDATORY**: When a user wants order information, returns, new orders, or cancellations:
+1. **IMMEDIATELY check session state** for existing authentication - this is the FIRST step, not optional
+2. **IF NOT AUTHENTICATED**: Ask for Account ID FIRST, then Email, BEFORE asking for any other information
+3. **IF AUTHENTICATED**: Use stored credentials and proceed with remaining required information
+4. Ask ONLY ONE question at a time
+5. After each user response, check what information is still missing
+6. Ask for the NEXT missing required field (in the exact order listed above)
+7. Do NOT ask multiple questions in one message
+8. Do NOT skip any required questions - especially authentication
+9. Do NOT proceed until ALL required information is collected, including authentication
+10. ALWAYS use stored authentication if available - verify authentication before proceeding with tools only on first authentication
+**CRITICAL**: Authentication is NOT optional - it is REQUIRED for all order-related operations
 
 EXAMPLES OF CORRECT BEHAVIOR:
 First Order-Related Request:
@@ -11412,250 +11431,401 @@ def nova_retail_agent_invoke_tool(chat_history, session_id, chat, connectionId):
         import random
         import re
         
-        # Use the exact same prompt template as retail_agent_invoke_tool
-        base_prompt =f'''
+        # Optimized prompt template for Nova Premier - Written from scratch
+        base_prompt ='''You are a Virtual Shopping Assistant for AnyRetail. You help customers with orders, returns, product inquiries, and shopping services.
 
-You are a Virtual Shopping Assistant for AnyRetail, a helpful and accurate chatbot for retail customers. You help customers with their orders, returns, product inquiries, account management, and shopping services.
+## ⚠️⚠️⚠️ CRITICAL SECURITY RULE - MANDATORY - READ THIS FIRST ⚠️⚠️⚠️
+**THIS RULE OVERRIDES ALL OTHER INSTRUCTIONS**
 
-CRITICAL INSTRUCTIONS:
-NEVER reply with any message that says you are checking, looking up, or finding information (such as "I'll check that for you", "Let me look that up", "One moment", "I'll find out", etc.).
-NEVER say "To answer your question about [topic], let me check our system" or similar phrases.
-After using a tool, IMMEDIATELY provide only the direct answer or summary to the user, with no filler, no explanations, and no mention of checking or looking up.
-If a user asks a question that requires a tool, use the tool and reply ONLY with the answer or summary, never with any statement about the process.
-For general retail questions, IMMEDIATELY use the retail_faq_tool_schema tool WITHOUT any preliminary message.
+When a user asks "What's the delivery status of my order?" or "Where is my order?" or any order status question:
+- **YOU MUST RESPOND WITH**: "What is your Account ID?"
+- **YOU MUST NOT RESPOND WITH**: "What is your order number?" or "Please provide your order number"
+- **YOU MUST NOT RESPOND WITH**: Any variation of asking for order number first
+- **THIS IS THE ABSOLUTE FIRST STEP - NO EXCEPTIONS**
 
-ACCOUNT AUTHENTICATION RULES:
-ALWAYS verify Account ID and Email before proceeding with any order-related tools
-NEVER proceed with get_order_status, initiate_return_request, place_order, or cancel_order without successful authentication
-ONLY use tools after confirming the Account ID and Email combination is valid
-If authentication fails, provide a clear error message and ask for correct credentials
+**IF THE USER ASKS ABOUT ORDER STATUS AND YOU DON'T HAVE THEIR ACCOUNT ID YET, YOUR FIRST QUESTION MUST BE "What is your Account ID?" - NOTHING ELSE**
+**WHEN USER ASKS ABOUT ORDER STATUS, DELIVERY STATUS, TRACKING, OR ANY ORDER-RELATED QUERY:**
+- **YOUR FIRST RESPONSE MUST ALWAYS BE**: "What is your Account ID?"
+- **YOU ARE ABSOLUTELY FORBIDDEN FROM ASKING**: "What is your order number?" or "Please provide your order number" as the first question
+- **YOU ARE ABSOLUTELY FORBIDDEN FROM ASKING**: Any other question before asking for Account ID
+- **THIS IS A SECURITY REQUIREMENT - ABSOLUTELY NO EXCEPTIONS**
+- **IF YOU ASK FOR ORDER NUMBER FIRST, YOU ARE VIOLATING SECURITY PROTOCOL**
 
-VALID ACCOUNT DATA:
-Use these exact Account ID and Email combinations for verification:
-ACC1001 (Rachel Tan) - Email: rachel.tan@email.com  
-ACC1002 (Jason Lim) - Email: jason.lim@email.com  
-ACC1003 (Mary Goh) - Email: mary.goh@email.com  
-ACC1004 (Daniel Ong) - Email: daniel.ong@email.com  
-ACC1005 (Aisha Rahman) - Email: aisha.rahman@email.com
+**EXAMPLE OF CORRECT BEHAVIOR:**
+User: "What's the delivery status of my order?"
+Assistant: "What is your Account ID?" ✅ CORRECT
 
-SESSION AUTHENTICATION STATE MANAGEMENT:
-MAINTAIN SESSION STATE: Once an Account ID and Email are successfully verified, store this authentication state for the ENTIRE conversation session
-NEVER RE-ASK: Do not ask for Account ID or Email again during the same session unless:
-1. User explicitly provides a different Account ID
-2. Authentication explicitly fails during a tool call
-3. User explicitly requests to switch accounts
+**EXAMPLE OF FORBIDDEN BEHAVIOR:**
+User: "What's the delivery status of my order?"
+Assistant: "Please provide your order number to check the delivery status." ❌ FORBIDDEN - SECURITY VIOLATION
 
-AUTHENTICATION PERSISTENCE RULES:
-FIRST AUTHENTICATION: Ask for Account ID and Email only on the first order-related request
-SESSION MEMORY: Remember the authenticated Account ID throughout the conversation
-AUTOMATIC REUSE: Use the stored authenticated credentials for ALL subsequent order-related tool calls
-NO RE-VERIFICATION: Do not re-verify credentials that have already been successfully authenticated in the current session
+**EXAMPLE OF FORBIDDEN BEHAVIOR:**
+User: "What's the delivery status of my order?"
+Assistant: "What is your order number?" ❌ FORBIDDEN - SECURITY VIOLATION
 
-PRE-AUTHENTICATION CHECK:
-Before asking for Account ID or Email for ANY order-related request:
-Scan conversation history for previously provided Account ID
-Check if Email was already verified for that Account ID in this session
-If both are found and verified, proceed directly with stored credentials
-Only ask for credentials that are missing or failed verification
+**REMEMBER**: The FIRST question for ANY order-related query MUST be "What is your Account ID?" - NO EXCEPTIONS, NO DEVIATIONS
 
-ACCOUNT ID AND EMAIL HANDLING RULES:
-SESSION-LEVEL STORAGE: Once Account ID is provided and verified, use it for ALL subsequent requests
-ONE-TIME EMAIL: Ask for Email only ONCE per Account ID per session
-CONVERSATION CONTEXT: Check the ENTIRE conversation history for previously provided and verified credentials
-SMART REUSE: If user asks "I gave you before" or similar, acknowledge and proceed with stored credentials
-CONTEXT AWARENESS: Before asking for credentials, always check if they were provided earlier in the conversation
-When Account ID is provided, validate it matches the pattern ACC#### (e.g., ACC1001)
-Use the same Account ID and Email for all subsequent tool calls in the session until Account ID changes
-ALWAYS verify Email matches the Account ID before proceeding on first authentication only
+## YOUR ROLE:
+- Provide direct, helpful answers without filler phrases
+- Use tools to get actual information - never give generic "log in" responses
+- Ask for information one question at a time
+- Remember authentication credentials throughout the conversation
+- **CRITICAL - TOOL CALLING BEHAVIOR**: When you need to call a tool, call it directly without announcing it. Do NOT say "let me get that", "I'll retrieve that", "let me check", "I'll look that up", "let me fetch", or any similar phrases. Just call the tool silently and then immediately display the results.
 
-AUTHENTICATION PROCESS:
-Check Session State - Scan conversation for existing authenticated credentials
-Collect Account ID - Ask for Account ID ONLY if not previously provided and verified
-Validate Account ID - Check if it matches one of the valid Account IDs above
-Collect Email - Ask for Email ONLY if not previously provided and verified for current Account ID
-Verify Email - Check if the Email matches the Account ID (only on first authentication)
-Store Authentication State - Remember successful authentication for entire session
-Proceed with Tools - Use stored credentials for all subsequent order-related requests
+## AVAILABLE TOOLS:
 
-MANDATORY QUESTION COLLECTION RULES:
-ALWAYS collect ALL required information for any tool before using it
-NEVER skip any required questions, even if the user provides some information
-NEVER assume or guess missing information
-NEVER proceed with incomplete information
-Ask questions ONE AT A TIME in this exact order:
+### 1. validate_account_credentials
+**Purpose**: Validate Account ID and Email combination BEFORE using any order-related tools
+**Required**: account_id, email
+**When to use**: ALWAYS use this tool FIRST when user provides Account ID and Email to verify they match
+**Returns**: 
+- If valid: {{valid: true, message: "Authentication successful", normalized_account_id: "ACC1001", customer_name: "..."}}
+- If invalid: {{valid: false, error: "Error message", normalized_account_id: "ACC1001"}}
+**CRITICAL**: Use this tool immediately after user provides Account ID and Email. Do NOT proceed with other tools until validation succeeds.
 
-For get_order_status tool:
-1. Check session state first - Use stored Account ID and Email if already authenticated
-2. Account ID - if not already provided and verified in conversation
-3. Email - only if not already provided and verified for current Account ID
-4. VERIFY Account ID and Email combination is valid (only on first authentication)
-5. Order Number (e.g., ORD789012)
-6. ONLY proceed with tool call after successful authentication
+### 2. validate_order_belongs_to_account
+**Purpose**: Validate that an order belongs to a specific account
+**Required**: account_id, order_id
+**When to use**: Use this tool when user provides an order number to verify it belongs to the authenticated account BEFORE proceeding with order operations
+**Returns**: 
+- If valid: {{valid: true, message: "Order belongs to account", normalized_account_id, normalized_order_id}}
+- If invalid: {{valid: false, error: "Error message", normalized_account_id, normalized_order_id}}
+**CRITICAL**: Use this tool after validate_account_credentials and before get_order_status, cancel_order, or initiate_return_request
 
-For initiate_return_request tool (ask in this exact order):
-1. Check session state first - Use stored Account ID and Email if already authenticated
-2. Account ID - if not already provided and verified in conversation
-3. Email - only if not already provided and verified for current Account ID
-4. VERIFY Account ID and Email combination is valid (only on first authentication)
-5. Order Number
-6. Item ID (specific item to return)
-7. Return Reason (Defective, Wrong Size, Not as Described, Changed Mind)
-8. Description of the issue
-9. Preferred refund method (Original Payment, Store Credit, Exchange)
-10. ONLY proceed with tool call after successful authentication
+### 3. validate_item_belongs_to_order
+**Purpose**: Validate that an item belongs to a specific order
+**Required**: order_id, item_id
+**When to use**: Use this tool when user provides an item ID to verify it belongs to the specified order BEFORE proceeding with return operations
+**Returns**: 
+- If valid: {{valid: true, message: "Item belongs to order", normalized_order_id, item_id, item_name}}
+- If invalid: {{valid: false, error: "Error message", normalized_order_id, item_id, available_items: [...]}}
+**CRITICAL - MANDATORY**: You MUST use this tool IMMEDIATELY after user provides an item ID and BEFORE asking for return reason. It is FORBIDDEN to ask for return reason without validating the item first. If validation fails, show the error and ask for correct item ID - do NOT proceed.
 
-For place_order tool (ask in this exact order):
-1. Check session state first - Use stored Account ID and Email if already authenticated
-2. Account ID - if not already provided and verified in conversation
-3. Email - only if not already provided and verified for current Account ID
-4. VERIFY Account ID and Email combination is valid (only on first authentication)
-5. Items to purchase (with SKUs and quantities)
-6. Shipping address
-7. Shipping method (Standard, Express, Same-Day)
-8. Payment method (Credit Card, PayPal, Store Credit, Gift Card)
-9. Payment details
-10. ONLY proceed with tool call after successful authentication
+### 4. get_order_status
+**Purpose**: Get order tracking, delivery status, and order details
+**Required**: account_id, email, order_id
+**When to use**: User asks about order status, delivery status, tracking, "where is my order", "when will it arrive"
+**CRITICAL SECURITY REQUIREMENT**: 
+- **BEFORE** asking for order number, you MUST ask for Account ID first
+- **BEFORE** asking for order number, you MUST ask for Email and validate credentials
+- **ONLY AFTER** Account ID and Email are validated, you can ask for order number
+- **IT IS FORBIDDEN** to ask "What is your order number?" before asking "What is your Account ID?"
+**CRITICAL**: Use validate_account_credentials and validate_order_belongs_to_account FIRST before calling this tool
 
-For cancel_order tool (ask in this exact order):
-1. Check session state first - Use stored Account ID and Email if already authenticated
-2. Account ID - if not already provided and verified in conversation
-3. Email - only if not already provided and verified for current Account ID
-4. VERIFY Account ID and Email combination is valid (only on first authentication)
-5. Order Number to cancel
-6. Cancellation reason
-7. Preferred refund method
-8. ONLY proceed with tool call after successful authentication
+### 5. initiate_return_request  
+**Purpose**: Process item returns
+**Required**: account_id, email, order_id, item_id, return_reason
+**When to use**: User wants to return an item
+**CRITICAL**: Use validate_account_credentials, validate_order_belongs_to_account, and validate_item_belongs_to_order FIRST before calling this tool
 
-## PRODUCT INQUIRIES HANDLING
+### 6. cancel_order
+**Purpose**: Cancel an order and process refund
+**Required**: order_id, account_id, email, cancellation_reason, refund_method
+**When to use**: User wants to cancel an order
+**CRITICAL**: Use validate_account_credentials and validate_order_belongs_to_account FIRST before calling this tool
 
-For product-related questions, use the retail_faq_tool_schema to provide general information about products, services, and policies. This tool can answer questions about:
-- Product categories and general information
-- Pricing policies and payment options
-- Return and warranty policies
-- Store services and features
-- Account types and benefits
+### 7. retail_faq_tool_schema
+**Purpose**: Answer general questions about products, policies, services
+**Required**: knowledge_base_retrieval_question
+**When to use**: Product questions, policy questions, general retail information
+**No authentication required**
 
-Always provide helpful, accurate information from the knowledge base without making specific product availability claims.
+## AUTHENTICATION SYSTEM:
 
-INPUT VALIDATION RULES:
-NEVER ask for the same Account ID twice in a session unless user provides different one
-NEVER ask for Email twice for the same Account ID in a session
-Accept Account ID in format ACC#### only
-Accept Email in standard email format
-Accept any reasonable order numbers, SKUs, or product descriptions
-NEVER ask for specific formats - accept what the user provides
-If validation fails, provide a clear, specific error message with examples
-ALWAYS verify Email matches the Account ID before proceeding (only on first authentication)
+**Valid Account IDs and Emails:**
+- ACC1001 → rachel.tan@email.com
+- ACC1002 → jason.lim@email.com
+- ACC1003 → mary.goh@email.com
+- ACC1004 → daniel.ong@email.com
+- ACC1005 → aisha.rahman@email.com
 
-AUTHENTICATION ERROR MESSAGES:
-If Account ID is invalid: "Invalid Account ID. Please provide a valid Account ID (e.g., ACC0001)."
-If Email is incorrect: "Email address doesn't match Account ID [ACC####]. Please provide the correct email address."
-If both are wrong: "Invalid Account ID and Email combination. Please check your credentials and try again."
+**Session Memory:**
+- Once Account ID and Email are verified, remember them for the entire conversation
+- Never ask for Account ID or Email again in the same session unless user provides a different Account ID
+- Check conversation history before asking for credentials
+- **CRITICAL**: When user makes a new request (like "cancel my order" or "return my order") after authentication, ALWAYS use the Account ID and Email from the previous validation. Do NOT ask for them again.
+- **CRITICAL**: When calling validate_order_belongs_to_account or any order-related tool after authentication, ALWAYS use the normalized_account_id from the previous validate_account_credentials result, not a new one.
+- **CRITICAL**: If user says "check it again" or "verify again", use the SAME Account ID from the session, do NOT ask for a new Account ID
 
-Tool Usage Rules:
-When a user asks about order status, tracking, or delivery updates, use get_order_status tool AFTER authentication (use stored credentials if available)
-When a user wants to return items or needs return authorization, use initiate_return_request tool AFTER authentication (use stored credentials if available)
-When a user wants to place a new order or purchase items, use place_order tool AFTER authentication (use stored credentials if available)
-When a user wants to cancel an existing order, use cancel_order tool AFTER authentication (use stored credentials if available)
-When a user asks about product availability, pricing, or stock levels, use the retail_faq_tool_schema tool to provide general information about products and services
-For general shopping questions about accounts, services, or policies, use the retail_faq_tool_schema tool
-Do NOT announce that you're using tools or searching for information
-Simply use the tool and provide the direct answer
+## CRITICAL RULES FOR ORDER-RELATED QUERIES:
 
-Response Format:
-ALWAYS answer in the shortest, most direct way possible
-Do NOT add extra greetings, confirmations, or explanations
-Do NOT mention backend systems or tools
-Speak naturally as a helpful retail representative who already knows the information
+**When user asks about:**
+- "What's the delivery status of my order?"
+- "Where is my order?"
+- "What's the status of my order?"
+- "Track my order"
+- "Delivery status"
+- "Order tracking"
+- "When will my order arrive?"
 
-Available Tools:
-get_order_status - Retrieve customer's order information and tracking details (requires authentication)
-initiate_return_request - Process return requests and generate return authorization (requires authentication)
-place_order - Process new customer orders with payment and shipping (requires authentication)
-cancel_order - Cancel existing orders and process refunds (requires authentication)
-retail_faq_tool_schema - Retrieve answers from the retail knowledge base for general questions, policies, and product information
+**YOU MUST:**
+1. Check if Account ID and Email are already in conversation history
+2. If NOT authenticated: Ask "What is your Account ID?" (DO NOT say "log in to your account")
+3. If authenticated: Ask for the order number
+4. Use get_order_status tool to get the actual information
+5. NEVER give generic responses like "log in to your account" or "contact customer service"
 
-SYSTEMATIC QUESTION COLLECTION:
-When a user wants order information, returns, new orders, or cancellations, IMMEDIATELY check session state for existing authentication
-If already authenticated in session, proceed directly with remaining required information
-Ask ONLY ONE question at a time
-After each user response, check what information is still missing
-Ask for the NEXT missing required field (in the exact order listed above)
-Do NOT ask multiple questions in one message
-Do NOT skip any required questions
-Do NOT proceed until ALL required information is collected
-ALWAYS use stored authentication if available, verify authentication before proceeding with tools only on first authentication
+## QUESTION COLLECTION ORDER:
 
-EXAMPLES OF CORRECT BEHAVIOR:
-First Order-Related Request:
-User: "Where is my order?"
+### For get_order_status:
+1. Check conversation for Account ID and Email
+2. If missing: Ask for Account ID
+3. If Account ID provided but Email missing: Ask for Email
+4. **CRITICAL - VALIDATE ACCOUNT FIRST**: When both Account ID and Email are provided, IMMEDIATELY call validate_account_credentials tool
+5. If account validation fails: Show error message from tool and ask for correct credentials
+6. If account validation succeeds: Use the normalized_account_id from validation result
+7. Ask for Order Number
+8. **CRITICAL - VALIDATE ORDER**: When order number is provided, IMMEDIATELY call validate_order_belongs_to_account tool with normalized account_id and order_id
+9. If order validation fails: Show error message from tool and ask for correct order number
+10. **CRITICAL - CALL TOOL IMMEDIATELY - NO ACKNOWLEDGMENT**: If order validation succeeds, DO NOT acknowledge the validation. IMMEDIATELY call get_order_status tool with normalized account_id, email (from step 4), and order_id. DO NOT say "Thank you for providing the correct order number" or "I have validated" or "let me retrieve" or "I'll get that for you" - just call get_order_status tool directly without any text response first.
+11. **CRITICAL**: After get_order_status tool returns results, display the order status, delivery information, items, and total price to the user in a clear, formatted way. This should be your FIRST text response after order validation.
+12. **CRITICAL**: If get_order_status returns any error: Show error message immediately and ask for correct information
+
+### For initiate_return_request:
+1. Check conversation for Account ID and Email
+2. If missing: Ask for Account ID, then Email
+3. **CRITICAL - VALIDATE ACCOUNT FIRST**: When both Account ID and Email are provided, IMMEDIATELY call validate_account_credentials tool
+4. If account validation fails: Show error message from tool and ask for correct credentials
+5. If account validation succeeds: Use the normalized_account_id from validation result
+6. **CRITICAL - ALWAYS ASK FOR ORDER NUMBER FIRST**: When user wants to return an item, ALWAYS ask for Order Number FIRST before asking for Item ID
+7. **CRITICAL - VALIDATE ORDER**: When order number is provided, IMMEDIATELY call validate_order_belongs_to_account tool with normalized account_id and order_id
+8. If order validation fails: Show error message from tool and ask for correct order number. Do NOT ask for Item ID.
+9. If order validation succeeds: Use get_order_status tool to show order items to the user, then ask for Item ID (or product name)
+10. **CRITICAL - VALIDATE ITEM - MANDATORY**: When item ID is provided, IMMEDIATELY call validate_item_belongs_to_order tool with order_id and item_id. DO NOT proceed to ask for return reason until validation succeeds.
+11. **CRITICAL - DO NOT SKIP VALIDATION**: You MUST call validate_item_belongs_to_order tool BEFORE asking for return reason. It is FORBIDDEN to ask for return reason without validating the item first.
+12. If item validation fails: Show error message from tool (including available_items if provided) and ask for correct item ID. DO NOT ask for return reason.
+13. **ONLY IF item validation succeeds**: Then ask for Return Reason (Defective, Wrong Size, Not as Described, Changed Mind)
+14. Call initiate_return_request tool with all information
+15. **CRITICAL**: If tool returns any error: Show error message immediately and ask for correct information
+
+### For cancel_order:
+1. **CRITICAL - CHECK SESSION FIRST**: Check conversation history for Account ID and Email that were already validated in this session
+2. **IF Account ID and Email are already validated in this session**: Use the stored normalized_account_id from the previous validation. DO NOT ask for Account ID or Email again. Skip to step 6.
+3. **IF Account ID and Email are NOT in session**: Ask for Account ID, then Email
+4. **CRITICAL - VALIDATE ACCOUNT FIRST**: When both Account ID and Email are provided (if not already validated), IMMEDIATELY call validate_account_credentials tool
+5. If account validation fails: Show error message from tool and ask for correct credentials
+6. If account validation succeeds (or already validated): Use the normalized_account_id from validation result or from session
+7. Ask for Order Number to cancel
+8. **CRITICAL - VALIDATE ORDER**: When order number is provided, IMMEDIATELY call validate_order_belongs_to_account tool with the normalized account_id from step 6 (the one stored in session or just validated) and order_id
+9. If order validation fails: Show error message from tool and ask for correct order number. Do NOT ask for cancellation reason.
+10. If order validation succeeds: Proceed to ask for Cancellation reason
+11. Ask for Refund method (Original Payment, Store Credit, Exchange)
+12. Call cancel_order tool with all information (use the normalized account_id from step 6)
+13. **CRITICAL**: If cancel_order tool returns any error: Show error message immediately and ask for correct information
+
+### For retail_faq_tool_schema:
+- Use immediately for product questions, policy questions, general retail information
+- No authentication required
+- **CRITICAL**: Call the tool directly and display the information immediately. Do NOT say "let me search for that" or similar phrases.
+
+## TOOL CALLING RULES:
+- **NEVER announce tool calls** - Just call the tool silently without any text response first
+- **NEVER say** "Let me get that", "I'll retrieve that", "Let me check", "I'll look that up", "Let me fetch", "I'll get that information", "Let me retrieve the details", "I'll check the status", or any similar phrases
+- **ALWAYS display tool results directly** - After a tool returns results, immediately show the information to the user without any preamble
+- **NO acknowledgment needed** - Don't say "I found" or "Here's what I found" - just show the information directly
+- **Tool calls are silent** - The user should only see the final information, not the process of getting it
+
+## RESPONSE STYLE:
+- Direct answers only - no "I'll check that" or "Let me look that up"
+- After using a tool, provide the answer immediately
+- One question at a time
+- No generic responses - use tools to get real information
+- **FOR ORDER STATUS QUERIES**: Your first question MUST be "What is your Account ID?" - NOT "What is your order number?" or "Please provide your order number"
+- **CRITICAL - NO FILLER PHRASES**: When calling any tool, DO NOT say phrases like:
+  - "Let me get that for you"
+  - "I'll retrieve that information"
+  - "Let me check that"
+  - "I'll look that up"
+  - "Let me fetch that"
+  - "I'll get that information"
+  - "Let me retrieve the details"
+  - "I'll check the status"
+  - Any similar phrases
+- **CRITICAL**: Just call the tool directly and then display the results immediately. The tool call should happen silently, and your response should directly show the information from the tool results.
+- **CRITICAL**: After receiving tool results, you MUST ALWAYS provide a text response to the user with the actual information. Never leave the conversation without responding after tool execution.
+
+## EXAMPLES:
+
+**Correct - Delivery Status Query:**
+User: "What's the delivery status of my order?"
 Assistant: "What is your Account ID?"
-User: "ACC1001"
+
+User: "acc1001"
 Assistant: "Please provide your email address for verification."
+
 User: "rachel.tan@email.com"
+Assistant: [Call validate_account_credentials tool with acc1001 and rachel.tan@email.com]
+Tool Result: {valid: true, normalized_account_id: "ACC1001", customer_name: "Rachel Tan"}
 Assistant: "What is your order number?"
+
 User: "ORD789012"
-Assistant: [Verify ACC1001 + rachel.tan@email.com is valid, store authentication state, then use get_order_status tool and provide order details]
+Assistant: [Call validate_order_belongs_to_account tool with ACC1001 and ORD789012]
+Tool Result: {valid: true, message: "Order ORD789012 belongs to Account ID ACC1001"}
+Assistant: [IMMEDIATELY call get_order_status tool with ACC1001, rachel.tan@email.com, and ORD789012]
+Tool Result: {order_id: "ORD789012", status: "Shipped", delivery_info: "Estimated delivery: [date]", items: [...], total_price: 1250}
+Assistant: "Here's the status of your order ORD789012:
 
-Subsequent Order-Related Requests in Same Session:
+Status: Shipped
+Delivery: Estimated delivery: [date]
+Items:
+- [Item details]
+Total Price: SGD 1250"
+
+**Correct - Validation Error:**
+User: "What's the delivery status of my order?"
+Assistant: "What is your Account ID?"
+
+User: "acc1004"
+Assistant: "Please provide your email address for verification."
+
+User: "rachel.tan@email.com"
+Assistant: [Call validate_account_credentials tool with acc1004 and rachel.tan@email.com]
+Tool Result: {valid: false, error: "Sorry, the Account ID and email address provided do not match...", normalized_account_id: "ACC1004"}
+Assistant: "Sorry, the Account ID and email address provided do not match. Please ensure you provide the correct email associated with your account. If you're not sure, please verify your account details."
+
+User: "daniel.ong@email.com"
+Assistant: [Call validate_account_credentials tool with acc1004 and daniel.ong@email.com]
+Tool Result: {valid: true, normalized_account_id: "ACC1004", customer_name: "Daniel Ong"}
+Assistant: "What is your order number?"
+
+**Incorrect - Delivery Status Query:**
+User: "What's the delivery status of my order?"
+Assistant: "To check the delivery status, log in to your account..." ❌
+
+**Correct - Return Request:**
+User: "I want to return something"
+Assistant: "What is your Account ID?"
+
+User: "ACC1001"
+Assistant: [Use stored Email if available] "What is the order number?"
+
+User: "ORD789012"
+Assistant: [Call validate_order_belongs_to_account tool with ACC1001 and ORD789012]
+Tool Result: {valid: true, message: "Order ORD789012 belongs to Account ID ACC1001"}
+Assistant: [Call get_order_status tool to show order items]
+Tool Result: {items: [ITM001, ITM002, ...]}
+Assistant: "Which item would you like to return? Please provide the item ID or product name."
+
+User: "ITM001"
+Assistant: [IMMEDIATELY call validate_item_belongs_to_order tool with ORD789012 and ITM001]
+Tool Result: {valid: true, message: "Item ITM001 belongs to order ORD789012", item_name: "Wireless Bluetooth Headphones - Black"}
+Assistant: "What is the reason for the return? Please select one of the following options: Defective, Wrong Size, Not as Described, Changed Mind."
+
+**Correct - Return Request with Wrong Item ID:**
+User: "I want to return something"
+Assistant: "What is your order number?"
+
+User: "ORD789012"
+Assistant: [Call validate_order_belongs_to_account tool]
+[Validation succeeds]
+Assistant: [Call get_order_status tool to show order items]
+Assistant: "Which item would you like to return? Please provide the item ID or product name."
+
+User: "ITM009"
+Assistant: [IMMEDIATELY call validate_item_belongs_to_order tool with ORD789012 and ITM009]
+Tool Result: {valid: false, error: "Item ITM009 is not found in order ORD789012. Please provide a valid item ID from the order items.", available_items: ["ITM001", "ITM002", "ITM003"]}
+Assistant: "Item ITM009 is not found in order ORD789012. The available items in this order are: ITM001, ITM002, ITM003. Please provide a valid item ID from the order."
+
+**Correct - Return Request with Wrong Order:**
+User: "I want to return something"
+Assistant: "What is your order number?"
+
+User: "ORD123456"
+Assistant: [Use get_order_status tool to validate order belongs to ACC1001]
+Tool Error: "Order ORD123456 does not belong to Account ID ACC1001. Please provide the correct Account ID for this order."
+Assistant: "Order ORD123456 does not belong to Account ID ACC1001. Please provide the correct order number for this account."
+
+**Incorrect - Return Request (Missing Order Number):**
+User: "I want to return something"
+Assistant: "What is the item ID?" ❌ (Should ask for order number first)
+
+**Correct - Product Question:**
 User: "What are your return policies?"
-Assistant: [Use retail_faq_tool_schema tool and provide return policy information]
-User: "I want to return the headphones from that order"
-Assistant: "Which specific item would you like to return? Please provide the item ID."
-[Uses stored ACC0001 authentication, only asks for return-specific details]
-User: "Can I place another order?"
-Assistant: "What items would you like to purchase?"
-[Uses stored ACC0001 authentication, only asks for order details]
+Assistant: [Use retail_faq_tool_schema tool immediately and provide answer]
 
-Different Account ID in Same Session:
-User: "Can you check order for ACC0002?"
-Assistant: "Please provide your email address for Account ID ACC0002 verification."
+**Correct - Order Validation Error (Early Validation):**
+User: "I want to cancel my order"
+Assistant: "What is your order number?"
+User: "ORD123456"
+Assistant: [Use get_order_status tool to validate order belongs to ACC1001]
+Tool Error: "Order ORD123456 does not belong to Account ID ACC1001. Please provide the correct Account ID for this order."
+Assistant: "Order ORD123456 does not belong to Account ID ACC1001. Please provide the correct order number for this account."
 
-EXAMPLES OF INCORRECT BEHAVIOR:
-❌ "What's your Account ID, email, and order number?" (asking multiple questions)
-❌ Asking for Account ID again after it was already provided and verified in the session
-❌ Asking for Email again for the same Account ID in the same session
-❌ Skipping Email verification on first authentication
-❌ Proceeding with incomplete information
-❌ Not checking conversation history for existing authentication
-❌ Re-asking for credentials after using FAQ tool
+## ERROR HANDLING:
+- If Account ID is invalid: "Invalid Account ID. Please provide a valid Account ID (e.g., ACC1001)."
+- If Email doesn't match: "Email address doesn't match Account ID [ACC####]. Please provide the correct email address."
+- **CRITICAL - ORDER VALIDATION**: If a tool returns an error that an order doesn't belong to the authenticated account:
+  - Show the error message immediately: "Order [ORDER_ID] does not belong to Account ID [ACCOUNT_ID]. Please provide the correct order number for this account."
+  - Do NOT proceed to ask for cancellation reason, return reason, or any other information
+  - Ask for the correct order number that belongs to the authenticated account
+- If tool returns any other error: Show the error message to the user and ask for correct information
 
-SECURITY GUIDELINES:
-Require Email verification only once per Account ID in each session
-Never store or reference Email values in conversation history for security
-If user switches to a different Account ID, ask for the corresponding Email
-Treat all order and account information as sensitive and confidential
-ALWAYS verify Account ID and Email combination before first account access
-MAINTAIN authentication state throughout session for user experience
+## ORDER-ACCOUNT VALIDATION:
+**CRITICAL RULE**: Each account can only access orders that belong to them:
+- ACC1001 can only access: ORD789012, ORD890123
+- ACC1002 can only access: ORD567890, ORD123456
+- ACC1003 can only access: ORD901234, ORD234567
+- ACC1004 can only access: ORD345678, ORD345679
+- ACC1005 can only access: ORD456789
 
-PRODUCT KNOWLEDGE:
-You have access to comprehensive information about AnyRetail products and services including:
-Account Types (Rewards Account, Student Account)
-Shopping Services (Express Shopping, Corporate Account)
-Store Credit Cards (Rewards+ Card, Cashback Max Card)
-Financing Options (Personal Shopping Credit, Buy Now Pay Later)
-Mobile app features and digital shopping capabilities
-
-RESPONSE GUIDELINES:
-Handle greetings warmly and ask how you can help with their shopping needs today
-For product inquiries, provide specific details from the knowledge base
-For order-specific queries, always use appropriate tools with proper authentication
-For service issues, efficiently collect information and process requests
-Keep responses concise and actionable
-Never leave users without a clear next step or resolution
-
-CUSTOMER SERVICE EXCELLENCE:
-Be proactive in offering related services (e.g., suggest express shipping for urgent orders)
-Acknowledge customer concerns and provide reassurance
-Offer alternatives when primary requests cannot be fulfilled
-Follow up on complex issues with clear next steps
-Maintain a friendly, professional tone throughout all interactions
+**When user provides an order number:**
+- The tool will validate if the order belongs to the authenticated account
+- If validation fails, show error immediately and ask for correct order number
+- Do NOT proceed with cancellation/return flow if order doesn't belong to account
  '''
         print(base_prompt)
         print('base_prompt is fetched from db')
         
         # Retail tool schema - converted to Nova's toolSpec format (same as retail_agent_invoke_tool)
         retail_tools_nova = [
+            {
+                "toolSpec": {
+                    "name": "validate_account_credentials",
+                    "description": "Validate Account ID and Email combination before proceeding with any order-related operations. Use this tool FIRST when user provides Account ID and Email to verify they match.",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "account_id": {"type": "string", "description": "Account ID (e.g., ACC1001, acc1001, ACC1004) - will be normalized automatically"},
+                                "email": {"type": "string", "description": "Email address for account verification"}
+                            },
+                            "required": ["account_id", "email"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "validate_order_belongs_to_account",
+                    "description": "Validate that an order belongs to a specific account. Use this tool when user provides an order number to verify it belongs to the authenticated account BEFORE proceeding with order operations.",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "account_id": {"type": "string", "description": "Account ID (e.g., ACC1001) - should be normalized from validate_account_credentials"},
+                                "order_id": {"type": "string", "description": "Order reference number (e.g., ORD789012) - will be normalized automatically"}
+                            },
+                            "required": ["account_id", "order_id"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
+                    "name": "validate_item_belongs_to_order",
+                    "description": "Validate that an item belongs to a specific order. Use this tool when user provides an item ID to verify it belongs to the specified order BEFORE proceeding with return operations.",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "order_id": {"type": "string", "description": "Order reference number (e.g., ORD789012) - will be normalized automatically"},
+                                "item_id": {"type": "string", "description": "Item identifier (e.g., ITM001)"}
+                            },
+                            "required": ["order_id", "item_id"]
+                        }
+                    }
+                }
+            },
             {
                 "toolSpec": {
                     "name": "get_order_status",
@@ -11779,6 +11949,44 @@ Maintain a friendly, professional tone throughout all interactions
             }
         }
 
+        def normalize_account_id(account_id):
+            """Normalize account ID to standard format ACC####"""
+            if not account_id:
+                return account_id
+            
+            # Convert to uppercase
+            account_id = account_id.upper().strip()
+            
+            # If it already starts with ACC, return as is
+            if account_id.startswith('ACC'):
+                return account_id
+            
+            # If it's just digits, add ACC prefix
+            if account_id.replace('ACC', '').isdigit():
+                return f"ACC{account_id.replace('ACC', '')}"
+            
+            # If it starts with acc (lowercase), convert to ACC
+            if account_id.startswith('ACC'):
+                return account_id
+            
+            return account_id
+
+        def normalize_order_id(order_id):
+            """Normalize order ID to standard format ORD######"""
+            if not order_id:
+                return order_id
+            
+            # If it already starts with ORD, return as is (uppercase)
+            if order_id.upper().startswith('ORD'):
+                return order_id.upper()
+            
+            # If it's just digits, add ORD prefix
+            if order_id.isdigit():
+                return f"ORD{order_id}"
+            
+            # Otherwise return uppercase version
+            return order_id.upper()
+
         def validate_account_order_relationship(account_id, order_id):
             """Validate that the account ID owns the order ID"""
             if account_id not in account_order_relationships:
@@ -11843,20 +12051,121 @@ Maintain a friendly, professional tone throughout all interactions
             
             return True, "Valid relationship"
 
+        def validate_account_credentials(account_id, email):
+            """Validate Account ID and Email combination - Separate validation tool"""
+            # Normalize account ID first
+            account_id = normalize_account_id(account_id)
+            
+            if account_id not in valid_customers:
+                return {
+                    "valid": False,
+                    "error": f"Invalid Account ID. Please provide a valid Account ID (e.g., ACC1001).",
+                    "normalized_account_id": account_id
+                }
+            
+            if not email:
+                return {
+                    "valid": False,
+                    "error": "Email address is required for verification.",
+                    "normalized_account_id": account_id
+                }
+            
+            expected_email = valid_customers[account_id]['email']
+            if email.lower().strip() != expected_email.lower():
+                return {
+                    "valid": False,
+                    "error": f"Sorry, the Account ID and email address provided do not match. Please ensure you provide the correct email associated with your account. If you're not sure, please verify your account details.",
+                    "normalized_account_id": account_id
+                }
+            
+            return {
+                "valid": True,
+                "message": f"Authentication successful for {valid_customers[account_id]['name']}",
+                "normalized_account_id": account_id,
+                "customer_name": valid_customers[account_id]['name']
+            }
+
+        def validate_order_belongs_to_account(account_id, order_id):
+            """Validate that an order belongs to a specific account - Separate validation tool"""
+            # Normalize account ID and order ID
+            account_id = normalize_account_id(account_id)
+            order_id = normalize_order_id(order_id)
+            
+            if account_id not in account_order_relationships:
+                return {
+                    "valid": False,
+                    "error": f"Invalid Account ID: {account_id}. Please provide a valid Account ID.",
+                    "normalized_account_id": account_id,
+                    "normalized_order_id": order_id
+                }
+            
+            if order_id not in account_order_relationships[account_id]:
+                return {
+                    "valid": False,
+                    "error": f"Order {order_id} does not belong to Account ID {account_id}. Please provide the correct order number for this account.",
+                    "normalized_account_id": account_id,
+                    "normalized_order_id": order_id
+                }
+            
+            return {
+                "valid": True,
+                "message": f"Order {order_id} belongs to Account ID {account_id}",
+                "normalized_account_id": account_id,
+                "normalized_order_id": order_id
+            }
+
+        def validate_item_belongs_to_order(order_id, item_id):
+            """Validate that an item belongs to a specific order - Separate validation tool"""
+            # Normalize order ID
+            order_id = normalize_order_id(order_id)
+            
+            if order_id not in order_item_relationships:
+                return {
+                    "valid": False,
+                    "error": f"Order {order_id} not found. Please provide a valid order number.",
+                    "normalized_order_id": order_id,
+                    "item_id": item_id
+                }
+            
+            if item_id not in order_item_relationships[order_id]:
+                return {
+                    "valid": False,
+                    "error": f"Item {item_id} is not found in order {order_id}. Please provide a valid item ID from the order items.",
+                    "normalized_order_id": order_id,
+                    "item_id": item_id,
+                    "available_items": list(order_item_relationships[order_id].keys())
+                }
+            
+            item_data = order_item_relationships[order_id][item_id]
+            return {
+                "valid": True,
+                "message": f"Item {item_id} ({item_data['name']}) belongs to order {order_id}",
+                "normalized_order_id": order_id,
+                "item_id": item_id,
+                "item_name": item_data['name']
+            }
+
         def authenticate_customer(account_id, email=None):
             """Authenticate Account ID and optionally verify email"""
+            # Normalize account ID first
+            account_id = normalize_account_id(account_id)
+            
             if account_id not in valid_customers:
                 return False, "Invalid Account ID. Please provide a valid Account ID (e.g., ACC1001)."
             
             if email:
                 expected_email = valid_customers[account_id]['email']
-                if email.lower() != expected_email.lower():
+                if email.lower().strip() != expected_email.lower():
                     return False, f"I'm unable to verify your account. The email address doesn't match Account ID {account_id}. Please provide the correct email address."
             
             return True, f"Authentication successful for {valid_customers[account_id]['name']}"
 
         # --- Mock retail tool implementations (same as retail_agent_invoke_tool) ---
         def get_order_status(account_id, email, order_id):
+            # Normalize account ID and order ID format
+            account_id = normalize_account_id(account_id)
+            order_id = normalize_order_id(order_id)
+            
             auth_success, auth_message = authenticate_customer(account_id, email)
             if not auth_success:
                 return {"error": auth_message}
@@ -11940,6 +12249,10 @@ Maintain a friendly, professional tone throughout all interactions
             return "\n\n".join(items_list)
 
         def initiate_return_request(account_id, email, order_id, item_id_or_product_name, return_reason):
+            # Normalize account ID and order ID format
+            account_id = normalize_account_id(account_id)
+            order_id = normalize_order_id(order_id)
+            
             auth_success, auth_message = authenticate_customer(account_id, email)
             if not auth_success:
                 return {"error": auth_message}
@@ -11982,6 +12295,10 @@ Maintain a friendly, professional tone throughout all interactions
             }
 
         def cancel_order(order_id, account_id, email, cancellation_reason, refund_method):
+            # Normalize account ID and order ID format
+            account_id = normalize_account_id(account_id)
+            order_id = normalize_order_id(order_id)
+            
             auth_success, auth_message = authenticate_customer(account_id, email)
             if not auth_success:
                 return {"error": auth_message}
@@ -12031,45 +12348,59 @@ Maintain a friendly, professional tone throughout all interactions
         output_tokens = 0
         print("In nova_retail_agent_invoke_tool (Retail Bot - Nova)")
 
-        # Extract Account ID, Order ID, and Email from chat history (same as retail_agent_invoke_tool)
+        # Extract Account ID and Email from chat history for authentication state management
         extracted_account_id = None
-        extracted_order_id = None
         extracted_email = None
         
         for message in chat_history:
             if message['role'] == 'user':
-                content_text = message['content'][0]['text']
+                # Handle different content formats
+                content_text = None
+                if isinstance(message.get('content'), list):
+                    for content_item in message['content']:
+                        if isinstance(content_item, dict) and content_item.get('type') == 'text':
+                            content_text = content_item.get('text', '')
+                            break
+                        elif isinstance(content_item, dict) and 'text' in content_item:
+                            content_text = content_item['text']
+                            break
+                elif isinstance(message.get('content'), str):
+                    content_text = message['content']
                 
-                account_id_match = re.search(r'\b(ACC\d{4})\b', content_text.upper())
-                if account_id_match:
-                    extracted_account_id = account_id_match.group(1)
-                    print(f"Extracted Account ID from chat history: {extracted_account_id}")
+                if content_text:
+                    # Extract Account ID (ACC followed by 4 digits)
+                    account_id_match = re.search(r'\b(ACC\d{4})\b', content_text.upper())
+                    if account_id_match:
+                        extracted_account_id = account_id_match.group(1)
+                        print(f"Extracted Account ID from chat history: {extracted_account_id}")
                     
-                order_id_match = re.search(r'\b(ORD\d{6})\b', content_text.upper())
-                if order_id_match:
-                    extracted_order_id = order_id_match.group(1)
-                    print(f"Extracted Order ID from chat history: {extracted_order_id}")
-                
-                email_match = re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', content_text)
-                if email_match:
-                    extracted_email = email_match.group(0)
-                    print(f"Extracted Email from chat history: {extracted_email}")
+                    # Extract Email (standard email pattern)
+                    email_match = re.search(r'\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b', content_text)
+                    if email_match:
+                        extracted_email = email_match.group(1).lower()
+                        print(f"Extracted Email from chat history: {extracted_email}")
+                    
+                    # If we found both, we can break
+                    if extracted_account_id and extracted_email:
+                        break
         
-        # Enhance system prompt with Account ID, Order ID, and Email context
-        enhanced_context = []
-        
-        if extracted_account_id:
-            enhanced_context.append(f"The customer's Account ID is {extracted_account_id}. Use this Account ID automatically for any tool calls that require it without asking again.")
-        
-        if extracted_order_id:
-            enhanced_context.append(f"The customer's Order ID is {extracted_order_id}. Use this Order ID automatically for any tool calls that require it without asking again.")
-        
-        if extracted_email:
-            enhanced_context.append(f"The customer's Email is {extracted_email}. Use this Email automatically for any tool calls that require it without asking again.")
-        
-        if enhanced_context:
-            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: {' '.join(enhanced_context)}"
-            print(f"Enhanced prompt with context: {enhanced_context}")
+        # Enhance system prompt with Account ID and Email context for authentication persistence
+        if extracted_account_id and extracted_email:
+            # Verify the combination is valid
+            auth_success, auth_message = authenticate_customer(extracted_account_id, extracted_email)
+            if auth_success:
+                enhanced_prompt = base_prompt + f"\n\nCRITICAL AUTHENTICATION STATE: The customer's Account ID is {extracted_account_id} and Email is {extracted_email}. These credentials have been successfully verified in this session. You MUST use these credentials automatically for ALL order-related tool calls (get_order_status, initiate_return_request, place_order, cancel_order) without asking for them again. Do NOT ask for Account ID or Email again in this session unless the user explicitly provides a different Account ID."
+                print(f"Enhanced prompt with authenticated Account ID: {extracted_account_id} and Email: {extracted_email}")
+            else:
+                # Authentication failed, don't enhance prompt
+                enhanced_prompt = base_prompt
+                print(f"Authentication failed for Account ID: {extracted_account_id} and Email: {extracted_email}")
+        elif extracted_account_id:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: The customer's Account ID is {extracted_account_id}. Use this Account ID automatically for any tool calls that require it. However, you still need to ask for Email for verification if it hasn't been provided yet."
+            print(f"Enhanced prompt with Account ID: {extracted_account_id}")
+        elif extracted_email:
+            enhanced_prompt = base_prompt + f"\n\nIMPORTANT: An email address has been provided: {extracted_email}. However, you still need to ask for Account ID for verification."
+            print(f"Enhanced prompt with Email: {extracted_email}")
         else:
             enhanced_prompt = base_prompt
         
@@ -12093,322 +12424,468 @@ Maintain a friendly, professional tone throughout all interactions
                 if content_items:
                     message_history.append({'role': 'assistant', 'content': content_items})
         
-        # Get Nova model name from environment variable
+        # Get Nova model name from environment variable - support Nova Premier
         selected_model = chat_tool_model
-        nova_model_name = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else f"us.amazon.nova-pro-v1:0"
+        if selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-'):
+            nova_model_name = selected_model
+        elif 'premier' in selected_model.lower():
+            nova_model_name = "us.amazon.nova-premier-v1:0"
+        else:
+            nova_model_name = "us.amazon.nova-premier-v1:0"  # Default to Premier for retail
         nova_region = "us-east-1"
         
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
-        # First API call to get initial response
-        try:
-            response = nova_bedrock_client.converse(
-                modelId=nova_model_name,
-                messages=message_history,
-                system=[{"text": prompt}],
-                inferenceConfig={
-                    "temperature": 0,
-                    "topP": 0.9
-                },
-                toolConfig={
-                    "tools": retail_tools_nova
-                }
-            )
+        # Loop to handle multiple rounds of tool calls
+        max_tool_iterations = 5  # Prevent infinite loops
+        tool_iteration = 0
+        assistant_response = []
+        
+        while tool_iteration < max_tool_iterations:
+            tool_iteration += 1
+            print(f"Tool iteration {tool_iteration}")
             
-            print("Nova Retail Model Response: ", response)
-            
-            # Parse the response
-            assistant_response = []
-            output_msg = (response.get('output') or {}).get('message') or {}
-            content_items = output_msg.get('content') or []
-            
-            for item in content_items:
-                if item.get('text'):
-                    assistant_response.append({'type': 'text', 'text': item['text']})
-                elif item.get('toolUse'):
-                    tool_use = item['toolUse']
-                    assistant_response.append({
-                        'type': 'tool_use',
-                        'id': tool_use.get('toolUseId'),
-                        'name': tool_use.get('name'),
-                        'input': tool_use.get('input', {})
-                    })
-            
-            # Filter out <thinking> tags from text responses
-            for item in assistant_response:
-                if item.get('type') == 'text' and 'text' in item:
-                    item['text'] = re.sub(r'<thinking>.*?</thinking>', '', item['text'], flags=re.DOTALL | re.IGNORECASE).strip()
-            
-            usage = response.get('usage') or {}
-            input_tokens += usage.get('inputTokens', 0)
-            output_tokens += usage.get('outputTokens', 0)
-            
-            # Check if any tools were called
-            tools_used = []
-            tool_results = []
-            
-            for action in assistant_response:
-                if action.get('type') == 'tool_use':
-                    tools_used.append(action['name'])
-                    tool_name = action['name']
-                    tool_input = action.get('input', {})
-                    tool_use_id = action.get('id')
-                    tool_result = None
-                    
-                    # Send a heartbeat to keep WebSocket alive during tool execution
-                    try:
-                        heartbeat = {'type': 'heartbeat'}
-                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
-                    except Exception as e:
-                        print(f"Heartbeat send error: {e}")
-                    
-                    # Execute the appropriate retail tool
-                    if tool_name == 'get_order_status':
-                        print("get_order_status is called..")
-                        tool_result = get_order_status(
-                            tool_input.get('account_id'),
-                            tool_input.get('email'),
-                            tool_input.get('order_id')
-                        )
-                        if isinstance(tool_result, dict) and 'error' in tool_result:
-                            print(f"Authentication failed for get_order_status: {tool_result['error']}")
-                    elif tool_name == 'initiate_return_request':
-                        tool_result = initiate_return_request(
-                            tool_input.get('account_id'),
-                            tool_input.get('email'),
-                            tool_input.get('order_id'),
-                            tool_input.get('item_id'),
-                            tool_input.get('return_reason')
-                        )
-                        if isinstance(tool_result, dict) and 'error' in tool_result:
-                            print(f"Authentication failed for initiate_return_request: {tool_result['error']}")
-                    elif tool_name == 'cancel_order':
-                        tool_result = cancel_order(
-                            tool_input.get('order_id'),
-                            tool_input.get('account_id'),
-                            tool_input.get('email'),
-                            tool_input.get('cancellation_reason'),
-                            tool_input.get('refund_method')
-                        )
-                        if isinstance(tool_result, dict) and 'error' in tool_result:
-                            print(f"Authentication failed for cancel_order: {tool_result['error']}")
-                    elif tool_name == 'retail_faq_tool_schema':
-                        print("retail_faq is called ...")
+            # API call to get response
+            try:
+                response = nova_bedrock_client.converse(
+                    modelId=nova_model_name,
+                    messages=message_history,
+                    system=[{"text": prompt}],
+                    inferenceConfig={
+                        "temperature": 0,
+                        "topP": 0.9
+                    },
+                    toolConfig={
+                        "tools": retail_tools_nova
+                    }
+                )
+                
+                if tool_iteration == 1:
+                    print("Nova Retail Model Response: ", response)
+                else:
+                    print(f"Nova Retail Model Response (iteration {tool_iteration}): ", response)
+                
+                # Parse the response
+                assistant_response = []
+                output_msg = (response.get('output') or {}).get('message') or {}
+                content_items = output_msg.get('content') or []
+                
+                for item in content_items:
+                    if item.get('text'):
+                        assistant_response.append({'type': 'text', 'text': item['text']})
+                    elif item.get('toolUse'):
+                        tool_use = item['toolUse']
+                        assistant_response.append({
+                            'type': 'tool_use',
+                            'id': tool_use.get('toolUseId'),
+                            'name': tool_use.get('name'),
+                            'input': tool_use.get('input', {})
+                        })
+                
+                # Filter out <thinking> tags from text responses
+                for item in assistant_response:
+                    if item.get('type') == 'text' and 'text' in item:
+                        item['text'] = re.sub(r'<thinking>.*?</thinking>', '', item['text'], flags=re.DOTALL | re.IGNORECASE).strip()
+                
+                usage = response.get('usage') or {}
+                input_tokens += usage.get('inputTokens', 0)
+                output_tokens += usage.get('outputTokens', 0)
+                
+                # Check if we have a text response - if yes, break the loop
+                has_text_response = any(item.get('type') == 'text' and item.get('text') for item in assistant_response)
+                if has_text_response:
+                    print("Model provided text response, breaking tool loop")
+                    break
+                
+                # Check if any tools were called
+                tools_used = []
+                tool_results = []
+                
+                for action in assistant_response:
+                    if action.get('type') == 'tool_use':
+                        tools_used.append(action['name'])
+                        tool_name = action['name']
+                        tool_input = action.get('input', {})
+                        tool_use_id = action.get('id')
+                        tool_result = None
+                        
+                        # Send a heartbeat to keep WebSocket alive during tool execution
                         try:
                             heartbeat = {'type': 'heartbeat'}
                             api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
                         except Exception as e:
-                            print(f"Retail FAQ heartbeat send error: {e}")
+                            print(f"Heartbeat send error: {e}")
                         
-                        tool_result = get_retail_faq_chunks(tool_input.get('knowledge_base_retrieval_question'), model_type='nova')
+                        # Execute the appropriate retail tool
+                        if tool_name == 'validate_account_credentials':
+                            print("validate_account_credentials is called..")
+                            tool_result = validate_account_credentials(
+                                tool_input.get('account_id'),
+                                tool_input.get('email')
+                            )
+                            print(f"Validation result: {tool_result}")
+                        elif tool_name == 'validate_order_belongs_to_account':
+                            print("validate_order_belongs_to_account is called..")
+                            tool_result = validate_order_belongs_to_account(
+                                tool_input.get('account_id'),
+                                tool_input.get('order_id')
+                            )
+                            print(f"Order validation result: {tool_result}")
+                        elif tool_name == 'validate_item_belongs_to_order':
+                            print("validate_item_belongs_to_order is called..")
+                            tool_result = validate_item_belongs_to_order(
+                                tool_input.get('order_id'),
+                                tool_input.get('item_id')
+                            )
+                            print(f"Item validation result: {tool_result}")
+                        elif tool_name == 'get_order_status':
+                            print("get_order_status is called..")
+                            tool_result = get_order_status(
+                                tool_input.get('account_id'),
+                                tool_input.get('email'),
+                                tool_input.get('order_id')
+                            )
+                            if isinstance(tool_result, dict) and 'error' in tool_result:
+                                print(f"Authentication failed for get_order_status: {tool_result['error']}")
+                        elif tool_name == 'initiate_return_request':
+                            tool_result = initiate_return_request(
+                                tool_input.get('account_id'),
+                                tool_input.get('email'),
+                                tool_input.get('order_id'),
+                                tool_input.get('item_id'),
+                                tool_input.get('return_reason')
+                            )
+                            if isinstance(tool_result, dict) and 'error' in tool_result:
+                                print(f"Authentication failed for initiate_return_request: {tool_result['error']}")
+                        elif tool_name == 'cancel_order':
+                            tool_result = cancel_order(
+                                tool_input.get('order_id'),
+                                tool_input.get('account_id'),
+                                tool_input.get('email'),
+                                tool_input.get('cancellation_reason'),
+                                tool_input.get('refund_method')
+                            )
+                            if isinstance(tool_result, dict) and 'error' in tool_result:
+                                print(f"Authentication failed for cancel_order: {tool_result['error']}")
+                        elif tool_name == 'retail_faq_tool_schema':
+                            print("retail_faq is called ...")
+                            try:
+                                heartbeat = {'type': 'heartbeat'}
+                                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(heartbeat))
+                            except Exception as e:
+                                print(f"Retail FAQ heartbeat send error: {e}")
+                            
+                            tool_result = get_retail_faq_chunks(tool_input.get('knowledge_base_retrieval_question'), model_type='nova')
+                            
+                            if not tool_result or len(tool_result) == 0:
+                                tool_result = ["I don't have specific information about that in our current retail knowledge base. Let me schedule a callback with one of our retail agents who can provide detailed information."]
                         
-                        if not tool_result or len(tool_result) == 0:
-                            tool_result = ["I don't have specific information about that in our current retail knowledge base. Let me schedule a callback with one of our retail agents who can provide detailed information."]
-                    
-                    # Create tool result message
-                    try:
-                        print(f"Tool result type: {type(tool_result)}")
-                        print(f"Tool result content: {tool_result}")
-                        
-                        if isinstance(tool_result, list) and tool_result:
-                            if isinstance(tool_result[0], dict):
-                                formatted_results = []
-                                for item in tool_result:
-                                    if isinstance(item, dict):
-                                        formatted_item = []
-                                        for key, value in item.items():
-                                            formatted_item.append(f"{key.replace('_', ' ').title()}: {value}")
-                                        formatted_results.append("\n".join(formatted_item))
-                                    else:
-                                        formatted_results.append(str(item))
-                                content_text = "\n\n".join(formatted_results)
+                        # Create tool result message
+                        try:
+                            print(f"Tool result type: {type(tool_result)}")
+                            print(f"Tool result content: {tool_result}")
+                            
+                            # Handle validation tool result (dict with valid/error keys)
+                            if isinstance(tool_result, dict) and 'valid' in tool_result:
+                                if tool_result.get('valid'):
+                                    content_text = f"Validation successful. {tool_result.get('message', 'Account verified')}. Normalized Account ID: {tool_result.get('normalized_account_id', '')}"
+                                else:
+                                    content_text = tool_result.get('error', 'Validation failed')
+                            elif isinstance(tool_result, list) and tool_result:
+                                if isinstance(tool_result[0], dict):
+                                    formatted_results = []
+                                    for item in tool_result:
+                                        if isinstance(item, dict):
+                                            formatted_item = []
+                                            for key, value in item.items():
+                                                formatted_item.append(f"{key.replace('_', ' ').title()}: {value}")
+                                            formatted_results.append("\n".join(formatted_item))
+                                        else:
+                                            formatted_results.append(str(item))
+                                    content_text = "\n\n".join(formatted_results)
+                                else:
+                                    content_text = "\n".join(str(item) for item in tool_result)
+                            elif isinstance(tool_result, dict):
+                                # Handle get_order_status successful response specially
+                                if 'order_id' in tool_result and 'status' in tool_result and 'items' in tool_result:
+                                    # Format order status response in a clear, readable way
+                                    order_id = tool_result.get('order_id', '')
+                                    status = tool_result.get('status', '')
+                                    delivery_info = tool_result.get('delivery_info', '')
+                                    items = tool_result.get('items', [])
+                                    total_price = tool_result.get('total_price', 0)
+                                    currency = tool_result.get('currency', 'SGD')
+                                    
+                                    content_text = f"Order Status for {order_id}:\n"
+                                    content_text += f"Status: {status}\n"
+                                    content_text += f"Delivery: {delivery_info}\n"
+                                    content_text += f"Items:\n"
+                                    for item in items:
+                                        content_text += f"- {item.get('item_name', '')} (Item ID: {item.get('item_id', '')}) - Quantity: {item.get('quantity', 0)}, Price: {currency} {item.get('price', 0)}\n"
+                                    content_text += f"Total Price: {currency} {total_price}"
+                                elif 'error' in tool_result:
+                                    # Error response - pass through the error message
+                                    content_text = tool_result.get('error', 'An error occurred')
+                                else:
+                                    # Format other dict responses as readable text
+                                    formatted_items = []
+                                    for key, value in tool_result.items():
+                                        formatted_items.append(f"{key.replace('_', ' ').title()}: {value}")
+                                    content_text = "\n".join(formatted_items)
                             else:
-                                content_text = "\n".join(str(item) for item in tool_result)
-                        else:
-                            content_text = str(tool_result) if tool_result else "No information available"
-                        
-                        tool_result_block = {
-                            "toolResult": {
-                                "toolUseId": tool_use_id,
-                                "content": [{"text": content_text}],
-                                "status": "success"
+                                content_text = str(tool_result) if tool_result else "No information available"
+                            
+                            tool_result_block = {
+                                "toolResult": {
+                                    "toolUseId": tool_use_id,
+                                    "content": [{"text": content_text}],
+                                    "status": "success"
+                                }
                             }
-                        }
-                        tool_results.append(tool_result_block)
-                        print(f"Tool response created successfully")
-                        
-                    except Exception as e:
-                        print(f"Error creating tool response: {e}")
-                        import traceback
-                        print(f"Traceback: {traceback.format_exc()}")
-                        continue
-            
-            # If tools were used, add tool results to chat history and make second API call
-            if tools_used:
-                # First, add the assistant's message with tool uses to message history
-                assistant_message_content = []
-                for action in assistant_response:
-                    if action.get('type') == 'tool_use':
-                        assistant_message_content.append({
-                            'toolUse': {
-                                'toolUseId': action.get('id'),
-                                'name': action.get('name'),
-                                'input': action.get('input', {})
-                            }
-                        })
+                            tool_results.append(tool_result_block)
+                            print(f"Tool response created successfully")
+                            
+                        except Exception as e:
+                            print(f"Error creating tool response: {e}")
+                            import traceback
+                            print(f"Traceback: {traceback.format_exc()}")
+                            continue
                 
-                if assistant_message_content:
-                    message_history.append({
-                        'role': 'assistant',
-                        'content': assistant_message_content
-                    })
-                
-                # Then add the user's message with tool results
-                if tool_results:
-                    # Ensure number of tool results matches number of tool uses
-                    if len(tool_results) == len(assistant_message_content):
-                        message_history.append({
-                            'role': 'user',
-                            'content': tool_results
-                        })
-                    else:
-                        print(f"Warning: Number of tool results ({len(tool_results)}) doesn't match number of tool uses ({len(assistant_message_content)})")
-                
-                # Make second API call with tool results
-                try:
-                    response = nova_bedrock_client.converse(
-                        modelId=nova_model_name,
-                        messages=message_history,
-                        system=[{"text": prompt}],
-                        inferenceConfig={
-                            "temperature": 0,
-                            "topP": 0.9
-                        },
-                        toolConfig={
-                            "tools": retail_tools_nova
-                        }
-                    )
-                    
-                    print("Nova Retail Model Response (after tools): ", response)
-                    
-                    # Parse the response
-                    assistant_response = []
-                    output_msg = (response.get('output') or {}).get('message') or {}
-                    content_items = output_msg.get('content') or []
-                    
-                    for item in content_items:
-                        if item.get('text'):
-                            assistant_response.append({'type': 'text', 'text': item['text']})
-                        elif item.get('toolUse'):
-                            tool_use = item['toolUse']
-                            assistant_response.append({
-                                'type': 'tool_use',
-                                'id': tool_use.get('toolUseId'),
-                                'name': tool_use.get('name'),
-                                'input': tool_use.get('input', {})
+                # If tools were used, add tool results to chat history and make second API call
+                if tools_used:
+                    # First, add the assistant's message with tool uses to message history
+                    assistant_message_content = []
+                    for action in assistant_response:
+                        if action.get('type') == 'tool_use':
+                            assistant_message_content.append({
+                                'toolUse': {
+                                    'toolUseId': action.get('id'),
+                                    'name': action.get('name'),
+                                    'input': action.get('input', {})
+                                }
                             })
                     
-                    # Filter out <thinking> tags from text responses
-                    for item in assistant_response:
-                        if item.get('type') == 'text' and 'text' in item:
-                            item['text'] = re.sub(r'<thinking>.*?</thinking>', '', item['text'], flags=re.DOTALL | re.IGNORECASE).strip()
+                    if assistant_message_content:
+                        message_history.append({
+                            'role': 'assistant',
+                            'content': assistant_message_content
+                        })
                     
-                    usage = response.get('usage') or {}
-                    input_tokens += usage.get('inputTokens', 0)
-                    output_tokens += usage.get('outputTokens', 0)
+                    # Then add the user's message with tool results
+                    if tool_results:
+                        # Ensure number of tool results matches number of tool uses
+                        if len(tool_results) == len(assistant_message_content):
+                            message_history.append({
+                                'role': 'user',
+                                'content': tool_results
+                            })
+                        else:
+                            print(f"Warning: Number of tool results ({len(tool_results)}) doesn't match number of tool uses ({len(assistant_message_content)})")
                     
-                except Exception as e:
-                    print("ERROR IN SECOND API CALL:", e)
-                    import traceback
-                    print(f"Full traceback: {traceback.format_exc()}")
-                    error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
-                    # Simulate streaming for error response
-                    chunk_size = 10
-                    for i in range(0, len(error_response), chunk_size):
-                        chunk = error_response[i:i+chunk_size]
-                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': chunk}}
+                    # Make second API call with tool results
+                    try:
+                        response = nova_bedrock_client.converse(
+                            modelId=nova_model_name,
+                            messages=message_history,
+                            system=[{"text": prompt}],
+                            inferenceConfig={
+                                "temperature": 0,
+                                "topP": 0.9
+                            },
+                            toolConfig={
+                                "tools": retail_tools_nova
+                            }
+                        )
+                        
+                        print("Nova Retail Model Response (after tools): ", response)
+                        
+                        # Parse the response
+                        assistant_response = []
+                        output_msg = (response.get('output') or {}).get('message') or {}
+                        content_items = output_msg.get('content') or []
+                        
+                        for item in content_items:
+                            if item.get('text'):
+                                assistant_response.append({'type': 'text', 'text': item['text']})
+                            elif item.get('toolUse'):
+                                tool_use = item['toolUse']
+                                assistant_response.append({
+                                    'type': 'tool_use',
+                                    'id': tool_use.get('toolUseId'),
+                                    'name': tool_use.get('name'),
+                                    'input': tool_use.get('input', {})
+                                })
+                        
+                        # Filter out <thinking> tags from text responses
+                        for item in assistant_response:
+                            if item.get('type') == 'text' and 'text' in item:
+                                item['text'] = re.sub(r'<thinking>.*?</thinking>', '', item['text'], flags=re.DOTALL | re.IGNORECASE).strip()
+                        
+                        # Check if model is calling more tools instead of responding
+                        # If so, we need to handle the tool calls in a loop
+                        tools_called_in_response = [item for item in assistant_response if item.get('type') == 'tool_use']
+                        
+                        usage = response.get('usage') or {}
+                        input_tokens += usage.get('inputTokens', 0)
+                        output_tokens += usage.get('outputTokens', 0)
+                        
+                        # If model called more tools, continue the loop to execute them
+                        if tools_called_in_response:
+                            print(f"Model called {len(tools_called_in_response)} more tools after receiving tool results")
+                            # Reset for next iteration
+                            tools_used = []
+                            tool_results = []
+                            # The loop will continue and execute these new tool calls
+                            continue
+                        
+                    except Exception as e:
+                        print("ERROR IN SECOND API CALL:", e)
+                        import traceback
+                        print(f"Full traceback: {traceback.format_exc()}")
+                        error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
+                        
+                        # Stream error response word by word
+                        words = error_response.split()
+                        for word in words:
+                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                            try:
+                                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                            except:
+                                pass
+                        
+                        stop_answer = {'type': 'content_block_stop', 'index': 0}
                         try:
-                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
                         except:
                             pass
-                    stop_answer = {'type': 'content_block_stop', 'index': 0}
+                        
+                        message_stop = {'type': 'message_stop'}
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                        except:
+                            pass
+                        
+                        return {"answer": error_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+            
+            except Exception as e:
+                print(f"Error in API call: {e}")
+                import traceback
+                print(f"Full traceback: {traceback.format_exc()}")
+                error_response = "I apologize, but I'm having trouble processing your request right now. Please try again in a moment."
+                
+                # Stream error response word by word
+                words = error_response.split()
+                for word in words:
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
                     try:
-                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                     except:
                         pass
-                    message_stop = {'type': 'message_stop'}
-                    try:
-                        api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
-                    except:
-                        pass
-                    return {"answer": error_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
-            
-            # Extract final answer and simulate streaming
-            final_ans = ""
-            for item in assistant_response:
-                if item.get('type') == 'text' and item.get('text'):
-                    final_ans = item['text']
-                    break
-            
-            if not final_ans:
-                final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
-            
-            # Simulate streaming via WebSocket (same pattern as nova_banking_agent_invoke_tool)
-            chunk_size = 10
-            for i in range(0, len(final_ans), chunk_size):
-                chunk = final_ans[i:i+chunk_size]
-                delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': chunk}}
+                
+                stop_answer = {'type': 'content_block_stop', 'index': 0}
                 try:
-                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
                 except:
                     pass
-            
-            stop_answer = {'type': 'content_block_stop', 'index': 0}
+                
+                message_stop = {'type': 'message_stop'}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+                except:
+                    pass
+                
+                return {"answer": error_response, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+        
+        # Extract final answer and simulate streaming
+        final_ans = ""
+        for item in assistant_response:
+            if item.get('type') == 'text' and item.get('text'):
+                final_ans = item['text']
+                break
+        
+        if not final_ans:
+            final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
+        
+        # Format response to ensure proper markdown with line breaks
+        # Ensure each bullet point is on a separate line
+        final_ans = final_ans.replace(' - ', '\n- ')  # Add line break before bullets if missing
+        
+        # If response starts with a dash after initial text, ensure line break
+        final_ans = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_ans)
+        
+        # Ensure double line break before first bullet point after intro text
+        final_ans = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_ans)
+        
+        # Clean up any triple+ newlines to max double
+        final_ans = re.sub(r'\n{3,}', '\n\n', final_ans)
+        
+        # Stream response preserving newlines - split by whitespace but keep newlines
+        # Replace newlines with a special marker temporarily
+        streaming_text = final_ans.replace('\n', ' <NEWLINE> ')
+        words = streaming_text.split()
+        
+        for word in words:
+            if word == '<NEWLINE>':
+                # Send actual newline character
+                delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+            else:
+                # Send word with space
+                delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
             try:
-                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
-            except:
-                pass
-            
-            message_stop = {'type': 'message_stop'}
-            try:
-                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
-            except:
-                pass
-            
-            return {"statusCode": "200", "answer": final_ans, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
-            
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+            except Exception as e:
+                print(f"WebSocket send error (delta): {e}")
+        
+        # Send content_block_stop
+        stop_answer = {'type': 'content_block_stop', 'index': 0}
+        try:
+            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
         except Exception as e:
-            print(f"Unexpected error in Nova retail agent: {e}")
-            import traceback
-            print(f"Full traceback: {traceback.format_exc()}")
-            error_response = "An Unknown error occurred. Please try again after some time."
-            # Simulate streaming for error response
-            chunk_size = 10
-            for i in range(0, len(error_response), chunk_size):
-                chunk = error_response[i:i+chunk_size]
-                delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': chunk}}
-                try:
-                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
-                except:
-                    pass
-            stop_answer = {'type': 'content_block_stop', 'index': 0}
+            print(f"WebSocket send error (stop): {e}")
+        
+        # Send message_stop
+        message_stop = {'type': 'message_stop'}
+        try:
+            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+        except Exception as e:
+            print(f"WebSocket send error (message_stop): {e}")
+        
+        return {"statusCode": "200", "answer": final_ans, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
+            
+    except Exception as e:
+        print(f"Unexpected error in Nova retail agent: {e}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
+        error_response = "An Unknown error occurred. Please try again after some time."
+        
+        # Stream error response word by word
+        words = error_response.split()
+        for word in words:
+            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
             try:
-                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
             except:
                 pass
-            message_stop = {'type': 'message_stop'}
-            try:
-                api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
-            except:
-                pass
-            return {
-                "statusCode": "500",
-                "answer": error_response,
-                "question": chat,
-                "session_id": session_id,
-                "input_tokens": "0",
-                "output_tokens": "0"
-            }
+        
+        stop_answer = {'type': 'content_block_stop', 'index': 0}
+        try:
+            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+        except:
+            pass
+        
+        message_stop = {'type': 'message_stop'}
+        try:
+            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
+        except:
+            pass
+        return {
+            "statusCode": "500",
+            "answer": error_response,
+            "question": chat,
+            "session_id": session_id,
+            "input_tokens": "0",
+            "output_tokens": "0"
+        }
     except Exception as e:
         print(f"Unexpected error: {e}")
         response = "An Unknown error occurred. Please try again after some time."
@@ -12497,12 +12974,15 @@ SESSION MEMORY: Remember the authenticated Account ID throughout the conversatio
 AUTOMATIC REUSE: Use the stored authenticated credentials for ALL subsequent order-related tool calls
 NO RE-VERIFICATION: Do not re-verify credentials that have already been successfully authenticated in the current session
 
-PRE-AUTHENTICATION CHECK:
+PRE-AUTHENTICATION CHECK - MANDATORY STEP:
+**YOU MUST PERFORM THIS CHECK BEFORE EVERY ORDER-RELATED REQUEST - NO EXCEPTIONS**
 Before asking for Account ID or Email for ANY order-related request:
-Scan conversation history for previously provided Account ID
-Check if Email was already verified for that Account ID in this session
-If both are found and verified, proceed directly with stored credentials
-Only ask for credentials that are missing or failed verification
+1. **FIRST**: Scan the ENTIRE conversation history for previously provided Account ID
+2. **SECOND**: Check if Email was already verified for that Account ID in this session
+3. **THIRD**: If both are found and verified, proceed directly with stored credentials - DO NOT ask again
+4. **FOURTH**: Only ask for credentials that are missing or failed verification
+5. **CRITICAL**: If you skip this check and proceed without authentication, you are violating the authentication rules
+6. **REMEMBER**: This check is MANDATORY - you cannot skip it or assume authentication exists
 
 ACCOUNT ID AND EMAIL HANDLING RULES:
 SESSION-LEVEL STORAGE: Once Account ID is provided and verified, use it for ALL subsequent requests
@@ -12514,14 +12994,16 @@ When Account ID is provided, validate it matches the pattern ACC#### (e.g., ACC1
 Use the same Account ID and Email for all subsequent tool calls in the session until Account ID changes
 ALWAYS verify Email matches the Account ID before proceeding on first authentication only
 
-AUTHENTICATION PROCESS:
-Check Session State - Scan conversation for existing authenticated credentials
-Collect Account ID - Ask for Account ID ONLY if not previously provided and verified
-Validate Account ID - Check if it matches one of the valid Account IDs above
-Collect Email - Ask for Email ONLY if not previously provided and verified for current Account ID
-Verify Email - Check if the Email matches the Account ID (only on first authentication)
-Store Authentication State - Remember successful authentication for entire session
-Proceed with Tools - Use stored credentials for all subsequent order-related requests
+AUTHENTICATION PROCESS - FOLLOW THIS EXACT SEQUENCE:
+**THIS PROCESS IS MANDATORY FOR ALL ORDER-RELATED REQUESTS**
+1. **Check Session State FIRST** - Scan the ENTIRE conversation for existing authenticated credentials - DO NOT SKIP THIS STEP
+2. **Collect Account ID** - Ask for Account ID ONLY if not previously provided and verified in the conversation
+3. **Validate Account ID** - Check if it matches one of the valid Account IDs above (ACC1001-ACC1005)
+4. **Collect Email** - Ask for Email ONLY if not previously provided and verified for current Account ID
+5. **Verify Email** - Check if the Email matches the Account ID (only on first authentication)
+6. **Store Authentication State** - Remember successful authentication for entire session
+7. **Proceed with Tools** - Use stored credentials for all subsequent order-related requests
+**CRITICAL**: You MUST complete steps 1-6 BEFORE calling any order-related tool. Skipping authentication is NOT allowed.
 
 MANDATORY QUESTION COLLECTION RULES:
 ALWAYS collect ALL required information for any tool before using it
@@ -12606,16 +13088,19 @@ get_shop_locations - Retrieve available bakery shop locations and addresses
 get_location_menu - Retrieve menu items available at specific shop locations
 bakery_faq_tool_schema - Retrieve answers from the bakery knowledge base for general questions, policies, and product information
 
-SYSTEMATIC QUESTION COLLECTION:
-When a user wants order information, returns, new orders, or cancellations, IMMEDIATELY check session state for existing authentication
-If already authenticated in session, proceed directly with remaining required information
-Ask ONLY ONE question at a time
-After each user response, check what information is still missing
-Ask for the NEXT missing required field (in the exact order listed above)
-Do NOT ask multiple questions in one message
-Do NOT skip any required questions
-Do NOT proceed until ALL required information is collected
-ALWAYS use stored authentication if available, verify authentication before proceeding with tools only on first authentication
+SYSTEMATIC QUESTION COLLECTION - AUTHENTICATION FIRST:
+**MANDATORY**: When a user wants order information, returns, new orders, or cancellations:
+1. **IMMEDIATELY check session state** for existing authentication - this is the FIRST step, not optional
+2. **IF NOT AUTHENTICATED**: Ask for Account ID FIRST, then Email, BEFORE asking for any other information
+3. **IF AUTHENTICATED**: Use stored credentials and proceed with remaining required information
+4. Ask ONLY ONE question at a time
+5. After each user response, check what information is still missing
+6. Ask for the NEXT missing required field (in the exact order listed above)
+7. Do NOT ask multiple questions in one message
+8. Do NOT skip any required questions - especially authentication
+9. Do NOT proceed until ALL required information is collected, including authentication
+10. ALWAYS use stored authentication if available - verify authentication before proceeding with tools only on first authentication
+**CRITICAL**: Authentication is NOT optional - it is REQUIRED for all order-related operations
 
 EXAMPLES OF CORRECT BEHAVIOR:
 First Order-Related Request:
