@@ -915,7 +915,7 @@ def nova_agent_invoke_tool(chat_history, session_id, chat, connectionId):
 2. Policy ID (from user's active policies) - ALWAYS use get_user_policies tool first to show available policies, then ask which policy to use
 3. Claim Type 
 4. Date of Incident (accept any reasonable format)
-5. Claim Amount (e.g., 6500SGD, SGD 6500, 6500)
+5. Claim Amount - When asking for claim amount, ALWAYS mention the maximum coverage amount for the selected policy (e.g., "What amount are you claiming? (Maximum coverage: SGD 150,000)")
 6. Description (brief description of what happened)
 
 ### For schedule_agent_callback tool (ask in this exact order):
@@ -945,35 +945,26 @@ def nova_agent_invoke_tool(chat_history, session_id, chat, connectionId):
 - If validation fails, provide a clear, specific error message with examples
 
 ##NATURAL DATE INTERPRETATION RULE:
-- When collecting a date or time-related input, accept natural expressions such as:
-	
-	"yesterday", "today", "tomorrow", "last night", etc.
-	
-- Convert these into actual calendar dates based on the current date.
-	
-- If a time of day is mentioned (e.g., "yesterday evening"), assign a random time in that time range:
-	
-	Morning: 8am–12pm
-	
-	Afternoon: 1pm–5pm
-	
-	Evening: 6pm–9pm
-	
-	Night: 9pm–11pm
-	
-- Examples:
-	
-	"yesterday" → 2025-07-30
-	
-	"today afternoon" → 2025-07-31, 2:34 PM (randomized)
-	
-	"tomorrow morning" → 2025-08-01, 9:12 AM (randomized)
+- When user provides natural date expressions like "tomorrow morning", "today evening", "yesterday afternoon" during callback scheduling, use interpret_natural_date tool to convert it
+- After getting the converted date/time from interpret_natural_date, immediately proceed to call schedule_agent_callback with the full_datetime value as the preferred_timeslot
+- Do NOT show the date interpretation result to the user - just use it directly in the schedule_agent_callback tool
+- The workflow is: interpret_natural_date → schedule_agent_callback (using the full_datetime from interpretation)
+- Use this tool during scheduling callbacks or collecting dates for claims
+
+Available Tools:
+1. get_user_policies - Retrieve active insurance policies for a customer
+2. track_claim_status - Check the status of insurance claims
+3. file_claim - Submit a new insurance claim
+4. schedule_agent_callback - Schedule a callback from a human agent
+5. interpret_natural_date - Convert natural language date/time expressions to formatted dates
+6. faq_tool_schema - Retrieve answers from the insurance knowledge base
 
 ## Tool Usage Rules:
 - When a user asks about coverage, benefits, policy details, or general insurance questions, IMMEDIATELY use the faq_tool_schema tool
 - Do NOT announce that you're using the tool or searching for information
 - Simply use the tool and provide the direct answer from the knowledge base
 - If the knowledge base doesn't have the information, say "I don't have specific information about that in our current knowledge base. Let me schedule a callback with one of our agents who can provide detailed information."
+- When user provides natural date/time like "tomorrow morning", use interpret_natural_date tool first, then use the returned formatted date/time
 
 ## Response Format:
 - ALWAYS answer in the shortest, most direct way possible
@@ -998,13 +989,6 @@ def nova_agent_invoke_tool(chat_history, session_id, chat, connectionId):
 	- Description: Got hit by train
 	- Claim ID: CLM45829
 
-Available Tools:
-1. get_user_policies - Retrieve active insurance policies for a customer
-2. track_claim_status - Check the status of insurance claims
-3. file_claim - Submit a new insurance claim
-4. schedule_agent_callback - Schedule a callback from a human agent
-5. faq_tool_schema - Retrieve answers from the insurance knowledge base
-
 ## SYSTEMATIC QUESTION COLLECTION:
 - When a user wants to file a claim OR schedule a callback, IMMEDIATELY start collecting required information
 - Ask ONLY ONE question at a time
@@ -1013,6 +997,13 @@ Available Tools:
 - Do NOT ask multiple questions in one message
 - Do NOT skip any required questions
 - Do NOT proceed until ALL required information is collected
+
+## CLAIM AMOUNT VALIDATION:
+- When asking for claim amount during claim filing, ALWAYS retrieve the user's policies first using get_user_policies tool to determine the maximum coverage
+- In your question, ALWAYS mention the maximum coverage amount (e.g., "What amount are you claiming? (Maximum coverage: SGD 150,000)")
+- The file_claim tool will automatically cap the claim amount at the policy's maximum coverage if the requested amount exceeds it
+- When the amount is adjusted, the tool will return a message explaining that the requested amount exceeded the maximum and the claim was submitted for the maximum coverage
+- Simply relay this information to the user along with the claim confirmation details
 
 ## EXAMPLES OF CORRECT BEHAVIOR:
 
@@ -1034,7 +1025,7 @@ User: "Accident"
 Assistant: "What was the date of the incident?"
 
 User: "July 19, 2025"
-Assistant: "What amount are you claiming?"
+Assistant: "What amount are you claiming? (Maximum coverage: SGD 150,000)"
 
 User: "6500SGD"
 Assistant: "Please provide a brief description of what happened."
@@ -1189,6 +1180,21 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
             },
             {
                 "toolSpec": {
+                    "name": "interpret_natural_date",
+                    "description": "Convert natural language date expressions (like 'tomorrow morning', 'today evening', 'yesterday afternoon') into formatted date and time. Use when user provides relative date/time expressions during scheduling or date collection.",
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": {
+                                "natural_expression": {"type": "string", "description": "Natural language date/time expression (e.g., 'tomorrow morning', 'today evening', 'yesterday afternoon')"}
+                            },
+                            "required": ["natural_expression"]
+                        }
+                    }
+                }
+            },
+            {
+                "toolSpec": {
                     "name": "faq_tool_schema",
                     "description": "Retrieve answers from the insurance knowledge base",
                     "inputSchema": {
@@ -1250,18 +1256,119 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
             return mock_claims.get(crn, [])
 
         def file_claim(crn, policy_id, claim_type, date_of_incident, claim_amount, description):
+            # Get user's policies to validate against max coverage
+            policies = get_user_policies(crn)
+            selected_policy = None
+            
+            # Find the selected policy
+            for policy in policies:
+                if policy.get('policy_id') == policy_id:
+                    selected_policy = policy
+                    break
+            
+            if not selected_policy:
+                return {
+                    "error": "Policy not found",
+                    "remarks": "The specified policy could not be found. Please verify your policy ID."
+                }
+            
+            # Extract max coverage amount from the policy
+            coverage_str = selected_policy.get('coverage_amount', '')
+            # Parse coverage amount (e.g., "SGD 150,000/year" or "SGD 500,000")
+            import re
+            coverage_match = re.search(r'SGD\s*([\d,]+)', coverage_str.replace(',', ''))
+            if not coverage_match:
+                return {
+                    "error": "Unable to validate coverage",
+                    "remarks": "Unable to determine the maximum coverage for this policy."
+                }
+            
+            max_coverage = float(coverage_match.group(1))
+            
+            # Parse the claim amount
+            claim_str = str(claim_amount).replace(',', '').replace('SGD', '').strip()
+            claim_match = re.search(r'([\d.]+)', claim_str)
+            if not claim_match:
+                return {
+                    "error": "Invalid claim amount",
+                    "remarks": "Unable to parse the claim amount. Please provide a valid amount."
+                }
+            
+            claim_value = float(claim_match.group(1))
+            
+            # Validate claim amount against max coverage
+            # If claim exceeds max coverage, automatically use max coverage
+            amount_adjusted = False
+            original_claim = claim_value
+            if claim_value > max_coverage:
+                claim_value = max_coverage
+                amount_adjusted = True
+            
+            # Create the claim with the validated amount
             claim_id = f"CLM{str(uuid.uuid4())[:4].upper()}"
-            return {
+            
+            result = {
                 "claim_id": claim_id,
                 "status": "Submitted",
-                "remarks": "Your claim has been submitted. Our team will review it, and an agent will reach out to you shortly."
+                "claim_amount_processed": f"SGD {claim_value:,.0f}"
             }
+            
+            if amount_adjusted:
+                result["remarks"] = f"Your requested claim amount (SGD {original_claim:,.0f}) exceeds the policy maximum coverage of SGD {max_coverage:,.0f}. Your claim has been submitted for the maximum coverage amount of SGD {max_coverage:,.0f}. Our team will review it, and an agent will reach out to you shortly."
+            else:
+                result["remarks"] = "Your claim has been submitted. Our team will review it, and an agent will reach out to you shortly."
+            
+            return result
 
         def schedule_agent_callback(crn, reason, preferred_timeslot, preferred_contact_method):
             return {
                 "status": "Scheduled",
                 "scheduled_for": preferred_timeslot,
                 "remarks": f"An agent will reach out to you via {preferred_contact_method} during your selected time window."
+            }
+        
+        def interpret_natural_date(natural_expression):
+            """
+            Convert natural language date expressions to formatted date and time range.
+            Examples: 'tomorrow morning' -> '2025-11-18, 9am-12pm'
+            """
+            from datetime import datetime, timedelta
+            
+            current_date = datetime.now()
+            natural_expr_lower = natural_expression.lower().strip()
+            
+            # Determine the base date
+            target_date = current_date
+            if 'yesterday' in natural_expr_lower:
+                target_date = current_date - timedelta(days=1)
+            elif 'today' in natural_expr_lower:
+                target_date = current_date
+            elif 'tomorrow' in natural_expr_lower:
+                target_date = current_date + timedelta(days=1)
+            
+            # Determine the time range based on time of day
+            time_range = ""
+            if 'morning' in natural_expr_lower:
+                time_range = "9am-12pm"
+            elif 'afternoon' in natural_expr_lower:
+                time_range = "1pm-5pm"
+            elif 'evening' in natural_expr_lower:
+                time_range = "6pm-9pm"
+            elif 'night' in natural_expr_lower:
+                time_range = "9pm-11pm"
+            else:
+                # Default to morning if no time of day specified
+                time_range = "9am-12pm"
+            
+            formatted_date = target_date.strftime('%Y-%m-%d')
+            readable_date = target_date.strftime('%B %d, %Y')
+            full_datetime = f"{readable_date}, {time_range}"
+            
+            return {
+                "formatted_date": formatted_date,
+                "time_range": time_range,
+                "full_datetime": full_datetime,
+                "original_expression": natural_expression
             }
 
         input_tokens = 0
@@ -1312,7 +1419,7 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
         print("Nova Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-premier-v1:0")
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
@@ -1431,6 +1538,12 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                                 tool_input.get('preferred_timeslot', ''),
                                 tool_input.get('preferred_contact_method', '')
                             )
+                    elif tool_name == 'interpret_natural_date':
+                        natural_expr = tool_input.get('natural_expression', '')
+                        if not natural_expr:
+                            tool_result = {"error": "Natural date expression is required"}
+                        else:
+                            tool_result = interpret_natural_date(natural_expr)
                     elif tool_name == 'faq_tool_schema':
                         # Send another heartbeat before FAQ retrieval (same as agent_invoke_tool)
                         try:
@@ -1451,7 +1564,13 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                         print(f"Tool result content: {tool_result}")
                         
                         # Handle different types of tool results (same logic as agent_invoke_tool)
-                        if isinstance(tool_result, list) and tool_result:
+                        if isinstance(tool_result, dict):
+                            # Handle single dictionary (like file_claim response)
+                            formatted_item = []
+                            for key, value in tool_result.items():
+                                formatted_item.append(f"{key.replace('_', ' ').title()}: {value}")
+                            content_text = "\n".join(formatted_item)
+                        elif isinstance(tool_result, list) and tool_result:
                             if isinstance(tool_result[0], dict):
                                 # Format list of dictionaries (like policy data)
                                 formatted_results = []
@@ -1553,20 +1672,48 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                     if not final_answer:
                         final_answer = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
                     
-                    # Send response via WebSocket in streaming format (same as agent_invoke_tool)
+                    # Format response to ensure proper markdown with line breaks
+                    # Ensure each bullet point is on a separate line
+                    final_answer = final_answer.replace(' - ', '\n- ')  # Add line break before bullets if missing
+                    
+                    # If response starts with a dash after initial text, ensure line break
+                    final_answer = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_answer)
+                    
+                    # Ensure double line break before first bullet point after intro text
+                    final_answer = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_answer)
+                    
+                    # Clean up any triple+ newlines to max double
+                    final_answer = re.sub(r'\n{3,}', '\n\n', final_answer)
+                    
+                    # Send response via WebSocket in streaming format with newline preservation
                     # Since Nova Converse API doesn't support streaming, simulate it by sending in chunks
                     try:
-                        # Send the answer in chunks to simulate streaming (frontend expects content_block_delta format)
-                        words = final_answer.split()
-                        for i, word in enumerate(words):
-                            delta_message = {
-                                'type': 'content_block_delta',
-                                'index': 0,
-                                'delta': {
-                                    'type': 'text_delta',
-                                    'text': word + (' ' if i < len(words) - 1 else '')
+                        # Stream response preserving newlines - split by whitespace but keep newlines
+                        # Replace newlines with a special marker temporarily
+                        streaming_text = final_answer.replace('\n', ' <NEWLINE> ')
+                        words = streaming_text.split()
+                        
+                        for word in words:
+                            if word == '<NEWLINE>':
+                                # Send actual newline character
+                                delta_message = {
+                                    'type': 'content_block_delta',
+                                    'index': 0,
+                                    'delta': {
+                                        'type': 'text_delta',
+                                        'text': '\n'
+                                    }
                                 }
-                            }
+                            else:
+                                # Send word with space
+                                delta_message = {
+                                    'type': 'content_block_delta',
+                                    'index': 0,
+                                    'delta': {
+                                        'type': 'text_delta',
+                                        'text': word + ' '
+                                    }
+                                }
                             try:
                                 api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta_message))
                             except api_gateway_client.exceptions.GoneException:
@@ -1583,14 +1730,8 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                         except Exception as e:
                             print(f"WebSocket send error (stop, Nova): {e}")
                         
-                        # Send message_stop message (optional, but frontend may expect it)
-                        message_stop = {
-                            'type': 'message_stop',
-                            'amazon-bedrock-invocationMetrics': {
-                                'inputTokenCount': input_tokens,
-                                'outputTokenCount': output_tokens
-                            }
-                        }
+                        # Send message_stop message
+                        message_stop = {'type': 'message_stop'}
                         try:
                             api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
                         except api_gateway_client.exceptions.GoneException:
@@ -1620,11 +1761,15 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                     print(f"Full traceback: {traceback.format_exc()}")
                     error_response = "I apologize, but I'm having trouble accessing that information right now. Please try again in a moment."
                     
-                    # Send error response via WebSocket (same as agent_invoke_tool)
+                    # Send error response via WebSocket with newline preservation
                     try:
-                        words = error_response.split()
-                        for i, word in enumerate(words):
-                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                        streaming_text = error_response.replace('\n', ' <NEWLINE> ')
+                        words = streaming_text.split()
+                        for word in words:
+                            if word == '<NEWLINE>':
+                                delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                            else:
+                                delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
                             try:
                                 api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                             except:
@@ -1632,6 +1777,11 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                         stop_answer = {'type': 'content_block_stop', 'index': 0}
                         try:
                             api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                        except:
+                            pass
+                        message_stop = {'type': 'message_stop'}
+                        try:
+                            api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
                         except:
                             pass
                     except:
@@ -1662,20 +1812,48 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                 if not answer_text:
                     answer_text = "I'm here to help with your insurance needs. How can I assist you today?"
                 
-                # Send response via WebSocket in streaming format (same as agent_invoke_tool)
+                # Format response to ensure proper markdown with line breaks
+                # Ensure each bullet point is on a separate line
+                answer_text = answer_text.replace(' - ', '\n- ')  # Add line break before bullets if missing
+                
+                # If response starts with a dash after initial text, ensure line break
+                answer_text = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', answer_text)
+                
+                # Ensure double line break before first bullet point after intro text
+                answer_text = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', answer_text)
+                
+                # Clean up any triple+ newlines to max double
+                answer_text = re.sub(r'\n{3,}', '\n\n', answer_text)
+                
+                # Send response via WebSocket in streaming format with newline preservation
                 # Since Nova Converse API doesn't support streaming, simulate it by sending in chunks
                 try:
-                    # Send the answer in chunks to simulate streaming (frontend expects content_block_delta format)
-                    words = answer_text.split()
-                    for i, word in enumerate(words):
-                        delta_message = {
-                            'type': 'content_block_delta',
-                            'index': 0,
-                            'delta': {
-                                'type': 'text_delta',
-                                'text': word + (' ' if i < len(words) - 1 else '')
+                    # Stream response preserving newlines - split by whitespace but keep newlines
+                    # Replace newlines with a special marker temporarily
+                    streaming_text = answer_text.replace('\n', ' <NEWLINE> ')
+                    words = streaming_text.split()
+                    
+                    for word in words:
+                        if word == '<NEWLINE>':
+                            # Send actual newline character
+                            delta_message = {
+                                'type': 'content_block_delta',
+                                'index': 0,
+                                'delta': {
+                                    'type': 'text_delta',
+                                    'text': '\n'
+                                }
                             }
-                        }
+                        else:
+                            # Send word with space
+                            delta_message = {
+                                'type': 'content_block_delta',
+                                'index': 0,
+                                'delta': {
+                                    'type': 'text_delta',
+                                    'text': word + ' '
+                                }
+                            }
                         try:
                             api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta_message))
                         except api_gateway_client.exceptions.GoneException:
@@ -1692,14 +1870,8 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                     except Exception as e:
                         print(f"WebSocket send error (stop, Nova, no tools): {e}")
                     
-                    # Send message_stop message (optional, but frontend may expect it)
-                    message_stop = {
-                        'type': 'message_stop',
-                        'amazon-bedrock-invocationMetrics': {
-                            'inputTokenCount': input_tokens,
-                            'outputTokenCount': output_tokens
-                        }
-                    }
+                    # Send message_stop message
+                    message_stop = {'type': 'message_stop'}
                     try:
                         api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
                     except api_gateway_client.exceptions.GoneException:
@@ -1724,11 +1896,15 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
             print(f"Full traceback: {traceback.format_exc()}")
             response = "We are unable to assist right now please try again after few minutes"
             
-            # Send error response via WebSocket (same as agent_invoke_tool)
+            # Send error response via WebSocket with newline preservation
             try:
-                words = response.split()
-                for i, word in enumerate(words):
-                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                streaming_text = response.replace('\n', ' <NEWLINE> ')
+                words = streaming_text.split()
+                for word in words:
+                    if word == '<NEWLINE>':
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                    else:
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
                     try:
                         api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                     except:
@@ -1736,6 +1912,11 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                 stop_answer = {'type': 'content_block_stop', 'index': 0}
                 try:
                     api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+                message_stop = {'type': 'message_stop'}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
                 except:
                     pass
             except:
@@ -1749,12 +1930,16 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
         print(f"Full traceback: {traceback.format_exc()}")
         error_response = "An unknown error occurred. Please try again after some time."
         
-        # Send error response via WebSocket if connectionId is available
+        # Send error response via WebSocket if connectionId is available with newline preservation
         try:
             if connectionId:
-                words = error_response.split()
-                for i, word in enumerate(words):
-                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                streaming_text = error_response.replace('\n', ' <NEWLINE> ')
+                words = streaming_text.split()
+                for word in words:
+                    if word == '<NEWLINE>':
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                    else:
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
                     try:
                         api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                     except:
@@ -1762,6 +1947,11 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
                 stop_answer = {'type': 'content_block_stop', 'index': 0}
                 try:
                     api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(stop_answer))
+                except:
+                    pass
+                message_stop = {'type': 'message_stop'}
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(message_stop))
                 except:
                     pass
         except:
