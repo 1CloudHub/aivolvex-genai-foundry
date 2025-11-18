@@ -17,13 +17,15 @@ def handler(event, context):
     insurance_kb_id = os.environ.get('INSURANCE_KB_ID')
     retail_kb_id = os.environ.get('RETAIL_KB_ID')
     healthcare_kb_id = os.environ.get('HEALTHCARE_KB_ID')
+    manufacturing_kb_id = os.environ.get('MANUFACTURING_KB_ID')
     banking_ds_id = os.environ.get('BANKING_DS_ID')
     insurance_ds_id = os.environ.get('INSURANCE_DS_ID')
     retail_ds_id = os.environ.get('RETAIL_DS_ID')
     healthcare_ds_id = os.environ.get('HEALTHCARE_DS_ID')
+    manufacturing_ds_id = os.environ.get('MANUFACTURING_DS_ID')
     
-    print(f"Environment variables - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}, Healthcare KB: {healthcare_kb_id}")
-    print(f"Environment variables - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}, Healthcare DS: {healthcare_ds_id}")
+    print(f"Environment variables - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}, Healthcare KB: {healthcare_kb_id}, Manufacturing KB: {manufacturing_kb_id}")
+    print(f"Environment variables - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}, Healthcare DS: {healthcare_ds_id}, Manufacturing DS: {manufacturing_ds_id}")
     print(f"Event: {json.dumps(event)}")
     
     try:
@@ -62,8 +64,12 @@ def handler(event, context):
                     kb_id = healthcare_kb_id
                     ds_id = healthcare_ds_id
                     kb_type = "Healthcare"
+                elif object_key.startswith('kb/manafacturing/') or object_key.startswith('manafacturing/'):
+                    kb_id = manufacturing_kb_id
+                    ds_id = manufacturing_ds_id
+                    kb_type = "Manufacturing"
                 else:
-                    print(f"Object {object_key} doesn't match any knowledge base prefix (bank/, insurance/, kb/retail/, kb/healthcare/)")
+                    print(f"Object {object_key} doesn't match any knowledge base prefix (bank/, insurance/, kb/retail/, kb/healthcare/, kb/manafacturing/)")
                     continue
                 
                 if not kb_id or not ds_id:
