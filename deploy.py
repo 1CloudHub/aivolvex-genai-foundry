@@ -43,6 +43,12 @@ STACKS = {
         "description": "Deploy healthcare-related infrastructure and services",
         "selection_id": "healthcare",
         "display_name": "🏥 Healthcare Stack"
+    },
+    "manufacturing": {
+        "stack_name": "GenAiFoundryManufacturingStack",
+        "description": "Deploy manufacturing-related infrastructure and services",
+        "selection_id": "manafacturing",
+        "display_name": "🏭 Manufacturing Stack"
     }
 }
 
@@ -123,6 +129,7 @@ def main() -> None:
             "🛡️ Insurance",
             "🛍️ Retail",
             "🏥 Healthcare",
+            "🏭 Manufacturing",
             "❌ Exit"
         ]
     ).ask()
@@ -136,7 +143,8 @@ def main() -> None:
         "🏦 Banking": "banking",
         "🛡️ Insurance": "insurance",
         "🛍️ Retail": "retail",
-        "🏥 Healthcare": "healthcare"
+        "🏥 Healthcare": "healthcare",
+        "🏭 Manufacturing": "manufacturing"
     }
     
     industry_key = industry_map[industry_choice]
