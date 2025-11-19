@@ -860,7 +860,7 @@ class ManufacturingCdkStack(Stack):
 
         # Add dependencies to ensure Knowledge Bases are created before Lambda
         auto_sync_function.node.add_dependency(manufacturing_kb)
-
+        # auto_sync_function.node.add_dependency(insurance_kb)
         # Create a custom resource to trigger initial sync after Knowledge Base creation
         initial_sync_function = lambda_.Function(
             self, "InitialSyncFunction",

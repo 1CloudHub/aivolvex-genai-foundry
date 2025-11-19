@@ -59,7 +59,7 @@ schema = os.environ['schema']
 chat_history_table = os.environ['chat_history_table']
 prompt_metadata_table = os.environ['prompt_metadata_table']
 model_id = os.environ['model_id']
-KB_ID = os.environ['KB_ID']
+# KB_ID = os.environ['KB_ID']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
 # Model selection for chat_tool event type
@@ -71,7 +71,7 @@ chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
 # RETAIL_KB_ID=os.environ["RETAIL_KB_ID"]
 # health_kb_id=os.environ["health_kb_id"]
 MAN_KB_ID=os.environ["MAN_KB_ID"]
-banking_chat_history_table=os.environ['banking_chat_history_table']
+banking_chat_history_table=chat_history_table
 # retail_chat_history_table=os.environ['retail_chat_history_table']
 # hospital_chat_history_table=os.environ['retail_chat_history_table']
 # # Use environment region instead of hardcoded regions
@@ -99,7 +99,7 @@ schema = os.environ['schema']
 chat_history_table = os.environ['chat_history_table']
 prompt_metadata_table = os.environ['prompt_metadata_table']
 model_id = os.environ['model_id']
-KB_ID = os.environ['KB_ID']
+# KB_ID = os.environ['KB_ID']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
 # Use environment region instead of hardcoded regions
