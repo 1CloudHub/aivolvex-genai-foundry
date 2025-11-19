@@ -24,12 +24,12 @@ def create_cdk_app():
     
     # Get the selection from environment variable (set by deploy.py)
     stack_selection = os.getenv('CDK_STACK_SELECTION', 'unknown')
-    model_selection = os.getenv('CDK_MODEL_SELECTION', 'Nova')  # Default to Nova if not set
+    model_selection = os.getenv('CDK_MODEL_SELECTION', 'amazon')  # Default to amazon if not set
     
     # Map model selection to model ID
     model_id_map = {
-        'Nova': 'us.amazon.nova-pro-v1:0',
-        'Claude': 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+        'amazon': 'us.amazon.nova-pro-v1:0',
+        'anthropic': 'anthropic.claude-3-5-sonnet-20241022-v2:0'
     }
     chat_tool_model = model_id_map.get(model_selection, 'us.amazon.nova-pro-v1:0')
     

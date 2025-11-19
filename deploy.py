@@ -54,13 +54,13 @@ STACKS = {
 
 # Model configuration mapping
 MODELS = {
-    "Nova": {
+    "amazon": {
         "model_id": "us.amazon.nova-pro-v1:0",
-        "display_name": "Nova"
+        "display_name": "Amazon Nova"
     },
-    "Claude": {
+    "anthropic": {
         "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "display_name": "Claude"
+        "display_name": "Anthropic Claude"
     }
 }
 
@@ -153,7 +153,7 @@ def main() -> None:
     # Step 2: Get model selection
     model_choice = questionary.select(
         "Which model do you prefer?",
-        choices=["Nova", "Claude"]
+        choices=["amazon", "anthropic"]
     ).ask()
     
     model_info = MODELS[model_choice]
