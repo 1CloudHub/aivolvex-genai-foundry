@@ -1228,6 +1228,37 @@ Assistant: [IMMEDIATELY use pricing_warranty_tool and provide answer]
             if not final_ans:
                 final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
             
+            # Format response to ensure proper markdown with line breaks
+            # Ensure each bullet point is on a separate line
+            final_ans = final_ans.replace(' - ', '\n- ')  # Add line break before bullets if missing
+            
+            # If response starts with a dash after initial text, ensure line break
+            final_ans = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_ans)
+            
+            # Ensure double line break before first bullet point after intro text
+            final_ans = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_ans)
+            
+            # Clean up any triple+ newlines to max double
+            final_ans = re.sub(r'\n{3,}', '\n\n', final_ans)
+            
+            # Stream response preserving newlines - split by whitespace but keep newlines
+            # Replace newlines with a special marker temporarily
+            streaming_text = final_ans.replace('\n', ' <NEWLINE> ')
+            words = streaming_text.split()
+            
+            for word in words:
+                if word == '<NEWLINE>':
+                    # Send actual newline character
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                else:
+                    # Send word with space
+                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                
+                try:
+                    api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
+                except Exception as e:
+                    print(f"WebSocket send error (delta): {e}")
+            
             return {"statusCode": "200", "answer": final_ans, "question": chat, "session_id": session_id, "input_tokens": str(input_tokens), "output_tokens": str(output_tokens)}
 
         else:
@@ -2056,10 +2087,32 @@ Assistant: [IMMEDIATELY use pricing_warranty_tool and provide answer]
                     if not final_ans:
                         final_ans = "I apologize, but I couldn't retrieve the information at this time. Please try again or contact our support team."
                     
-                    # Simulate streaming by sending chunks via WebSocket
-                    words = final_ans.split()
+                    # Format response to ensure proper markdown with line breaks
+                    # Ensure each bullet point is on a separate line
+                    final_ans = final_ans.replace(' - ', '\n- ')  # Add line break before bullets if missing
+                    
+                    # If response starts with a dash after initial text, ensure line break
+                    final_ans = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_ans)
+                    
+                    # Ensure double line break before first bullet point after intro text
+                    final_ans = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_ans)
+                    
+                    # Clean up any triple+ newlines to max double
+                    final_ans = re.sub(r'\n{3,}', '\n\n', final_ans)
+                    
+                    # Stream response preserving newlines - split by whitespace but keep newlines
+                    # Replace newlines with a special marker temporarily
+                    streaming_text = final_ans.replace('\n', ' <NEWLINE> ')
+                    words = streaming_text.split()
+                    
                     for word in words:
-                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                        if word == '<NEWLINE>':
+                            # Send actual newline character
+                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                        else:
+                            # Send word with space
+                            delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                        
                         try:
                             api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                         except Exception as e:
@@ -2125,10 +2178,32 @@ Assistant: [IMMEDIATELY use pricing_warranty_tool and provide answer]
                 if not final_ans:
                     final_ans = "I'm here to help with your vehicle needs. How can I assist you today?"
                 
-                # Simulate streaming by sending chunks via WebSocket
-                words = final_ans.split()
+                # Format response to ensure proper markdown with line breaks
+                # Ensure each bullet point is on a separate line
+                final_ans = final_ans.replace(' - ', '\n- ')  # Add line break before bullets if missing
+                
+                # If response starts with a dash after initial text, ensure line break
+                final_ans = re.sub(r'([.!?])\s*-\s*', r'\1\n\n- ', final_ans)
+                
+                # Ensure double line break before first bullet point after intro text
+                final_ans = re.sub(r'([.!?:])\s*\n-\s*', r'\1\n\n- ', final_ans)
+                
+                # Clean up any triple+ newlines to max double
+                final_ans = re.sub(r'\n{3,}', '\n\n', final_ans)
+                
+                # Stream response preserving newlines - split by whitespace but keep newlines
+                # Replace newlines with a special marker temporarily
+                streaming_text = final_ans.replace('\n', ' <NEWLINE> ')
+                words = streaming_text.split()
+                
                 for word in words:
-                    delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    if word == '<NEWLINE>':
+                        # Send actual newline character
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '\n'}}
+                    else:
+                        # Send word with space
+                        delta = {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': word + ' '}}
+                    
                     try:
                         api_gateway_client.post_to_connection(ConnectionId=connectionId, Data=json.dumps(delta))
                     except Exception as e:
@@ -2367,6 +2442,8 @@ The provided document seems like to be set of three documents and there are disc
                     extracted_data = response_body.get('content', [{}])[0].get('text', '')
             else:  
                 print(f"Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                # Initialize bedrock client for Claude model
+                bedrock_client = boto3.client("bedrock-runtime", region_name=region_used)
                 # Use Claude invoke_model API (existing implementation)
                 # Prepare the request body for Bedrock
                 body = json.dumps({
