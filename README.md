@@ -6,7 +6,7 @@
 ## Prerequisites
 Before beginning the deployment process:
 * Ensure you have access to the correct AWS account.
-* You must be using the **`us-east-1`** AWS region.
+* You must be using the **`us-east-1`** or **`us-west-2`** AWS region.
 ---
 ## Pre Deployment Steps
 ### Login to the AWS Console
