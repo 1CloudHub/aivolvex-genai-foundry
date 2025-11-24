@@ -11,17 +11,6 @@ Before beginning the deployment process:
 ## Pre Deployment Steps
 ### Login to the AWS Console
 Log in to the provided AWS account using the IAM credentials or SSO as per the shared instructions.
-### Request Model Access in Bedrock
-Navigate to the **Amazon Bedrock** service in the AWS Console.
-* Open the **Model access** tab.
-* Request access to the following models:
-  ```
-  - Claude 3.5 Sonnet
-  - Claude 3.7 Sonnet
-  - Amazon Nova Pro
-  - Amazon Nova Premium
-  ```
----
 ## Deployment Steps
 
 ### 1. Set Region to `us-east-1` or `us-west-2`
@@ -81,7 +70,14 @@ python deploy.py
 ```
 ![Deployment Step](./assets/deployment_step.png)
 
-
+We have used the models listed here:
+  ```
+  - Claude 3.5 Sonnet
+  - Claude 3.7 Sonnet
+  - Amazon Nova Pro
+  - Amazon Nova Premium
+  ```
+---
 ---
 
 
