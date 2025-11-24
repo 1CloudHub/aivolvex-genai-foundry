@@ -69,7 +69,7 @@ cdk bootstrap
 python deploy.py
 ```
 ![Deployment Step](./assets/deployment_step.png)
-![Deployment Step](./assets/image.png)
+![Deployment Step](./assets/image_model.png)
 We have used the models listed here:
   ```
   - Claude 3.5 Sonnet
