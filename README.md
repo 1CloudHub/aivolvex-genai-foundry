@@ -16,26 +16,17 @@ Navigate to the **Amazon Bedrock** service in the AWS Console.
 * Open the **Model access** tab.
 * Request access to the following models:
   ```
-  - Claude 3 Sonnet
+  - Claude 3.5 Sonnet
   - Claude 3.7 Sonnet
-  - Amazon Titan Embedding V2
-  - Titan Multimodal Embeddings G1
-  - Amazon Nova Canvas
-  - Amazon Nova Reel
-  - Llama 3.3 70B Instruct
+  - Amazon Nova Pro
+  - Amazon Nova Premium
   ```
-> It may take a few minutes for the model access to be approved.
-![Model Access Navigation](./assets/model_access_1.jpg)
-![Model Access](./assets/enable-model.png)
-![Model Access](./assets/request-for-access.png)
-![Model Access](./assets/request_2.png)
-![Bedrock Confirmation](./assets/bedrock-confirmation-page.png)
 ---
 ## Deployment Steps
 
-### 1. Set Region to `us-east-1`
-Navigate to the region selector in the AWS Console and ensure that **`US East (N. Virginia) - us-east-1`** is selected.
-> This is critical, as all the CDK resources are scoped and supported only in this region.
+### 1. Set Region to `us-east-1` or `us-west-2`
+Navigate to the region selector in the AWS Console and ensure that either **`US East (N. Virginia) - us-east-1`** or **`US WEST (Oregon) - us-west-2`** is selected.
+> This is critical, as all the CDK resources are scoped and supported only in these region.
 ![Region Navigation](./assets/region.png)
 ---
 ### 2. Open AWS CloudShell
