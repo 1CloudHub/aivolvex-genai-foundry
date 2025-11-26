@@ -1,7 +1,7 @@
 # GenAI Foundry CDK Deployment Guide
 ## Overview
 **GenAI Foundry** is an AI-powered sandbox platform for banking and insurance. Powered by Generative AI with RAG-enabled conversational capabilities, it delivers intelligent virtual assistants, voice-enabled chatbots, automated document processing, and advanced risk assessment. It enables post-call analysis, underwriting decision support, and multi-channel customer engagement—driving faster decisions, greater efficiency, and exceptional customer experiences.
-> **Disclaimer**: This CDK setup is strictly designed and tested for the `us-east-1` region (N. Virginia). Please ensure that all resources are deployed only within this region to avoid compatibility issues.
+> **Disclaimer**: This CDK setup is strictly designed and tested for the `us-east-1` region (N. Virginia) and `us-west-2` (Oregon). Please ensure that all resources are deployed only within these regions to avoid compatibility issues.
 ---
 ## Prerequisites
 Before beginning the deployment process:
