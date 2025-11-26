@@ -62,6 +62,10 @@ sudo npm install -g aws-cdk
 ```bash
 cdk bootstrap
 ```
+If you face a `No storage available` error then run this command
+```bash
+rm -rf ~/.local/bin/qchat ~/.local/bin/q ~/.local/bin/qterm
+```
 > Prepares your AWS environment for deploying CDK applications by provisioning necessary resources like the CDK toolkit stack.
 ---
 ### 7. Deploy the Stack
