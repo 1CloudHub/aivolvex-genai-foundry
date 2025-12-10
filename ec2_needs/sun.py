@@ -468,6 +468,38 @@ def get_or_create_memory(session_id):
     return sessions[session_id]
 
 
+def tts_polly(region_name, file_name, text):
+    polly_client = boto3.client('polly', region_name = region_name)
+
+
+
+
+    # Synthesize speech
+    response = polly_client.synthesize_speech(
+        Text=text,
+        TextType='text',
+        VoiceId='Joanna',  # English US voice (you can also use 'Matthew', 'Salli', etc.)
+        OutputFormat='pcm',  # PCM format for WAV conversion
+        SampleRate='16000',
+        Engine='neural'  # Optional: use neural engine for better quality
+    )
+
+    # Get the audio stream
+    audio_stream = response['AudioStream']
+
+    # Save as WAV file
+    import wave
+
+    with wave.open(file_name, 'wb') as wav_file:
+        wav_file.setnchannels(1)  # Mono
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(16000)  # Sample rate
+        wav_file.writeframes(audio_stream.read())
+
+    print("Audio saved as sample.wav")
+
+    return 200
+
 prompt_template_tagalog ="""
 "You are an AI-powered bilingual casino front desk agent. Your task is to accurately translate text while maintaining a warm, professional, and hospitality-focused tone.
 
@@ -531,6 +563,10 @@ prompt_e = PromptTemplate(
     template=prompt_template_english
 )
 
+import re
+def sanitize_filename(filename):
+    # Replace hyphens and other special chars with underscores
+    return re.sub(r'[^a-zA-Z0-9._]', '_', filename)
 
 prompt_senti="""
 You are a sentiment analyser, consider the below input of the user and output a single word:
@@ -635,6 +671,39 @@ def fetch_audio():
         return jsonify({"status": "error", "message": str(e)}), 500
 # --- Mock tool implementations ---
 
+@app.route('/polly', methods = ["POST"])
+def test_polly():
+    data_aud = request.json
+    polly_client = boto3.client('polly', region_name = data_aud.get("region_name"))
+
+
+
+
+    # Synthesize speech
+    response = polly_client.synthesize_speech(
+        Text='Hey there',
+        TextType='text',
+        VoiceId='Joanna',  # English US voice (you can also use 'Matthew', 'Salli', etc.)
+        OutputFormat='pcm',  # PCM format for WAV conversion
+        SampleRate='16000',
+        Engine='neural'  # Optional: use neural engine for better quality
+    )
+
+    # Get the audio stream
+    audio_stream = response['AudioStream']
+
+    # Save as WAV file
+    import wave
+
+    with wave.open('sample.wav', 'wb') as wav_file:
+        wav_file.setnchannels(1)  # Mono
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(16000)  # Sample rate
+        wav_file.writeframes(audio_stream.read())
+
+    print("Audio saved as sample.wav")
+
+    return 200
 @app.route('/transcribe', methods=['POST'])
 def transcribe_audio():
     try:
@@ -719,16 +788,18 @@ def transcribe_audio():
         #     print(f"🔍 Upload cleanup error type: {type(e).__name__}")
         
         # Create TTS response file in the unique folder
-        ww = f"tts_response_{uuid4()}.wav"
-        temp_speech_path = os.path.join(request_folder, ww)
+        # ww = sanitize_filename(f"tts_response_{uuid4()}.wav")
+        # temp_speech_path = os.path.join(request_folder, ww)
+        temp_speech_path = "placeholder.wav"
         print(f"🎵 Creating TTS response file at: {temp_speech_path}")
         print(f"🎵 Synthesizing TTS to {temp_speech_path} ...")
-        tts_openAi(answer, temp_speech_path, open_ai_key)
+        # tts_openAi(answer, temp_speech_path, open_ai_key)
+        tts_polly(total_region, temp_speech_path, answer)
         print(f"✅ Successfully created TTS response file: {temp_speech_path}")
 
-        upload_to_s3(temp_speech_path, bucket_name, f"audio/{ww}", total_region)
+        upload_to_s3(temp_speech_path, bucket_name, temp_speech_path, total_region)
 
-        hh = generate_presigned_url(bucket_name, f"audio/{ww}", total_region) 
+        hh = generate_presigned_url(bucket_name, temp_speech_path, total_region) 
 
         print("QQQQQQQQQQQQQQQQQQQQQQQQQ", hh)
         
