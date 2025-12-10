@@ -107,6 +107,83 @@ Enjoy the application experience.
 >* ⚠️ **Deployment time**: Deployment typically takes 20–30 minutes. After a successful deployment, please wait an additional 10 minutes before using the application.
 >* ❗ **EC2 restart note**: If the underlying EC2 instance is stopped and started again, the application will not run automatically and may run into issues.
 ---
+## Used AWS services
+```
+1 Networking and Security
+1.1 VPC - Virtual Private Cloud with public and private subnets
+1.2 Subnets
+1.2.1 Public Subnet
+1.2.2 Private Subnet with EGRESS
+1.3 Security Groups
+1.3.1 EC2 Security Group
+1.3.2 RDS Security Group
+1.3.3 Lambda Security Group
+1.4 EC2 Key Pair - For SSH access
+
+2 Compute
+2.1 EC2 Instances
+2.1.1 Main EC2 Instance (T3 Medium with GPU Deep Learning AMI)
+2.1.2 Frontend EC2 Instance (T3 Medium)
+
+3 Database
+3.1 RDS PostgreSQL Instance (T3 Micro)
+3.2 RDS Subnet Group - For database placement
+
+4 Storage
+4.1 S3 Buckets
+4.1.1 Knowledge Base Bucket
+4.1.2 Frontend Bucket
+4.1.3 Voice Operations Bucket
+4.2 S3 Deployments
+4.2.1 Knowledge Base folder deployment
+4.2.2 Frontend folder deployment
+4.2.3 Healthcare KB folder deployment
+
+5 AI and ML Services
+5.1 Bedrock Knowledge Base - Healthcare KB
+5.2 Bedrock Data Source - For knowledge base ingestion
+5.3 OpenSearch Serverless Collection - Healthcare collection
+5.4 OpenSearch Security Policies
+5.4.1 Encryption Policy
+5.4.2 Network Policy
+5.5 OpenSearch Data Access Policy
+
+6 Lambda Functions
+6.1 Healthcare Index Creator Function
+6.2 Healthcare Index Waiter Function
+6.3 Auto Sync Function
+6.4 Initial Sync Function
+6.5 WebSocket Handler Function
+
+7 Lambda Layers
+7.1 Boto3 Layer
+7.2 Psycopg2 Layer
+7.3 Requests Layer
+7.4 OpenSearch Python Layer
+7.5 AWS4Auth Layer
+
+8 API and Integration
+8.1 API Gateway REST API - GenAI Foundry API
+8.1.1 /chat_api
+8.1.2 /genai_foundry_misc
+8.1.3 /opensearch
+8.1.4 /voiceops
+8.2 API Gateway v2 WebSocket API
+8.3 WebSocket Stage - Production
+
+9 IAM Roles and Policies
+9.1 Bedrock Knowledge Base Role
+9.2 Lambda Index Creator Role
+9.3 Lambda Auto-Sync Role
+9.4 EC2 Role
+
+10 Secrets Management
+10.1 RDS Credentials Secret
+
+11 Monitoring and Logging
+11.1 CloudWatch Log Groups
+ ```
+
 ## About GenAI Foundry
 
 GenAIFoundry enables banking and insurance teams to explore AI-powered solutions through an intelligent assistant that understands context, retrieves precise insights, and delivers accurate responses. From post-call analysis to underwriting decision support and multi-channel customer engagement, it transforms complex processes into clear, actionable outcomes—enhancing efficiency, accuracy, and customer satisfaction.
