@@ -1140,6 +1140,7 @@ class ManufacturingCdkStack(Stack):
     "source eagle/bin/activate",
     "pip install --upgrade pip setuptools wheel",
     "pip install -r requirements.txt --no-build-isolation --no-input",
+    "pip install openai-whisper --no-build-isolation", 
     "pip install asgiref --no-input",
     "# Set environment variable and run in screen session",
     "screen -dmS run_app bash -c 'source eagle/bin/activate && export S3_PATH=" + s3_name + " && uvicorn sun:asgi_app --host 0.0.0.0 --port 8000'",
