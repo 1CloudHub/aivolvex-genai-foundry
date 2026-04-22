@@ -106,6 +106,7 @@ class MediaCdkStack(Stack):
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3FullAccess"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonBedrockFullAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonAPIGatewayAdministrator"),
             ],
         )
         media_bucket.grant_read_write(ec2_role)
@@ -120,11 +121,22 @@ class MediaCdkStack(Stack):
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM),
             machine_image=ec2.MachineImage.latest_amazon_linux2023(),
         )
+        ec2_instance_front = ec2.Instance(
+            self,
+            "MediaFrontendEc2",
+            vpc=vpc,
+            role=ec2_role,
+            security_group=ec2_sg,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+            instance_type=ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM),
+            machine_image=ec2.MachineImage.latest_amazon_linux2023(),
+        )
 
         ec2_instance.add_user_data(
             "set -euxo pipefail",
             "dnf update -y",
-            "dnf install -y git python3.11 python3.11-pip ffmpeg",
+            "dnf install -y git python3.11 python3.11-pip ffmpeg jq",
+            "if ! command -v aws >/dev/null 2>&1; then dnf install -y awscli; fi",
             "cd /home/ec2-user",
             "git clone https://github.com/1CloudHub/aivolvex-genai-foundry.git || true",
             "cd aivolvex-genai-foundry/media_ec2_needs",
@@ -143,6 +155,14 @@ class MediaCdkStack(Stack):
                 f"uvicorn {ec2_media_entry_file.replace('.py', '')}:app --host 0.0.0.0 --port 8000' "
                 "> /home/ec2-user/media-api.log 2>&1 &"
             ),
+            f"export COACHING_API_NAME=\"coaching_assist_media-{suffix}\"",
+            "TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\")",
+            "PUBLIC_IP=$(curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" http://169.254.169.254/latest/meta-data/public-ipv4)",
+            "COACHING_API_ID=$(aws apigateway get-rest-apis --region \"$REGION\" --query \"items[?name=='$COACHING_API_NAME'].id\" --output text)",
+            "ROOT_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id \"$COACHING_API_ID\" --region \"$REGION\" --query \"items[?path=='/'].id\" --output text)",
+            "EDIT_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id \"$COACHING_API_ID\" --region \"$REGION\" --query \"items[?path=='/edit_video'].id\" --output text)",
+            "aws apigateway update-integration --rest-api-id \"$COACHING_API_ID\" --resource-id \"$ROOT_RESOURCE_ID\" --http-method ANY --region \"$REGION\" --patch-operations op=replace,path=/uri,value=\"http://${PUBLIC_IP}:8000\"",
+            "aws apigateway update-integration --rest-api-id \"$COACHING_API_ID\" --resource-id \"$EDIT_RESOURCE_ID\" --http-method POST --region \"$REGION\" --patch-operations op=replace,path=/uri,value=\"http://${PUBLIC_IP}:8000/edit-video\"",
         )
 
         lambda_role = iam.Role(
@@ -244,12 +264,12 @@ class MediaCdkStack(Stack):
         )
 
         ec2_edit_video_integration = apigateway.HttpIntegration(
-            url=f"http://{ec2_instance.instance_public_ip}:8000/edit-video",
+            url="http://127.0.0.1:8000/edit-video",
             proxy=True,
             options=apigateway.IntegrationOptions(timeout=Duration.seconds(29)),
         )
         ec2_root_proxy_integration = apigateway.HttpIntegration(
-            url=f"http://{ec2_instance.instance_public_ip}:8000",
+            url="http://127.0.0.1:8000",
             proxy=True,
             options=apigateway.IntegrationOptions(timeout=Duration.seconds(29)),
         )
@@ -304,7 +324,7 @@ class MediaCdkStack(Stack):
         media_api_name = f"genaifoundry-media-api-{suffix}"
 
         # Build and deploy frontend with Media-specific environment values.
-        ec2_instance.add_user_data(
+        ec2_instance_front.add_user_data(
             "set -euxo pipefail",
             "dnf install -y unzip jq",
             "if ! command -v aws >/dev/null 2>&1; then dnf install -y awscli; fi",
