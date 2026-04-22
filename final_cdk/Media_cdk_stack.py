@@ -11,10 +11,12 @@ from aws_cdk import (
     aws_apigateway as apigateway,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
+    custom_resources as cr,
 )
 from constructs import Construct
 import random
 import string
+import time
 
 
 def generate_random_suffix(length: int = 8) -> str:
@@ -91,7 +93,7 @@ class MediaCdkStack(Stack):
         )
 
         # Upload frontend package as-is. Existing deployment flow can build from src.zip if needed.
-        s3deploy.BucketDeployment(
+        frontend_deploy = s3deploy.BucketDeployment(
             self,
             "DeployMediaFrontend",
             sources=[s3deploy.Source.asset("genaifoundry-front")],
@@ -135,7 +137,8 @@ class MediaCdkStack(Stack):
         ec2_instance.add_user_data(
             "set -euxo pipefail",
             "dnf update -y",
-            "dnf install -y git python3.11 python3.11-pip ffmpeg jq",
+            "dnf install -y git python3.11 python3.11-pip jq",
+            "dnf install -y ffmpeg || true",
             "if ! command -v aws >/dev/null 2>&1; then dnf install -y awscli; fi",
             "cd /home/ec2-user",
             "git clone https://github.com/1CloudHub/aivolvex-genai-foundry.git || true",
@@ -181,6 +184,21 @@ class MediaCdkStack(Stack):
             )
         )
 
+        media_boto3_layer = lambda_.LayerVersion(
+            self,
+            "MediaBoto3Layer",
+            code=lambda_.Code.from_asset("layers/boto3-9e4ca0fc-be18-4b62-8bb2-40b541fc7de6.zip"),
+            compatible_runtimes=[lambda_.Runtime.PYTHON_3_11],
+            description="Boto3 layer for Media Lambda",
+        )
+        media_requests_layer = lambda_.LayerVersion(
+            self,
+            "MediaRequestsLayer",
+            code=lambda_.Code.from_asset("layers/requests-0899e8ab-9427-46b4-b6e7-3d3c376139dc.zip"),
+            compatible_runtimes=[lambda_.Runtime.PYTHON_3_11],
+            description="Requests layer for Media Lambda",
+        )
+
         media_lambda = lambda_.Function(
             self,
             "MediaStreamingLambda",
@@ -190,6 +208,7 @@ class MediaCdkStack(Stack):
             timeout=Duration.seconds(60),
             memory_size=256,
             role=lambda_role,
+            layers=[media_boto3_layer, media_requests_layer],
             environment={
                 "PUBLIC_MEDIA_BASE_URL": "https://public-media-sandbox.s3-us-west-2.amazonaws.com",
                 "region_used": self.region,
@@ -355,18 +374,112 @@ class MediaCdkStack(Stack):
             f"aws s3 cp dist/ s3://{frontend_bucket_name}/ --recursive --region {self.region}",
         )
 
+        s3_origin = origins.S3BucketOrigin(
+            frontend_bucket,
+            origin_path="",
+        )
+
         distribution = cloudfront.Distribution(
             self,
             "MediaFrontendDistribution",
             default_behavior=cloudfront.BehaviorOptions(
-                origin=origins.S3BucketOrigin(frontend_bucket),
+                origin=s3_origin,
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                origin_request_policy=None,
+                response_headers_policy=None,
             ),
             default_root_object="index.html",
+            price_class=cloudfront.PriceClass.PRICE_CLASS_ALL,
+            http_version=cloudfront.HttpVersion.HTTP2,
+            enable_logging=False,
+            enable_ipv6=True,
             error_responses=[
-                cloudfront.ErrorResponse(http_status=403, response_http_status=200, response_page_path="/index.html"),
-                cloudfront.ErrorResponse(http_status=404, response_http_status=200, response_page_path="/index.html"),
+                cloudfront.ErrorResponse(
+                    http_status=403,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=Duration.seconds(10),
+                ),
+                cloudfront.ErrorResponse(
+                    http_status=404,
+                    response_http_status=200,
+                    response_page_path="/index.html",
+                    ttl=Duration.seconds(10),
+                ),
             ],
+        )
+
+        oac = cloudfront.CfnOriginAccessControl(
+            self,
+            "MediaFrontendOAC",
+            origin_access_control_config=cloudfront.CfnOriginAccessControl.OriginAccessControlConfigProperty(
+                name=f"{suffix}-media-frontend-oac",
+                description="OAC for media frontend S3 origin",
+                origin_access_control_origin_type="s3",
+                signing_behavior="always",
+                signing_protocol="sigv4",
+            ),
+        )
+        cfn_dist = distribution.node.default_child  # type: ignore
+        cfn_dist.add_property_override(
+            "DistributionConfig.Origins.0.OriginAccessControlId",
+            oac.attr_id,
+        )
+        cfn_dist.add_property_deletion_override(
+            "DistributionConfig.Origins.0.S3OriginConfig.OriginAccessIdentity"
+        )
+        cfn_dist.add_dependency(oac)
+
+        invalidation = cr.AwsCustomResource(
+            self,
+            "MediaFrontendInvalidation",
+            on_update=cr.AwsSdkCall(
+                service="CloudFront",
+                action="createInvalidation",
+                parameters={
+                    "DistributionId": distribution.distribution_id,
+                    "InvalidationBatch": {
+                        "CallerReference": str(int(time.time())),
+                        "Paths": {"Quantity": 1, "Items": ["/*"]},
+                    },
+                },
+                physical_resource_id=cr.PhysicalResourceId.of(
+                    f"InvalidateMediaFrontend-{int(time.time())}"
+                ),
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements(
+                [
+                    iam.PolicyStatement(
+                        actions=[
+                            "cloudfront:CreateInvalidation",
+                            "cloudfront:GetInvalidation",
+                            "cloudfront:ListInvalidations",
+                        ],
+                        resources=["*"],
+                    )
+                ]
+            ),
+        )
+        invalidation.node.add_dependency(frontend_deploy)
+        invalidation.node.add_dependency(distribution)
+
+        frontend_bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                principals=[iam.ArnPrincipal(f"arn:aws:iam::{self.account}:root")],
+                actions=[
+                    "s3:DeleteObject*",
+                    "s3:GetBucket*",
+                    "s3:GetObject",
+                    "s3:List*",
+                    "s3:PutBucketPolicy",
+                ],
+                resources=[
+                    frontend_bucket.bucket_arn,
+                    f"{frontend_bucket.bucket_arn}/*",
+                ],
+            )
         )
         frontend_bucket.add_to_resource_policy(
             iam.PolicyStatement(
