@@ -49,6 +49,12 @@ STACKS = {
         "description": "Deploy manufacturing-related infrastructure and services",
         "selection_id": "manafacturing",
         "display_name": "🏭 Manufacturing Stack"
+    },
+    "media": {
+        "stack_name": "GenAiFoundryMediaStack",
+        "description": "Deploy media-related infrastructure and services",
+        "selection_id": "media",
+        "display_name": "🎬 Media Stack"
     }
 }
 
@@ -130,6 +136,7 @@ def main() -> None:
             "🛍️ Retail",
             "🏥 Healthcare",
             "🏭 Manufacturing",
+            "🎬 Media",
             "❌ Exit"
         ]
     ).ask()
@@ -144,7 +151,8 @@ def main() -> None:
         "🛡️ Insurance": "insurance",
         "🛍️ Retail": "retail",
         "🏥 Healthcare": "healthcare",
-        "🏭 Manufacturing": "manufacturing"
+        "🏭 Manufacturing": "manufacturing",
+        "🎬 Media": "media"
     }
     
     industry_key = industry_map[industry_choice]

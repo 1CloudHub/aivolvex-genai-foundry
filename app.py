@@ -13,6 +13,7 @@ from final_cdk.Insurance_cdk_stack import InsuranceCdkStack
 from final_cdk.Retail_cdk_stack import RetailCdkStack
 from final_cdk.Healthcare_cdk_stack import HealthcareCdkStack
 from final_cdk.Manufacturing_cdk_stack import ManufacturingCdkStack
+from final_cdk.Media_cdk_stack import MediaCdkStack
 
 def create_cdk_app():
     """
@@ -28,6 +29,8 @@ def create_cdk_app():
     
     # Map model selection to model ID
     model_id_map = {
+        'nova_model': 'us.amazon.nova-pro-v1:0',
+        'claude': 'anthropic.claude-3-5-sonnet-20241022-v2:0',
         'amazon': 'us.amazon.nova-pro-v1:0',
         'anthropic': 'anthropic.claude-3-5-sonnet-20241022-v2:0'
     }
@@ -85,6 +88,19 @@ def create_cdk_app():
         "GenAiFoundryManufacturingStack",
         stack_selection=stack_selection,  # Pass selection to stack
         chat_tool_model=chat_tool_model,  # Pass model ID to stack
+        env=cdk.Environment(
+            account=os.getenv('CDK_DEFAULT_ACCOUNT'),
+            region=os.getenv('CDK_DEFAULT_REGION')
+        )
+    )
+
+    # Create Media Stack
+    MediaCdkStack(
+        app,
+        "GenAiFoundryMediaStack",
+        stack_selection=stack_selection,
+        chat_tool_model=chat_tool_model,
+        model_selection=model_selection,
         env=cdk.Environment(
             account=os.getenv('CDK_DEFAULT_ACCOUNT'),
             region=os.getenv('CDK_DEFAULT_REGION')
