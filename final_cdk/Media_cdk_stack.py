@@ -173,7 +173,6 @@ class MediaCdkStack(Stack):
             environment={
                 "PUBLIC_MEDIA_BASE_URL": "https://public-media-sandbox.s3-us-west-2.amazonaws.com",
                 "region_used": self.region,
-                "ec2_instance_ip": ec2_instance.instance_public_ip,
             },
         )
 
@@ -307,7 +306,7 @@ class MediaCdkStack(Stack):
         media_api_base_url = f"https://{media_api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/chat_api"
         media_streaming_api_url = f"https://{media_api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/edit_video"
         media_misc_api_url = f"https://{media_api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/genai_foundry_misc"
-        media_ec2_base_url = f"http://{ec2_instance.instance_public_ip}:8000"
+        media_api_name = f"genaifoundry-media-api-{suffix}"
 
         # Build and deploy frontend with Media-specific environment values.
         ec2_instance.add_user_data(
@@ -323,10 +322,16 @@ class MediaCdkStack(Stack):
             "cd \"$APP_DIR\"",
             "touch .env",
             "update_env_var(){ key=\"$1\"; val=\"$2\"; if grep -q \"^${key}=\" .env; then sed -i \"s|^${key}=.*|${key}=${val}|\" .env; else echo \"${key}=${val}\" >> .env; fi; }",
-            f"update_env_var VITE_API_BASE_URL \"{media_api_base_url}\"",
-            f"update_env_var VITE_MEDIA_STREAMING_API_URL \"{media_streaming_api_url}\"",
-            f"update_env_var VITE_GENAI_FOUNDRY_MISC_URL \"{media_misc_api_url}\"",
-            f"update_env_var VITE_EC2_BASE_URL \"{media_ec2_base_url}\"",
+            f"export REST_API_NAME=\"{media_api_name}\"",
+            "API_ID_REST=$(aws apigateway get-rest-apis --region \"$REGION\" --query \"items[?name=='$REST_API_NAME'].id\" --output text)",
+            "VITE_API_BASE_URL=\"https://${API_ID_REST}.execute-api.${REGION}.amazonaws.com/dev/chat_api\"",
+            "VITE_MEDIA_STREAMING_API_URL=\"https://${API_ID_REST}.execute-api.${REGION}.amazonaws.com/dev/edit_video\"",
+            "VITE_GENAI_FOUNDRY_MISC_URL=\"https://${API_ID_REST}.execute-api.${REGION}.amazonaws.com/dev/genai_foundry_misc\"",
+            "VITE_EC2_BASE_URL=\"http://127.0.0.1:8000\"",
+            "update_env_var VITE_API_BASE_URL \"$VITE_API_BASE_URL\"",
+            "update_env_var VITE_MEDIA_STREAMING_API_URL \"$VITE_MEDIA_STREAMING_API_URL\"",
+            "update_env_var VITE_GENAI_FOUNDRY_MISC_URL \"$VITE_GENAI_FOUNDRY_MISC_URL\"",
+            "update_env_var VITE_EC2_BASE_URL \"$VITE_EC2_BASE_URL\"",
             f"update_env_var VITE_EC2_IP \"{ec2_instance.instance_public_ip}\"",
             f"update_env_var VITE_STACK_SELECTION \"{stack_selection}\"",
             "npm install",
