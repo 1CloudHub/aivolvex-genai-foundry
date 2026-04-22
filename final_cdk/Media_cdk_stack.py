@@ -7,6 +7,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_lambda as lambda_,
     aws_s3 as s3,
+    aws_ssm as ssm,
     aws_s3_deployment as s3deploy,
     aws_apigateway as apigateway,
     aws_cloudfront as cloudfront,
@@ -112,6 +113,8 @@ class MediaCdkStack(Stack):
             ],
         )
         media_bucket.grant_read_write(ec2_role)
+        frontend_bucket.grant_read(ec2_role)
+        frontend_bucket.grant_read_write(ec2_role)
 
         ec2_instance = ec2.Instance(
             self,
@@ -133,6 +136,13 @@ class MediaCdkStack(Stack):
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM),
             machine_image=ec2.MachineImage.latest_amazon_linux2023(),
         )
+        media_ec2_ip_parameter = ssm.StringParameter(
+            self,
+            "MediaEc2IpParam",
+            parameter_name=f"/genaifoundry/media/{suffix}/ec2-ip",
+            string_value=ec2_instance.instance_public_ip,
+        )
+        media_ec2_ip_parameter.grant_read(ec2_role)
 
         ec2_instance.add_user_data(
             "set -euxo pipefail",
@@ -375,7 +385,8 @@ class MediaCdkStack(Stack):
             "update_env_var VITE_MEDIA_STREAMING_API_URL \"$VITE_MEDIA_STREAMING_API_URL\"",
             "update_env_var VITE_GENAI_FOUNDRY_MISC_URL \"$VITE_GENAI_FOUNDRY_MISC_URL\"",
             "update_env_var VITE_EC2_BASE_URL \"$VITE_EC2_BASE_URL\"",
-            f"update_env_var VITE_EC2_IP \"{ec2_instance.instance_public_ip}\"",
+            f"MEDIA_EC2_IP=$(aws ssm get-parameter --name '/genaifoundry/media/{suffix}/ec2-ip' --region \"$REGION\" --query Parameter.Value --output text)",
+            "update_env_var VITE_EC2_IP \"$MEDIA_EC2_IP\"",
             f"update_env_var VITE_STACK_SELECTION \"{stack_selection}\"",
             "npm install",
             "npm run build",
