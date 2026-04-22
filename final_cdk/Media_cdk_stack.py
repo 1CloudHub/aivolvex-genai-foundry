@@ -243,11 +243,6 @@ class MediaCdkStack(Stack):
             ],
         )
 
-        ec2_chat_integration = apigateway.HttpIntegration(
-            url=f"http://{ec2_instance.instance_public_ip}:8000/chat_api",
-            proxy=True,
-            options=apigateway.IntegrationOptions(timeout=Duration.seconds(29)),
-        )
         ec2_edit_video_integration = apigateway.HttpIntegration(
             url=f"http://{ec2_instance.instance_public_ip}:8000/edit-video",
             proxy=True,
@@ -260,8 +255,8 @@ class MediaCdkStack(Stack):
         )
 
         for path_name, integration in {
-            "chat_api": ec2_chat_integration,
-            "edit_video": ec2_edit_video_integration,
+            "chat_api": lambda_integration,
+            "edit_video": lambda_integration,
             "genai_foundry_misc": lambda_integration,
             "media_streaming": media_streaming_lambda_integration,
         }.items():
@@ -304,7 +299,7 @@ class MediaCdkStack(Stack):
         )
 
         media_api_base_url = f"https://{media_api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/chat_api"
-        media_streaming_api_url = f"https://{media_api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/edit_video"
+        media_streaming_api_url = f"https://{coaching_api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/edit_video"
         media_misc_api_url = f"https://{media_api.rest_api_id}.execute-api.{self.region}.amazonaws.com/dev/genai_foundry_misc"
         media_api_name = f"genaifoundry-media-api-{suffix}"
 
