@@ -154,7 +154,7 @@ class MediaCdkStack(Stack):
             f"printf 'export REGION={self.region}\\n' >> /home/ec2-user/start_media_api.sh",
             f"printf 'export STACK_SELECTION={stack_selection}\\n' >> /home/ec2-user/start_media_api.sh",
             f"printf 'export CHAT_TOOL_MODEL={chat_tool_model}\\n' >> /home/ec2-user/start_media_api.sh",
-            f"printf 'screen -dmS media_api bash -c \\'source .venv/bin/activate && uvicorn {ec2_media_module}:app --host 0.0.0.0 --port 8000\\'\\n' >> /home/ec2-user/start_media_api.sh",
+            f'printf \'screen -dmS media_api bash -c "source .venv/bin/activate && uvicorn {ec2_media_module}:app --host 0.0.0.0 --port 8000"\\n\' >> /home/ec2-user/start_media_api.sh',
             "printf 'echo Media API started\\n' >> /home/ec2-user/start_media_api.sh",
             "chmod +x /home/ec2-user/start_media_api.sh",
             "chown ec2-user:ec2-user /home/ec2-user/start_media_api.sh",
