@@ -80,16 +80,16 @@ class MediaCdkStack(Stack):
             auto_delete_objects=True,
         )
 
+        # Frontend bucket for static website hosting (public)
         frontend_bucket = s3.Bucket(
             self,
             "MediaFrontendBucket",
             bucket_name=frontend_bucket_name,
             versioned=True,
+            removal_policy=RemovalPolicy.DESTROY,  # For development only
+            auto_delete_objects=True,  # For development only
             website_index_document="index.html",
             website_error_document="index.html",
-            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
         )
 
         # Upload frontend package as-is. Existing deployment flow can build from src.zip if needed.
@@ -107,13 +107,9 @@ class MediaCdkStack(Stack):
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3FullAccess"),
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonBedrockFullAccess"),
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonAPIGatewayAdministrator"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess"),
             ],
         )
-        media_bucket.grant_read_write(ec2_role)
-        frontend_bucket.grant_read(ec2_role)
-        frontend_bucket.grant_read_write(ec2_role)
 
         ec2_instance = ec2.Instance(
             self,
@@ -385,7 +381,7 @@ class MediaCdkStack(Stack):
             "update_env_var VITE_GENAI_FOUNDRY_MISC_URL \"$VITE_GENAI_FOUNDRY_MISC_URL\"",
             "update_env_var VITE_EC2_BASE_URL \"$VITE_EC2_BASE_URL\"",
             f"export MEDIA_STACK_SUFFIX=\"{suffix}\"",
-            "MEDIA_EC2_IP=$(aws ec2 describe-instances --region \"$REGION\" --filters \"Name=tag:aws:cloudformation:stack-name,Values=GenAiFoundryMediaStack\" \"Name=instance-state-name,Values=running\" \"Name=tag:Name,Values=*MediaApiEc2*\" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)",
+            "MEDIA_EC2_IP=$(aws ec2 describe-instances --region \"$REGION\" --filters \"Name=tag:aws:cloudformation:stack-name,Values=GenAiFoundryMediaStack\" \"Name=instance-state-name,Values=running\" \"Name=tag:Name,Values=*MediaApiEc2*\" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo '')",
             "update_env_var VITE_EC2_IP \"$MEDIA_EC2_IP\"",
             f"update_env_var VITE_STACK_SELECTION \"{stack_selection}\"",
             "npm install",
