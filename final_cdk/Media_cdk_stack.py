@@ -135,7 +135,7 @@ class MediaCdkStack(Stack):
         ec2_instance.add_user_data(
             "set -euxo pipefail",
             "dnf update -y",
-            "dnf install -y git python3.11 python3.11-pip jq",
+            "dnf install -y git python3.11 python3.11-pip jq screen",
             "dnf install -y ffmpeg || true",
             "if ! command -v aws >/dev/null 2>&1; then dnf install -y awscli; fi",
             "cd /home/ec2-user",
@@ -145,17 +145,21 @@ class MediaCdkStack(Stack):
             "source .venv/bin/activate",
             "pip install --upgrade pip setuptools wheel",
             "pip install -r requirements.txt",
-            "export SOURCE_BUCKET=public-media-sandbox",
+            "cat > /home/ec2-user/start_media_api.sh << 'SCRIPT'",
+            "#!/bin/bash",
+            f"export SOURCE_BUCKET=public-media-sandbox",
             f"export OUTPUT_BUCKET={media_bucket_name}",
-            f"export AWS_REGION={self.region}",
             f"export REGION={self.region}",
             f"export STACK_SELECTION={stack_selection}",
             f"export CHAT_TOOL_MODEL={chat_tool_model}",
-            (
-                "nohup bash -c 'source .venv/bin/activate && "
-                f"uvicorn {ec2_media_entry_file.replace('.py', '')}:app --host 0.0.0.0 --port 8000' "
-                "> /home/ec2-user/media-api.log 2>&1 &"
-            ),
+            "cd /home/ec2-user/aivolvex-genai-foundry/media_ec2_needs",
+            "source .venv/bin/activate",
+            f"screen -dmS media_api bash -c 'source .venv/bin/activate && uvicorn {ec2_media_entry_file.replace('.py', '')}:app --host 0.0.0.0 --port 8000 > /home/ec2-user/media-api.log 2>&1'",
+            "SCRIPT",
+            "chmod +x /home/ec2-user/start_media_api.sh",
+            "chown ec2-user:ec2-user /home/ec2-user/start_media_api.sh",
+            "sudo su - ec2-user -c '/home/ec2-user/start_media_api.sh'",
+            f"export REGION={self.region}",
             f"export COACHING_API_NAME=\"coaching_assist_media-{suffix}\"",
             "TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\")",
             "PUBLIC_IP=$(curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" http://169.254.169.254/latest/meta-data/public-ipv4)",
@@ -388,6 +392,9 @@ class MediaCdkStack(Stack):
             "npm run build",
             f"aws s3 rm s3://{frontend_bucket_name}/ --recursive --region {self.region} || true",
             f"aws s3 cp dist/ s3://{frontend_bucket_name}/ --recursive --region {self.region}",
+            "TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\")",
+            "INSTANCE_ID=$(curl -s -H \"X-aws-ec2-metadata-token: $TOKEN\" http://169.254.169.254/latest/meta-data/instance-id)",
+            f"aws ec2 terminate-instances --instance-ids \"$INSTANCE_ID\" --region {self.region}",
         )
 
         s3_origin = origins.S3BucketOrigin(
