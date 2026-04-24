@@ -10,7 +10,7 @@ MEDIA_STREAMING_REGION = os.environ.get("AWS_REGION", "us-west-2")
 MEDIA_PRESIGN_EXPIRES = int(os.environ.get("PRESIGNED_URL_EXPIRY", 3600))
 
 # ── Customer feedback config ────────────────────────────────────────────────
-CUSTOMER_FEEDBACK_APPS_SCRIPT_URL = os.environ.get("CUSTOMER_FEEDBACK_APPS_SCRIPT_URL", "")
+CUSTOMER_FEEDBACK_APPS_SCRIPT_URL = os.environ.get("CUSTOMER_FEEDBACK_APPS_SCRIPT_URL", "https://script.google.com/macros/s/AKfycbzFQjRtt1lFW3gMA9NTr6BxXmoBpuS1BZOe5g25tagFGmlDpBK9Mro3ahkN9quKjuHH/exec").strip()
 
 # ── Media map (media_id → S3 key) ───────────────────────────────────────────
 MEDIA_STREAMING_OBJECTS = {

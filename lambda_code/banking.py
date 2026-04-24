@@ -33,6 +33,7 @@ nova_model_name = os.environ.get("nova_model_name")
 region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
 voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
 ec2_instance_ip = os.environ.get("ec2_instance_ip", "")  # Elastic IP of the T3 medium instance
+CUSTOMER_FEEDBACK_APPS_SCRIPT_URL = os.environ.get("CUSTOMER_FEEDBACK_APPS_SCRIPT_URL", "https://script.google.com/macros/s/AKfycbzFQjRtt1lFW3gMA9NTr6BxXmoBpuS1BZOe5g25tagFGmlDpBK9Mro3ahkN9quKjuHH/exec").strip()
 
 # Function to get database password from Secrets Manager
 def get_db_password():
@@ -2470,6 +2471,51 @@ The provided document seems like to be set of three documents and there are disc
 
 
 
+def submit_customer_feedback(event_dict):
+    """Send customer feedback fields to Google Apps Script."""
+    apps_script_url = str(
+        event_dict.get("apps_script_url")
+        or CUSTOMER_FEEDBACK_APPS_SCRIPT_URL
+    ).strip()
+    if not apps_script_url:
+        return {
+            "statusCode": 400,
+            "event_type": "customer_feedback",
+            "message": "Apps Script URL is missing. Set 'apps_script_url' or CUSTOMER_FEEDBACK_APPS_SCRIPT_URL.",
+        }
+
+    payload = {
+        "full_name": str(event_dict.get("full_name", "")).strip(),
+        "phone_number": str(event_dict.get("phone_number", "")).strip(),
+        "email": str(event_dict.get("email", "")).strip(),
+        "overall_experience": str(event_dict.get("overall_experience", "")).strip(),
+        "suggestion": str(event_dict.get("suggestion", "")).strip(),
+    }
+    missing_fields = [key for key, value in payload.items() if not value]
+    if missing_fields:
+        return {
+            "statusCode": 400,
+            "event_type": "customer_feedback",
+            "message": "Missing required fields",
+            "missing_fields": missing_fields,
+        }
+
+    try:
+        response = requests.post(apps_script_url, data=payload, timeout=15)
+        return {
+            "statusCode": response.status_code,
+            "event_type": "customer_feedback",
+            "message": "Sent to Apps Script",
+            "apps_script_response": response.text,
+        }
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "event_type": "customer_feedback",
+            "message": f"Failed to send customer feedback: {str(e)}",
+        }
+
+
 def lambda_handler(event, context):
     global user_intent_flag, overall_flow_flag, ub_number, ub_user_name, pop, str_intent,json
     print("Event: ",event)
@@ -2570,6 +2616,9 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
 
     elif event_type == 'kyc_extraction':
         return kyc_extraction_api(event)
+
+    elif event_type == 'customer_feedback':
+        return submit_customer_feedback(event)
 
     elif event_type == 'voiceops':
         try:
