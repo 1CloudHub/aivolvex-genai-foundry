@@ -137,7 +137,14 @@ class MediaCdkStack(Stack):
             "set -euxo pipefail",
             "dnf update -y",
             "dnf install -y git python3.11 python3.11-pip jq screen",
-            "dnf install -y ffmpeg || true",
+            "dnf install -y wget xz || true",
+            "cd /tmp",
+            "wget -q https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz",
+            "tar xf ffmpeg-release-amd64-static.tar.xz",
+            "cp ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/",
+            "cp ffmpeg-*-amd64-static/ffprobe /usr/local/bin/",
+            "chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe",
+            "rm -rf /tmp/ffmpeg-*-amd64-static /tmp/ffmpeg-release-amd64-static.tar.xz",
             "if ! command -v aws >/dev/null 2>&1; then dnf install -y awscli; fi",
             # Write the full startup script using printf
             "printf '#!/bin/bash\\n' > /home/ec2-user/start_media_api.sh",
@@ -154,7 +161,7 @@ class MediaCdkStack(Stack):
             f"printf 'export REGION={self.region}\\n' >> /home/ec2-user/start_media_api.sh",
             f"printf 'export STACK_SELECTION={stack_selection}\\n' >> /home/ec2-user/start_media_api.sh",
             f"printf 'export CHAT_TOOL_MODEL={chat_tool_model}\\n' >> /home/ec2-user/start_media_api.sh",
-            f'printf \'screen -dmS media_api bash -c "source .venv/bin/activate && uvicorn {ec2_media_module}:app --host 0.0.0.0 --port 8000"\\n\' >> /home/ec2-user/start_media_api.sh',
+            f'printf \'screen -dmS media_api bash -c "cd /home/ec2-user/aivolvex-genai-foundry/media_ec2_needs && source .venv/bin/activate && uvicorn {ec2_media_module}:app --host 0.0.0.0 --port 8000"\\n\' >> /home/ec2-user/start_media_api.sh',
             "printf 'echo Media API started\\n' >> /home/ec2-user/start_media_api.sh",
             "chmod +x /home/ec2-user/start_media_api.sh",
             "chown ec2-user:ec2-user /home/ec2-user/start_media_api.sh",
@@ -169,6 +176,8 @@ class MediaCdkStack(Stack):
             "EDIT_RESOURCE_ID=$(aws apigateway get-resources --rest-api-id \"$COACHING_API_ID\" --region \"$REGION\" --query \"items[?path=='/edit_video'].id\" --output text)",
             "aws apigateway update-integration --rest-api-id \"$COACHING_API_ID\" --resource-id \"$ROOT_RESOURCE_ID\" --http-method ANY --region \"$REGION\" --patch-operations op=replace,path=/uri,value=\"http://${PUBLIC_IP}:8000\"",
             "aws apigateway update-integration --rest-api-id \"$COACHING_API_ID\" --resource-id \"$EDIT_RESOURCE_ID\" --http-method POST --region \"$REGION\" --patch-operations op=replace,path=/uri,value=\"http://${PUBLIC_IP}:8000/edit-video\"",
+            "aws apigateway update-integration --rest-api-id \"$COACHING_API_ID\" --resource-id \"$EDIT_RESOURCE_ID\" --http-method POST --region \"$REGION\" --patch-operations op=replace,path=/httpMethod,value=POST",
+            "aws apigateway create-deployment --rest-api-id \"$COACHING_API_ID\" --stage-name dev --region \"$REGION\"",
         )
 
         lambda_role = iam.Role(
@@ -287,6 +296,7 @@ class MediaCdkStack(Stack):
 
         ec2_edit_video_integration = apigateway.HttpIntegration(
             url="http://127.0.0.1:8000/edit-video",
+            http_method="POST",
             proxy=True,
             options=apigateway.IntegrationOptions(timeout=Duration.seconds(29)),
         )
