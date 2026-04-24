@@ -1597,19 +1597,19 @@ VIDEO_LIBRARY: dict[int, tuple[str, dict]] = {
 
 VIDEO_S3_KEYS_BY_TITLE: dict[str, str] = {
     "Climate Change Explainer": os.environ.get(
-        "S3_KEY_CLIMATE_CHANGE", "media/climatechangemodified.mp4"
+        "S3_KEY_CLIMATE_CHANGE", "climatechangemodified.mp4"
     ),
     "Urgent Songs for My Land": os.environ.get(
         "S3_KEY_URGENT_SONGS",
-        "media/YTDown.com_YouTube_Musical-resistance-in-Argentina-Children_Media_9Lc2X10tjPw_002_720p.mp4",
+        "YTDown.com_YouTube_Musical-resistance-in-Argentina-Children_Media_9Lc2X10tjPw_002_720p.mp4",
     ),
     "Black Summer - Australia Bushfire Documentary": os.environ.get(
         "S3_KEY_BLACK_SUMMER",
-        "media/Blacksummer.mp4",
+        "Blacksummer.mp4",
     ),
     "COVID-19 Philippines Lockdown Documentary": os.environ.get(
         "S3_KEY_MANILA_LOCKDOWN",
-        "media/Manila lockdown.mp4",
+        "Manila lockdown.mp4",
     ),
 }
 
