@@ -39,6 +39,7 @@ class MediaCdkStack(Stack):
         suffix = generate_random_suffix()
         is_amazon_selected = model_selection == "amazon"
         ec2_media_entry_file = "nova_main.py" if is_amazon_selected else "main.py"
+        ec2_media_module = ec2_media_entry_file.replace(".py", "")
 
         media_bucket_name = f"genaifoundryc-{suffix}"
         frontend_bucket_name = f"genaifoundry-front-{suffix}"
@@ -138,27 +139,27 @@ class MediaCdkStack(Stack):
             "dnf install -y git python3.11 python3.11-pip jq screen",
             "dnf install -y ffmpeg || true",
             "if ! command -v aws >/dev/null 2>&1; then dnf install -y awscli; fi",
-            "cd /home/ec2-user",
-            "git clone https://github.com/1CloudHub/aivolvex-genai-foundry.git || true",
-            "cd aivolvex-genai-foundry/media_ec2_needs",
-            "python3.11 -m venv .venv",
-            "source .venv/bin/activate",
-            "pip install --upgrade pip setuptools wheel",
-            "pip install -r requirements.txt",
-            "cat > /home/ec2-user/start_media_api.sh << 'SCRIPT'",
-            "#!/bin/bash",
-            f"export SOURCE_BUCKET=public-media-sandbox",
-            f"export OUTPUT_BUCKET={media_bucket_name}",
-            f"export REGION={self.region}",
-            f"export STACK_SELECTION={stack_selection}",
-            f"export CHAT_TOOL_MODEL={chat_tool_model}",
-            "cd /home/ec2-user/aivolvex-genai-foundry/media_ec2_needs",
-            "source .venv/bin/activate",
-            f"screen -dmS media_api bash -c 'source .venv/bin/activate && uvicorn {ec2_media_entry_file.replace('.py', '')}:app --host 0.0.0.0 --port 8000 > /home/ec2-user/media-api.log 2>&1'",
-            "SCRIPT",
+            # Write the full startup script using printf
+            "printf '#!/bin/bash\\n' > /home/ec2-user/start_media_api.sh",
+            "printf 'set -euxo pipefail\\n' >> /home/ec2-user/start_media_api.sh",
+            "printf 'cd /home/ec2-user\\n' >> /home/ec2-user/start_media_api.sh",
+            "printf 'git clone https://github.com/1CloudHub/aivolvex-genai-foundry.git || true\\n' >> /home/ec2-user/start_media_api.sh",
+            "printf 'cd /home/ec2-user/aivolvex-genai-foundry/media_ec2_needs\\n' >> /home/ec2-user/start_media_api.sh",
+            "printf 'python3.11 -m venv .venv\\n' >> /home/ec2-user/start_media_api.sh",
+            "printf 'source .venv/bin/activate\\n' >> /home/ec2-user/start_media_api.sh",
+            "printf 'pip install --upgrade pip setuptools wheel\\n' >> /home/ec2-user/start_media_api.sh",
+            "printf 'pip install -r requirements.txt\\n' >> /home/ec2-user/start_media_api.sh",
+            f"printf 'export SOURCE_BUCKET=public-media-sandbox\\n' >> /home/ec2-user/start_media_api.sh",
+            f"printf 'export OUTPUT_BUCKET={media_bucket_name}\\n' >> /home/ec2-user/start_media_api.sh",
+            f"printf 'export REGION={self.region}\\n' >> /home/ec2-user/start_media_api.sh",
+            f"printf 'export STACK_SELECTION={stack_selection}\\n' >> /home/ec2-user/start_media_api.sh",
+            f"printf 'export CHAT_TOOL_MODEL={chat_tool_model}\\n' >> /home/ec2-user/start_media_api.sh",
+            f"printf 'screen -dmS media_api bash -c \\'source .venv/bin/activate && uvicorn {ec2_media_module}:app --host 0.0.0.0 --port 8000\\'\\n' >> /home/ec2-user/start_media_api.sh",
+            "printf 'echo Media API started\\n' >> /home/ec2-user/start_media_api.sh",
             "chmod +x /home/ec2-user/start_media_api.sh",
             "chown ec2-user:ec2-user /home/ec2-user/start_media_api.sh",
-            "sudo su - ec2-user -c '/home/ec2-user/start_media_api.sh'",
+            "sudo su - ec2-user -c '/home/ec2-user/start_media_api.sh' > /var/log/media_api.log 2>&1",
+            # Update API Gateway integrations with real IP after app starts
             f"export REGION={self.region}",
             f"export COACHING_API_NAME=\"coaching_assist_media-{suffix}\"",
             "TOKEN=$(curl -s -X PUT \"http://169.254.169.254/latest/api/token\" -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\")",
