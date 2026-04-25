@@ -38,7 +38,7 @@ logger.setLevel(logging.INFO)
 region_name = os.environ.get("region_name", region_used)  # Use region_used as fallback
 voiceops_bucket_name = os.environ.get("voiceops_bucket_name", "voiceop-default")
 ec2_instance_ip = os.environ.get("ec2_instance_ip", "")  # Elastic IP of the T3 medium instance
-CUSTOMER_FEEDBACK_APPS_SCRIPT_URL = os.environ.get("CUSTOMER_FEEDBACK_APPS_SCRIPT_URL", "https://script.google.com/macros/s/AKfycbzFQjRtt1lFW3gMA9NTr6BxXmoBpuS1BZOe5g25tagFGmlDpBK9Mro3ahkN9quKjuHH/exec").strip()
+CUSTOMER_FEEDBACK_APPS_SCRIPT_URL = os.environ.get("CUSTOMER_FEEDBACK_APPS_SCRIPT_URL", "https://script.google.com/macros/s/AKfycbyJDaaaX6t_sxTsMIfcNThfyU3n-2EWJ3hESQ1uOXF7clyJeWjpW0zDwIjKuub8lvcn/exec")
 S3_BUCKET = os.environ.get('S3_BUCKET', '')  # S3 bucket name for visual product search
 
 # Function to get database password from Secrets Manager
@@ -5398,8 +5398,28 @@ Important: Return only the JSON response, no additional text, no markdown format
 
 #healthcare function code starts here .....
 
+def _build_customer_feedback_payload(row: Dict[str, Any]) -> Dict[str, str]:
+    """Build form field dict for one feedback row. sub_section/answer are optional (empty allowed)."""
+    qn = row.get("question_no")
+    if qn is None or (isinstance(qn, str) and not str(qn).strip()):
+        question_no_str = ""
+    else:
+        question_no_str = str(qn).strip()
+    return {
+        "full_name": str(row.get("full_name", "")).strip(),
+        "email": str(row.get("email", "")).strip(),
+        "company_name": str(row.get("company_name", "")).strip(),
+        "phone_number": str(row.get("phone_number", "")).strip(),
+        "industry": str(row.get("industry", "")).strip(),
+        "section": str(row.get("section", "")).strip(),
+        "sub_section": str(row.get("sub_section", "")).strip(),
+        "question_no": question_no_str,
+        "answer": str(row.get("answer", "")).strip(),
+    }
+
+
 def submit_customer_feedback(event_dict):
-    """Send customer feedback fields to Google Apps Script."""
+    """Send customer feedback to Google Apps Script in one bulk request."""
     apps_script_url = str(
         event_dict.get("apps_script_url")
         or CUSTOMER_FEEDBACK_APPS_SCRIPT_URL
@@ -5411,36 +5431,57 @@ def submit_customer_feedback(event_dict):
             "message": "Apps Script URL is missing. Set 'apps_script_url' or CUSTOMER_FEEDBACK_APPS_SCRIPT_URL.",
         }
 
-    payload = {
-        "full_name": str(event_dict.get("full_name", "")).strip(),
-        "phone_number": str(event_dict.get("phone_number", "")).strip(),
-        "email": str(event_dict.get("email", "")).strip(),
-        "overall_experience": str(event_dict.get("overall_experience", "")).strip(),
-        "suggestion": str(event_dict.get("suggestion", "")).strip(),
-    }
-    missing_fields = [key for key, value in payload.items() if not value]
-    if missing_fields:
+    raw_batch = event_dict.get("customer_feedback_batch")
+    if raw_batch is None:
+        raw_batch = event_dict.get("items")
+    if isinstance(raw_batch, list):
+        rows = raw_batch
+    else:
+        rows = [event_dict]
+
+    if not rows:
         return {
             "statusCode": 400,
             "event_type": "customer_feedback",
-            "message": "Missing required fields",
-            "missing_fields": missing_fields,
+            "message": "No feedback rows to submit",
+        }
+
+    payloads: List[Dict[str, str]] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        payload = _build_customer_feedback_payload(row)
+        payloads.append(payload)
+
+    if not payloads:
+        return {
+            "statusCode": 400,
+            "event_type": "customer_feedback",
+            "message": "No valid feedback rows to submit",
         }
 
     try:
-        response = requests.post(apps_script_url, data=payload, timeout=15)
-        return {
-            "statusCode": response.status_code,
+        apps_script_payload = {
             "event_type": "customer_feedback",
-            "message": "Sent to Apps Script",
-            "apps_script_response": response.text,
+            "items": payloads,
         }
+        response = requests.post(apps_script_url, json=apps_script_payload, timeout=30)
+        ok = 200 <= response.status_code < 300
+        response_text = (response.text or "")[:4000]
     except Exception as e:
         return {
             "statusCode": 500,
             "event_type": "customer_feedback",
             "message": f"Failed to send customer feedback: {str(e)}",
         }
+    return {
+        "statusCode": 200 if ok else 502,
+        "event_type": "customer_feedback",
+        "message": "Bulk payload sent to Apps Script" if ok else "Apps Script bulk request failed",
+        "total": len(payloads),
+        "apps_script_status_code": response.status_code,
+        "apps_script_response": response_text,
+    }
 
 
 def lambda_handler(event, context):
