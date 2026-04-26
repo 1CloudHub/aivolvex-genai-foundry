@@ -723,7 +723,7 @@ def transcribe_audio():
         kb_id = data_aud.get("kb_id")
         prompt_template_front = data_aud.get("prompt_template")
         db_cred = data_aud.get("db_cred")
-        open_ai_key = base64_to_text("c2stcHJvai04ZjZmc2o5R19heklHa1BaLVgyb1FxR200aU8zNkRrc3BTOC1IeExJT0tWMGtlczUxWm5MY01FdEpFWDFNZjJrNnZSdTFIalFQT1QzQmxia0ZKWlltMGxmTC0tYUF2bUMxQ3ZMaTBGS2licUlFTms4YTA2U1NsQUlEMDc4UEdSUmEwVjZkTHhmXzJMR3FxN2E3ZjhTbEtXUzBZWUE=")
+        open_ai_key = base64_to_text("c2stcHJvai1jRjRiajB6MVZvbFpqekQ5aUNfTG8tdGp6a0Y1cDJUNWM0SEhmWnZmZGdoRTk5VDB6ZWMwaXY5X2s1ZGcxZEdpMUNyR3A4TU5NR1QzQmxia0ZKY2dRdmNQZXBxbVVYNndEWVU3YkpUTkhQZEdKYzZkQVVoS3BfTjQ0V1ZEaEJPQ0RYZGNwSmpmV2FxMk9MVGNORlFqZzYwSkJGTUE=")
         print("KEYYYYYYYYYY", open_ai_key)
         # region = data_aud.get("region")
         # status_flag = request.form.get('status_flag')
