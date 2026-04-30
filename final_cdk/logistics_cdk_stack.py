@@ -1113,7 +1113,7 @@ class LogisticsCdkStack(Stack):
             "db_host": db_instance.instance_endpoint.hostname,
             "db_port": "5432",
             "db_user": "postgres",
-            "model_id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "model_id": self.chat_tool_model,
             "prompt_metadata_table": "prompt_metadata",
             "region_used": self.region,
             "region_name": self.region,
