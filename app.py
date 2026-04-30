@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GenAI Foundry CDK Application
-Main CDK app for deploying Banking, Insurance, Retail, Healthcare, and Manufacturing stacks
+Main CDK app for deploying Banking, Insurance, Retail, Healthcare, Manufacturing, Logistics, and Media stacks
 Designed to work with deploy.py for automated deployment in CloudShell
 """
 
@@ -13,6 +13,7 @@ from final_cdk.Insurance_cdk_stack import InsuranceCdkStack
 from final_cdk.Retail_cdk_stack import RetailCdkStack
 from final_cdk.Healthcare_cdk_stack import HealthcareCdkStack
 from final_cdk.Manufacturing_cdk_stack import ManufacturingCdkStack
+from final_cdk.logistics_cdk_stack import LogisticsCdkStack
 from final_cdk.Media_cdk_stack import MediaCdkStack
 
 def create_cdk_app():
@@ -88,6 +89,18 @@ def create_cdk_app():
         "GenAiFoundryManufacturingStack",
         stack_selection=stack_selection,  # Pass selection to stack
         chat_tool_model=chat_tool_model,  # Pass model ID to stack
+        env=cdk.Environment(
+            account=os.getenv('CDK_DEFAULT_ACCOUNT'),
+            region=os.getenv('CDK_DEFAULT_REGION')
+        )
+    )
+
+    # Create Logistics Stack
+    LogisticsCdkStack(
+        app,
+        "GenAiFoundryLogisticsStack",
+        stack_selection=stack_selection,
+        chat_tool_model=chat_tool_model,
         env=cdk.Environment(
             account=os.getenv('CDK_DEFAULT_ACCOUNT'),
             region=os.getenv('CDK_DEFAULT_REGION')

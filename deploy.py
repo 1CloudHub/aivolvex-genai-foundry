@@ -50,6 +50,12 @@ STACKS = {
         "selection_id": "manafacturing",
         "display_name": "🏭 Manufacturing Stack"
     },
+    "logistics": {
+        "stack_name": "GenAiFoundryLogisticsStack",
+        "description": "Deploy logistics-related infrastructure and services",
+        "selection_id": "logistics",
+        "display_name": "🚢 Logistics Stack"
+    },
     "media": {
         "stack_name": "GenAiFoundryMediaStack",
         "description": "Deploy media-related infrastructure and services",
@@ -136,6 +142,7 @@ def main() -> None:
             "🛍️ Retail",
             "🏥 Healthcare",
             "🏭 Manufacturing",
+            "🚢 Logistics",
             "🎬 Media",
             "❌ Exit"
         ]
@@ -152,6 +159,7 @@ def main() -> None:
         "🛍️ Retail": "retail",
         "🏥 Healthcare": "healthcare",
         "🏭 Manufacturing": "manufacturing",
+        "🚢 Logistics": "logistics",
         "🎬 Media": "media"
     }
     
