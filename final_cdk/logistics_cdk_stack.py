@@ -1124,7 +1124,8 @@ class LogisticsCdkStack(Stack):
             "rds_port": str(db_instance.instance_endpoint.port),
             "rds_database": rds_name_key,
             "rds_username": "postgres",
-            "chat_tool_model": self.chat_tool_model
+            "chat_tool_model": self.chat_tool_model,
+            "logistics_chat_tool_model": self.chat_tool_model
         }
 
         # ── Main Lambda Function ──────────────────────────────────────────────
