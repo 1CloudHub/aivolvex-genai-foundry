@@ -31,9 +31,9 @@ def create_cdk_app():
     # Map model selection to model ID
     model_id_map = {
         'nova_model': 'us.amazon.nova-pro-v1:0',
-        'claude': 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+        'claude': 'anthropic.claude-sonnet-4-20250514-v1:0',
         'amazon': 'us.amazon.nova-pro-v1:0',
-        'anthropic': 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+        'anthropic': 'anthropic.claude-sonnet-4-20250514-v1:0'
     }
     chat_tool_model = model_id_map.get(model_selection, 'us.amazon.nova-pro-v1:0')
     
