@@ -31,14 +31,16 @@ def handler(event, context):
         retail_kb_id = properties.get('retail_kb_id') or os.environ.get('RETAIL_KB_ID')
         healthcare_kb_id = properties.get('healthcare_kb_id') or os.environ.get('HEALTHCARE_KB_ID')
         manufacturing_kb_id = properties.get('manufacturing_kb_id') or os.environ.get('MANUFACTURING_KB_ID')
+        logistics_kb_id = properties.get('logistics_kb_id') or os.environ.get('LOGISTICS_KB_ID')
         banking_ds_id = properties.get('banking_ds_id') or os.environ.get('BANKING_DS_ID')
         insurance_ds_id = properties.get('insurance_ds_id') or os.environ.get('INSURANCE_DS_ID')
         retail_ds_id = properties.get('retail_ds_id') or os.environ.get('RETAIL_DS_ID')
         healthcare_ds_id = properties.get('healthcare_ds_id') or os.environ.get('HEALTHCARE_DS_ID')
         manufacturing_ds_id = properties.get('manufacturing_ds_id') or os.environ.get('MANUFACTURING_DS_ID')
+        logistics_ds_id = properties.get('logistics_ds_id') or os.environ.get('LOGISTICS_DS_ID')
         
-        print(f"Initial sync - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}, Healthcare KB: {healthcare_kb_id}, Manufacturing KB: {manufacturing_kb_id}")
-        print(f"Initial sync - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}, Healthcare DS: {healthcare_ds_id}, Manufacturing DS: {manufacturing_ds_id}")
+        print(f"Initial sync - Banking KB: {banking_kb_id}, Insurance KB: {insurance_kb_id}, Retail KB: {retail_kb_id}, Healthcare KB: {healthcare_kb_id}, Manufacturing KB: {manufacturing_kb_id}, Logistics KB: {logistics_kb_id}")
+        print(f"Initial sync - Banking DS: {banking_ds_id}, Insurance DS: {insurance_ds_id}, Retail DS: {retail_ds_id}, Healthcare DS: {healthcare_ds_id}, Manufacturing DS: {manufacturing_ds_id}, Logistics DS: {logistics_ds_id}")
         
         # Sync both knowledge bases
         sync_results = {}
@@ -97,6 +99,17 @@ def handler(event, context):
             except Exception as e:
                 print(f"Error syncing Manufacturing Knowledge Base: {str(e)}")
                 sync_results['manufacturing'] = {'error': str(e)}
+
+        # Sync Logistics Knowledge Base
+        if logistics_kb_id and logistics_ds_id:
+            try:
+                print(f"Starting initial sync for Logistics Knowledge Base...")
+                sync_results['logistics'] = sync_knowledge_base(
+                    bedrock_agent, logistics_kb_id, logistics_ds_id, "Logistics"
+                )
+            except Exception as e:
+                print(f"Error syncing Logistics Knowledge Base: {str(e)}")
+                sync_results['logistics'] = {'error': str(e)}
         
         print(f"Initial sync completed: {json.dumps(sync_results)}")
         
