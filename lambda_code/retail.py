@@ -12515,12 +12515,7 @@ Assistant: "Order ORD123456 does not belong to Account ID ACC1001. Please provid
         
         # Get Nova model name from environment variable - support Nova Premier
         selected_model = chat_tool_model
-        if selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-'):
-            nova_model_name = selected_model
-        elif 'premier' in selected_model.lower():
-            nova_model_name = "us.amazon.nova-premier-v1:0"
-        else:
-            nova_model_name = "us.amazon.nova-premier-v1:0"  # Default to Premier for retail
+        nova_model_name = chat_tool_model
         nova_region = "us-east-1"
         
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
