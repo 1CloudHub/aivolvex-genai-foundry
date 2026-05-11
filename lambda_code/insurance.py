@@ -1421,7 +1421,7 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
         print("Nova Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-premier-v1:0")
+        nova_model_name = os.environ.get("nova_model_name", os.environ.get("chat_tool_model", "us.amazon.nova-pro-v1:0"))
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
