@@ -2594,7 +2594,7 @@ inputs required through form:
         })
 
         response = bedrock.invoke_model(
-            modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            modelId=chat_tool_model,
             body=body,
         )
 
@@ -3058,7 +3058,7 @@ Return only the following JSON format (no markdown, no extra commentary):
         })
 
         response = bedrock.invoke_model(
-            modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            modelId=chat_tool_model,
             body=body,
         )
 
@@ -3267,7 +3267,7 @@ The provided document seems like to be set of three documents and there are disc
                     print(f"Full traceback: {traceback.format_exc()}")
                     extracted_data = ""
             else:  
-                print(f"Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                print("Using Claude model for KYC extraction: {chat_tool_model}")
                 # Use Claude invoke_model API (existing implementation)
                 # Prepare the request body for Bedrock
                 body = json.dumps({
@@ -3285,7 +3285,7 @@ The provided document seems like to be set of three documents and there are disc
                 response = bedrock_client.invoke_model(
                     contentType='application/json',
                     body=body,
-                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    modelId=chat_tool_model
                 )
             
                 response_body = json.loads(response['body'].read())

@@ -59,13 +59,11 @@ db_password = get_db_password()
 schema = os.environ['schema']
 chat_history_table = os.environ['chat_history_table']
 prompt_metadata_table = os.environ['prompt_metadata_table']
-model_id = os.environ['model_id']
 # KB_ID = os.environ['KB_ID']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
-# Model selection for chat_tool event type
-# Can be set to model name like 'us.amazon.nova-pro-v1:0' or just 'nova'/'claude'
-chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
+# Bedrock model from CDK (driven by deploy.py -> CDK_MODEL_SELECTION amazon | anthropic)
+chat_tool_model = os.environ['chat_tool_model']
 # HR_KBID = os.environ["hr_kb_id"]
 # PRODUCT_KBID = os.environ["product_kb_id"]
 # bank_kb_id=os.environ["bank_kb_id"]
@@ -76,34 +74,6 @@ banking_chat_history_table=chat_history_table
 # retail_chat_history_table=os.environ['retail_chat_history_table']
 # hospital_chat_history_table=os.environ['retail_chat_history_table']
 # # Use environment region instead of hardcoded regions
-retrieve_client = boto3.client('bedrock-agent-runtime', region_name=region_used)
-bedrock_client = boto3.client('bedrock-runtime', region_name=region_used)
-api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=socket_endpoint)
-bedrock = boto3.client('bedrock-runtime', region_name=region_used)
-
-# Function to get database password from Secrets Manager
-def get_db_password():
-    try:
-        # Use environment region instead of hardcoded region
-        secretsmanager = boto3.client('secretsmanager', region_name=region_used)
-        secret_response = secretsmanager.get_secret_value(SecretId=os.environ['rds_secret_name'])
-        secret = json.loads(secret_response['SecretString'])
-        return secret['password']
-    except Exception as e:
-        print(f"Error retrieving password from Secrets Manager: {e}")
-        return None
-
-# Get password from Secrets Manager
-db_password = get_db_password()
-
-schema = os.environ['schema']
-chat_history_table = os.environ['chat_history_table']
-prompt_metadata_table = os.environ['prompt_metadata_table']
-model_id = os.environ['model_id']
-# KB_ID = os.environ['KB_ID']
-CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
-socket_endpoint = os.environ["socket_endpoint"]
-# Use environment region instead of hardcoded regions
 retrieve_client = boto3.client('bedrock-agent-runtime', region_name=region_used)
 bedrock_client = boto3.client('bedrock-runtime', region_name=region_used)
 api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=socket_endpoint)
@@ -892,7 +862,7 @@ Assistant: [IMMEDIATELY use pricing_warranty_tool and provide answer]
                     "tools": gear_tools,
                     "messages": chat_history
                 }),
-                modelId=model_id
+                modelId=chat_tool_model
             )
         except Exception as e:
             print("AN ERROR OCCURRED : ", e)
@@ -1154,7 +1124,7 @@ Assistant: [IMMEDIATELY use pricing_warranty_tool and provide answer]
                         "tools": gear_tools,
                         "messages": chat_history
                     }),
-                    modelId=model_id
+                    modelId=chat_tool_model
                 )
             except Exception as e:
                 print("ERROR IN SECOND API CALL:", e)
@@ -1801,8 +1771,8 @@ Assistant: [IMMEDIATELY use pricing_warranty_tool and provide answer]
         
         print("Nova Model - Chat History: ", message_history)
         
-        # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        # Nova model configuration (same env as CDK chat_tool_model from deploy.py)
+        nova_model_name = chat_tool_model
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
@@ -2383,15 +2353,12 @@ The provided document seems like to be set of three documents and there are disc
             # Use appropriate API based on model type
             if is_nova_model:
                 print(f"Using Nova model for KYC extraction: {selected_model}")
-                # Nova models are typically in us-east-1, and if Converse API is not available,
-                # fall back to using Claude model instead
                 try:
-                    # Try us-east-1 first (where Nova models are typically available)
-                    nova_bedrock_client = boto3.client("bedrock-runtime", region_name="us-east-1")
-                    
+                    nova_bedrock_client = boto3.client("bedrock-runtime", region_name=region_used)
+
                     # Use Nova Converse API
                     response = nova_bedrock_client.converse(
-                        modelId=selected_model,
+                        modelId=chat_tool_model,
                         system=[
                             {"text": "You are a document data viewer, your task is to view the information provided to you and extract relevant information in a neat and clear manner."}
                         ],
@@ -2416,10 +2383,8 @@ The provided document seems like to be set of three documents and there are disc
                     print("Falling back to Claude model for KYC extraction")
                     # Fall back to Claude if Nova Converse API is not available
                     is_nova_model = False
-                    # Use default Claude model
-                    claude_model_id = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
                     bedrock_client = boto3.client("bedrock-runtime", region_name=region_used)
-                    
+
                     # Prepare the request body for Bedrock
                     body = json.dumps({
                         "anthropic_version": "bedrock-2023-05-31",
@@ -2431,18 +2396,18 @@ The provided document seems like to be set of three documents and there are disc
                             }
                         ]
                     })
-                
+
                     # Call Bedrock using the same pattern as other functions
                     response = bedrock_client.invoke_model(
                         contentType='application/json',
                         body=body,
-                        modelId=claude_model_id
+                        modelId=chat_tool_model
                     )
                 
                     response_body = json.loads(response['body'].read())
                     extracted_data = response_body.get('content', [{}])[0].get('text', '')
             else:  
-                print(f"Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                print(f"Using Claude model for KYC extraction: {chat_tool_model}")
                 # Initialize bedrock client for Claude model
                 bedrock_client = boto3.client("bedrock-runtime", region_name=region_used)
                 # Use Claude invoke_model API (existing implementation)
@@ -2457,12 +2422,12 @@ The provided document seems like to be set of three documents and there are disc
                         }
                     ]
                 })
-            
+
                 # Call Bedrock using the same pattern as other functions
                 response = bedrock_client.invoke_model(
                     contentType='application/json',
                     body=body,
-                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    modelId=chat_tool_model
                 )
             
                 response_body = json.loads(response['body'].read())
@@ -2616,8 +2581,7 @@ def lambda_handler(event, context):
         session_id = event['session_id']   
         connectionId = event["connectionId"]
         print(connectionId,"connectionid_printtt")
-        # Get model from environment variable (defaults to 'claude' if not set)
-        # Can be set to model name like 'us.amazon.nova-pro-v1:0' or just 'nova'/'claude'
+        # Bedrock model ID from CDK (set by deploy.py industry + amazon | anthropic choice)
         selected_model = chat_tool_model
         print(f"Using model from environment variable: {selected_model}")
         chat_history = []
@@ -3000,7 +2964,7 @@ these are the keys to be always used while returning response. Strictly do not a
         # - Ensure the email content is formatted correctly with new lines. USE ONLY "\n" for new lines. 
         #         - Ensure the email content is formatted correctly for new lines instead of using new line characters.
         else:
-            print(f"Using Claude model for gear summary generation: {model_id}")
+            print(f"Using Claude model for gear summary generation: {chat_tool_model}")
             response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
             "anthropic_version": "bedrock-2023-05-31",  
             "max_tokens": 4000,     
@@ -3012,7 +2976,7 @@ these are the keys to be always used while returning response. Strictly do not a
                     ]
                 }
             ],
-        }), modelId=model_id)
+        }), modelId=chat_tool_model)
     
             # Extract Claude reply text
             inference_result = response['body'].read().decode('utf-8')

@@ -1113,7 +1113,7 @@ inputs required through form:
     })
 
     response = bedrock.invoke_model(
-        modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelId=chat_tool_model,
         body=body,
     )
 
@@ -1600,7 +1600,7 @@ Return only the following JSON format (no markdown, no extra commentary):
     })
 
     response = bedrock.invoke_model(
-        modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelId=chat_tool_model,
         body=body,
     )
 
@@ -2781,7 +2781,7 @@ Assistant: [Use schedule_agent_callback tool with all collected information]
         print("Nova Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_model_name = os.environ.get("nova_model_name", chat_tool_model)
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
@@ -4825,7 +4825,7 @@ You have access to comprehensive information about AnyBank SG products including
         print("Nova Banking Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_model_name = os.environ.get("nova_model_name", chat_tool_model)
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
@@ -5383,7 +5383,7 @@ Important: Return only the JSON response, no additional text, no markdown format
         })
 
         response = bedrock_client.invoke_model(
-            modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            modelId=chat_tool_model,
             body=body,
         )
 
@@ -5646,7 +5646,7 @@ def lambda_handler(event, context):
                     # Fallback: Generate text description and use text embedding
                     try:
                         # Generate image description using Claude
-                        claude_model_id = "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                        claude_model_id = chat_tool_model
                         
                         system_prompt = '''
                         You are an image analysis agent. Analyze the product image and generate a concise product description.
@@ -6033,7 +6033,7 @@ def lambda_handler(event, context):
             if is_nova_model:
                 print(f"Using Nova model: {selected_model}")
                 # Get Nova model name
-                nova_model_name = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else "us.amazon.nova-pro-v1:0"
+                nova_model_name = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else chat_tool_model
                 
                 # Use Nova Converse API
                 response = bedrock_client.converse(
@@ -6070,7 +6070,7 @@ def lambda_handler(event, context):
                             }
                         ],
                     }),
-                    modelId="anthropic.claude-3-sonnet-20240229-v1:0"
+                    modelId=chat_tool_model
                 )
                 
                 # Parse Claude response
@@ -9543,7 +9543,7 @@ def call_bedrock_llm_with_prompt(user_input: str, system_prompt: str) -> str:
         
         # Call Bedrock
         response = bedrock_runtime.invoke_model(
-            modelId="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            modelId=chat_tool_model, 
             body=json.dumps(request_body),
             contentType="application/json"
         )
@@ -9625,7 +9625,7 @@ def generate_research_report(query: str, synthesis: Dict, research_results: List
         logger.error(f"Error generating research report: {e}")
         return f"Error generating report: {str(e)}"
 
-def call_bedrock_llm(prompt: str, model_id: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0") -> str:
+def call_bedrock_llm(prompt: str, model_id: str = chat_tool_model) -> str: 
     """
     Call AWS Bedrock LLM for analysis and synthesis
     """
@@ -9963,7 +9963,7 @@ The provided document seems like to be set of three documents and there are disc
                     print(f"Full traceback: {traceback.format_exc()}")
                     extracted_data = ""
             else:  
-                print(f"Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                print(f"Using Claude model for KYC extraction: {chat_tool_model}") 
                 # Use Claude invoke_model API (existing implementation)
             # Prepare the request body for Bedrock
                 body = json.dumps({
@@ -9981,7 +9981,7 @@ The provided document seems like to be set of three documents and there are disc
                 response = bedrock_client.invoke_model(
                     contentType='application/json',
                     body=body,
-                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    modelId=chat_tool_model
                 )
             
                 response_body = json.loads(response['body'].read())
@@ -10378,7 +10378,7 @@ Only return the JSON. No markdown, no explanations, no code blocks.
         })
 
         response = bedrock.invoke_model(
-            modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            modelId=chat_tool_model, 
             body=body,
         )
 
@@ -15220,7 +15220,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                     "tools": hospital_tools,
                     "messages": chat_history
                 }),
-                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                modelId=chat_tool_model
             )
         except Exception as e:
             print("AN ERROR OCCURRED : ", e)
@@ -16270,7 +16270,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
                         "tools": hospital_tools,
                         "messages": chat_history
                     }),
-                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    modelId=chat_tool_model
                 )
             except Exception as e:
                 print("ERROR IN SECOND API CALL:", e)
@@ -17372,7 +17372,7 @@ NOTE: Always adhere strictly to these guidelines to ensure a secure, efficient, 
         print("Nova Hospital Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", "us.amazon.nova-pro-v1:0")
+        nova_model_name = os.environ.get("nova_model_name", chat_tool_model)
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         

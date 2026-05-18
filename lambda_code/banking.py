@@ -544,7 +544,7 @@ Important: Return only the JSON response, no additional text, no markdown format
         })
 
         response = bedrock_client.invoke_model(
-            modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            modelId=chat_tool_model,
             body=body,
         )
 
@@ -1867,7 +1867,7 @@ You have access to comprehensive information about AnyBank SG products including
         print("Nova Banking Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", os.environ.get("chat_tool_model", "us.amazon.nova-pro-v1:0")
+        nova_model_name = os.environ.get("nova_model_name", os.environ.get("chat_tool_model", "us.amazon.nova-pro-v1:0"))
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
@@ -2397,7 +2397,7 @@ The provided document seems like to be set of three documents and there are disc
                     print(f"Full traceback: {traceback.format_exc()}")
                     extracted_data = ""
             else:  
-                print(f"Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                print("Using Claude model for KYC extraction: {chat_tool_model}")
                 # Use Claude invoke_model API (existing implementation)
             # Prepare the request body for Bedrock
                 body = json.dumps({
@@ -2415,7 +2415,7 @@ The provided document seems like to be set of three documents and there are disc
                 response = bedrock_client.invoke_model(
                     contentType='application/json',
                     body=body,
-                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    modelId=chat_tool_model
                 )
             
                 response_body = json.loads(response['body'].read())

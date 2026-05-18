@@ -57,13 +57,12 @@ db_password = get_db_password()
 schema = os.environ.get('schema', 'genaifoundry')  # Default to genaifoundry if not set
 chat_history_table = os.environ['chat_history_table']
 prompt_metadata_table = os.environ['prompt_metadata_table']
-model_id = os.environ['model_id']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
 health_kb_id=os.environ["KB_ID"]
 hospital_chat_history_table=os.environ['chat_history_table']
-# Use environment region instead of hardcoded regions
-chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
+# Bedrock model from CDK (driven by deploy.py -> CDK_MODEL_SELECTION amazon | anthropic)
+chat_tool_model = os.environ['chat_tool_model']
 retrieve_client = boto3.client('bedrock-agent-runtime', region_name=region_used)
 bedrock_client = boto3.client('bedrock-runtime', region_name=region_used)
 api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=socket_endpoint)
@@ -177,7 +176,7 @@ Return your response **only** in this JSON format (no explanations, markdown, or
         }
     ]
 
-    bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
+    bedrock = boto3.client("bedrock-runtime", region_name=region_used)
 
     body = json.dumps({
         "anthropic_version": "bedrock-2023-05-31",
@@ -186,7 +185,7 @@ Return your response **only** in this JSON format (no explanations, markdown, or
     })
 
     response = bedrock.invoke_model(
-        modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        modelId=chat_tool_model,
         body=body,
     )
 
@@ -823,7 +822,7 @@ The provided document seems like to be set of three documents and there are disc
                     print(f"Full traceback: {traceback.format_exc()}")
                     extracted_data = ""
             else:
-                print(f"🤖 Using Claude model for KYC extraction: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+                print(f"🤖 Using Claude model for KYC extraction: {chat_tool_model}")
                 
                 # Prepare the request body for Bedrock (Claude)
                 body = json.dumps({
@@ -841,7 +840,7 @@ The provided document seems like to be set of three documents and there are disc
                 response = bedrock_client.invoke_model(
                     contentType='application/json',
                     body=body,
-                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    modelId=chat_tool_model
                 )
 
                 response_body = json.loads(response['body'].read())
@@ -1144,7 +1143,7 @@ these are the keys to be always used while returning response. Strictly do not a
                 print(f"Full traceback: {traceback.format_exc()}")
                 out = ""
         else:
-            print(f"Using Claude model for retail summary: {model_id}")
+            print(f"Using Claude model for retail summary: {chat_tool_model}")
             response = bedrock_client.invoke_model(contentType='application/json', body=json.dumps({
             "anthropic_version": "bedrock-2023-05-31",  
             "max_tokens": 4000,     
@@ -1156,7 +1155,7 @@ these are the keys to be always used while returning response. Strictly do not a
                     ]
                 }
             ],
-        }), modelId=model_id)                                                                                                                       
+        }), modelId=chat_tool_model)                                                                                                                       
 
             inference_result = response['body'].read().decode('utf-8')
             final = json.loads(inference_result)
@@ -1412,8 +1411,7 @@ def healthcare_chat_tool_handler(event):
             
         print("CHAT HISTORY : ", chat_history)
 
-        # Get model from environment variable (defaults to 'claude' if not set)
-        # Can be set to model name like 'us.amazon.nova-pro-v1:0' or just 'nova'/'claude'
+        # Bedrock model ID from CDK (set by deploy.py industry + amazon | anthropic choice)
         selected_model = chat_tool_model
         print(f"Using model from environment variable: {selected_model}")
         
@@ -2179,13 +2177,10 @@ def call_bedrock_llm_with_prompt(user_input: str, system_prompt: str) -> str:
         
         if is_nova_model:
             # Use Nova Converse API
-            print(f"🤖 Using Nova model with system prompt: {selected_model}")
-            
-            # Get actual Nova model ID if using shorthand
-            nova_model_id = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else "us.amazon.nova-pro-v1:0"
-            
+            print(f"🤖 Using Nova model with system prompt: {chat_tool_model}")
+
             response = bedrock_runtime.converse(
-                modelId=nova_model_id,
+                modelId=chat_tool_model,
                 system=[{"text": system_prompt}],
                 messages=[
                     {
@@ -2207,7 +2202,7 @@ def call_bedrock_llm_with_prompt(user_input: str, system_prompt: str) -> str:
                 return f"Error extracting Nova response: {str(e)}"
         else:
             # Use Claude invoke_model API (existing implementation)
-            print(f"🤖 Using Claude model with system prompt: us.anthropic.claude-3-5-sonnet-20241022-v2:0")
+            print(f"🤖 Using Claude model with system prompt: {chat_tool_model}")
             
             # Prepare the messages for the LLM
             messages = [
@@ -2227,7 +2222,7 @@ def call_bedrock_llm_with_prompt(user_input: str, system_prompt: str) -> str:
             
             # Call Bedrock
             response = bedrock_runtime.invoke_model(
-                modelId="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+                modelId=chat_tool_model,
                 body=json.dumps(request_body),
                 contentType="application/json"
             )
@@ -2309,15 +2304,14 @@ def generate_research_report(query: str, synthesis: Dict, research_results: List
         logger.error(f"Error generating research report: {e}")
         return f"Error generating report: {str(e)}"
 
-def call_bedrock_llm(prompt: str, model_id: str = "us.anthropic.claude-3-7-sonnet-20250219-v1:0") -> str:
+def call_bedrock_llm(prompt: str) -> str:
     """
     Call AWS Bedrock LLM for analysis and synthesis
     Supports both Nova (via Converse API) and Claude (via invoke_model API)
     """
     try:
-        # Get model from environment variable (can override with model_id parameter)
-        selected_model = chat_tool_model 
-        
+        selected_model = chat_tool_model
+
         # Check if Nova model should be used
         is_nova_model = (
             selected_model == 'nova' or
@@ -2328,13 +2322,10 @@ def call_bedrock_llm(prompt: str, model_id: str = "us.anthropic.claude-3-7-sonne
         
         if is_nova_model:
             # Use Nova Converse API
-            print(f"🤖 Using Nova model for LLM call: {selected_model}")
-            
-            # Get actual Nova model ID if using shorthand
-            nova_model_id = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else "us.amazon.nova-pro-v1:0"
-            
+            print(f"🤖 Using Nova model for LLM call: {chat_tool_model}")
+
             response = bedrock_runtime.converse(
-                modelId=nova_model_id,
+                modelId=chat_tool_model,
                 messages=[
                     {
                         "role": "user",
@@ -2355,7 +2346,7 @@ def call_bedrock_llm(prompt: str, model_id: str = "us.anthropic.claude-3-7-sonne
                 return f"Error extracting Nova response: {str(e)}"
         else:
             # Use Claude invoke_model API (existing implementation)
-            print(f"🤖 Using Claude model for LLM call: {model_id}")
+            print(f"🤖 Using Claude model for LLM call: {chat_tool_model}")
             
             # Prepare the request body for Anthropic Claude
             body = {
@@ -2371,7 +2362,7 @@ def call_bedrock_llm(prompt: str, model_id: str = "us.anthropic.claude-3-7-sonne
             }
             
             response = bedrock_runtime.invoke_model(
-                modelId=model_id,
+                modelId=chat_tool_model,
                 body=json.dumps(body),
                 contentType="application/json"
             )
@@ -2741,7 +2732,7 @@ these are the keys to be always used while returning response. Strictly do not a
                     ]
                 }
             ],
-        }), modelId=model_id)                                                                                                                       
+        }), modelId=chat_tool_model)                                                                                                                       
     
         inference_result = response['body'].read().decode('utf-8')
         final = json.loads(inference_result)
@@ -3627,7 +3618,7 @@ Remember: Always use exact tool responses. Intelligently interpret dates from co
                     "tools": hospital_tools,
                     "messages": chat_history
                 }),
-                modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                modelId=chat_tool_model
             )
         except Exception as e:
             print("AN ERROR OCCURRED : ", e)
@@ -4804,7 +4795,7 @@ Remember: Always use exact tool responses. Intelligently interpret dates from co
                         "tools": hospital_tools,
                         "messages": chat_history
                     }),
-                    modelId="us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+                    modelId=chat_tool_model
                 )
             except Exception as e:
                 print("ERROR IN SECOND API CALL:", e)
@@ -5587,7 +5578,7 @@ Treat all patient data as confidential
         print("Nova Hospital Model - Chat History: ", message_history)
         
         # Nova model configuration
-        nova_model_name = os.environ.get("nova_model_name", os.environ.get("chat_tool_model", "us.amazon.nova-pro-v1:0")
+        nova_model_name = chat_tool_model
         nova_region = os.environ.get("region_used", region_used)
         nova_bedrock_client = boto3.client("bedrock-runtime", region_name=nova_region)
         
