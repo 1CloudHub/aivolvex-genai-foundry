@@ -8296,83 +8296,7 @@ these are the keys to be always used while returning response. Strictly do not a
                         "statusCode": 400,
                         "message": "Either enhanced_prompt or direct text is required"
                     }
-                
-                # Extract text and negative text from direct input
-                # Import required modules for text processing
-                import boto3
-                import json
-                import re
-                from botocore.config import Config
-                from botocore.exceptions import ClientError
-                
-                # Configuration
-                LLAMA3_MODEL_ID = "us.meta.llama3-3-70b-instruct-v1:0"
-                LLAMA_REGION = "us-east-1"
-                
-                def extract_text_and_negative(direct_text):
-                    import boto3
-                    client = boto3.client("bedrock-runtime", region_name=LLAMA_REGION)
-
-                    instruction_prompt = f"""
-<|begin_of_text|><|start_header_id|>user<|end_header_id|>
-You are a prompt engineer. Given a user input, create a very short (2-3 lines max) enhanced prompt for photorealistic image generation.
-
-Return a JSON object with:
-- "text": A concise, vivid description (2-3 lines only) with key details like lighting, background, style
-- "negativeText": Brief list of things to avoid (blurry, cartoonish, watermark, low-quality)
-
-User prompt: "{direct_text}"
-<|eot_id|>
-<|start_header_id|>assistant<|end_header_id|>
-"""
-                    
-                    request_body = {
-                        "prompt": instruction_prompt,
-                        "max_gen_len": 512,
-                        "temperature": 0.7
-                    }
-                    
-                    try:
-                        response = client.invoke_model(
-                            modelId=LLAMA3_MODEL_ID,
-                            body=json.dumps(request_body)
-                        )
-                        model_output = json.loads(response["body"].read())
-                        generation = model_output.get("generation", "")
-
-                        # Extract JSON block from markdown if present, or find JSON object in the response
-                        match = re.search(r'```json\s*(\{.*?\})\s*```', generation, re.DOTALL)
-                        if match:
-                            json_text = match.group(1)
-                        else:
-                            # Look for JSON object in the response (without markdown formatting)
-                            json_match = re.search(r'\{.*\}', generation, re.DOTALL)
-                            if json_match:
-                                json_text = json_match.group(0)
-                            else:
-                                json_text = generation.strip()
-
-                        # Parse JSON
-                        result = json.loads(json_text)
-                        text_prompt = result.get("text", "")
-                        negative_prompt = result.get("negativeText", "")
-                        return text_prompt, negative_prompt
-
-                    except json.JSONDecodeError:
-                        print("LLM response was not valid JSON.")
-                        print("Raw output: %s", generation)
-                    except (ClientError, Exception) as e:
-                        print(f"ERROR: Could not invoke Llama 3 model. Reason: {e}")
-                    return None, None
-                
-                # Extract text and negative text from direct input
-                text_prompt, negative_prompt = extract_text_and_negative(direct_text)
-                
-                if not text_prompt or not negative_prompt:
-                    return {
-                        "statusCode": 500,
-                        "message": "Failed to extract text and negative text from direct input"
-                    }
+                text_prompt = direct_text
             
 
             
@@ -8380,62 +8304,59 @@ User prompt: "{direct_text}"
             import boto3
             import json
             import base64
+            from math import gcd
             from botocore.config import Config
             from botocore.exceptions import ClientError
             
             # Configuration
-            NOVA_MODEL_ID = "amazon.nova-canvas-v1:0"
-            NOVA_REGION = "us-east-1"
+            STABILITY_MODEL_ID = "stability.stable-image-core-v1:1"
+            STABILITY_REGION = "us-west-2"
             
             class ImageError(Exception):
                 def __init__(self, message):
                     self.message = message
             
-            def generate_image_function(model_id, body):
-                print(f"Generating image with Amazon Nova Canvas model: {model_id}")
+            def generate_image_function(model_id, body, image_count):
+                print(f"Generating image with Stability Image Core model: {model_id}")
                 import boto3
                 from botocore.config import Config
 
                 bedrock = boto3.client(
                     service_name='bedrock-runtime',
-                    region_name=NOVA_REGION,
+                    region_name=STABILITY_REGION,
                     config=Config(read_timeout=300)
                 )
 
-                response = bedrock.invoke_model(
-                    body=body,
-                    modelId=model_id,
-                    accept="application/json",
-                    contentType="application/json"
-                )
+                image_bytes_list = []
+                for image_index in range(image_count):
+                    print(f"Generating image {image_index + 1} of {image_count}")
+                    response = bedrock.invoke_model(
+                        body=body,
+                        modelId=model_id,
+                        accept="application/json",
+                        contentType="application/json"
+                    )
 
-                response_body = json.loads(response.get("body").read())
+                    response_body = json.loads(response.get("body").read())
 
-                if "error" in response_body:
-                    raise ImageError(f"Image generation error: {response_body['error']}")
+                    if "error" in response_body:
+                        raise ImageError(f"Image generation error: {response_body['error']}")
 
-                images = response_body.get("images", [])
-                if not images:
-                    raise ImageError("No images returned from model")
+                    images = response_body.get("images", [])
+                    if not images:
+                        raise ImageError("No images returned from model")
 
-                # If multiple images requested, return all images
-                if len(images) > 1:
-                    image_bytes_list = []
-                    for base64_image in images:
-                        base64_bytes = base64_image.encode('ascii')
-                        image_bytes = base64.b64decode(base64_bytes)
-                        image_bytes_list.append(image_bytes)
-                    
-                    print(f"Generated {len(image_bytes_list)} images successfully.")
-                    return image_bytes_list
-                else:
-                    # Single image
                     base64_image = images[0]
                     base64_bytes = base64_image.encode('ascii')
                     image_bytes = base64.b64decode(base64_bytes)
+                    image_bytes_list.append(image_bytes)
 
-                    print("Image generated successfully.")
-                    return image_bytes
+                if image_count > 1:
+                    print(f"Generated {len(image_bytes_list)} images successfully.")
+                    return image_bytes_list
+
+                print("Image generated successfully.")
+                return image_bytes_list[0]
             
             # Get dynamic settings from frontend or use defaults
             number_of_images = event.get('numberOfImages', 1)
@@ -8453,28 +8374,18 @@ User prompt: "{direct_text}"
             if image_quality not in ['standard', 'premium', 'ultra']:
                 image_quality = 'standard'
             
-            # Prepare request body
-            if isinstance(negative_prompt, list):
-                negative_prompt = ", ".join(negative_prompt)
-                
+            # Prepare Stability Image Core request body
+            ratio_gcd = gcd(image_width, image_height)
+            aspect_ratio = f"{image_width // ratio_gcd}:{image_height // ratio_gcd}"
+
             request_body = {
-                "taskType": "TEXT_IMAGE",
-                "textToImageParams": {
-                    "text": text_prompt,
-                    "negativeText": negative_prompt
-                },
-                "imageGenerationConfig": {
-                    "numberOfImages": number_of_images,
-                    "height": image_height,
-                    "width": image_width,
-                    "quality": image_quality,
-                    "cfgScale": 7.5,
-                    "seed": 12
-                }
+                "prompt": text_prompt,
+                "aspect_ratio": aspect_ratio,
+                "output_format": "jpeg"
             }
 
             try:
-                image_bytes = generate_image_function(NOVA_MODEL_ID, json.dumps(request_body))
+                image_bytes = generate_image_function(STABILITY_MODEL_ID, json.dumps(request_body), number_of_images)
                 
                 # Check if we have multiple images
                 if number_of_images > 1:
@@ -8644,10 +8555,10 @@ User prompt: "{direct_text}"
             from botocore.exceptions import ClientError
             
             # AWS Configuration
-            AWS_REGION = region_used
+            AWS_REGION = 'us-west-2'
             
             # Model Configuration
-            NOVA_MODEL_ID = "amazon.nova-canvas-v1:0"
+            STABILITY_STYLE_TRANSFER_ID = "us.stability.stable-style-transfer-v1:0"
             
             # Get S3 URIs from event
             person_s3_uri = event.get('person_s3_uri')
@@ -8701,24 +8612,19 @@ User prompt: "{direct_text}"
                     return None
             
             def create_virtual_tryon_payload(person_image_base64, style_image_base64):
-                """Create the inference payload for virtual try-on"""
-                inference_params = {
-                    "taskType": "VIRTUAL_TRY_ON",
-                    "virtualTryOnParams": {
-                        "sourceImage": person_image_base64,
-                        "referenceImage": style_image_base64,
-                        "maskType": "GARMENT",
-                        "garmentBasedMask": {"garmentClass": "UPPER_BODY"}
+                """Create Stability Style Transfer payload"""
+                try:
+                    return {
+                        "init_image": person_image_base64,
+                        "style_image": style_image_base64,
+                        "output_format": "jpeg"
                     }
-                }
-                return inference_params
+                except Exception as e:
+                    raise Exception(f"Error creating virtual try-on payload: {e}")
             
             def generate_virtual_tryon_image(model_id, body):
-                """Generate virtual try-on image using Bedrock"""
+                """Generate virtual try-on image using Stability Style Transfer"""
                 try:
-                    from botocore.config import Config
-                    import boto3
-                    
                     config = Config(
                         retries={
                             'max_attempts': 3,
@@ -8727,10 +8633,12 @@ User prompt: "{direct_text}"
                     )
                     
                     bedrock = boto3.client(
-                        service_name="bedrock-runtime", 
+                        service_name="bedrock-runtime",
                         region_name=AWS_REGION,
                         config=config
                     )
+
+                    print(f"Invoking model: {model_id}")
                     
                     response = bedrock.invoke_model(
                         body=body,
@@ -8740,16 +8648,16 @@ User prompt: "{direct_text}"
                     )
                     
                     response_body_json = json.loads(response.get("body").read())
-                    images = response_body_json.get("images", [])
-                    
+
                     # Check for errors
                     if response_body_json.get("error"):
                         raise Exception(f"Model error: {response_body_json.get('error')}")
                     
+                    # Stability returns base64 images in "images" array
+                    images = response_body_json.get("images", [])
                     if not images:
-                        raise Exception("No images returned from model")
+                        raise Exception(f"No images returned. Response: {response_body_json}")
                     
-                    # Return the first image (virtual try-on typically returns one image)
                     return base64.b64decode(images[0])
                     
                 except Exception as e:
@@ -8772,13 +8680,13 @@ User prompt: "{direct_text}"
             
             # Create the inference payload
             inference_params = create_virtual_tryon_payload(person_image_base64, style_image_base64)
-            body_json = json.dumps(inference_params, indent=2)
+            body_json = json.dumps(inference_params)
             
-            print("Invoking Nova Canvas for virtual try-on...")
+            print("Invoking Stability Style Transfer for virtual try-on...")
             
             try:
                 # Generate virtual try-on image
-                image_bytes = generate_virtual_tryon_image(NOVA_MODEL_ID, body_json)
+                image_bytes = generate_virtual_tryon_image(STABILITY_STYLE_TRANSFER_ID, body_json)
                 
                 # Convert to base64 for response
                 result_base64 = base64.b64encode(image_bytes).decode('utf-8')
