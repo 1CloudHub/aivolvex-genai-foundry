@@ -938,7 +938,7 @@ class HealthcareCdkStack(Stack):
         db_instance = rds.DatabaseInstance(
             self, "MyPostgreSQLDB",
             engine=rds.DatabaseInstanceEngine.postgres(
-                version=rds.PostgresEngineVersion.VER_17_4
+                version=rds.PostgresEngineVersion.VER_17_5
             ),
             instance_type=ec2.InstanceType.of(
                 ec2.InstanceClass.T3,
