@@ -35,7 +35,7 @@ cd aivolvex-genai-foundry/
 ---
 ### 4. Install python requirements
 ```bash
-pip install --user -r requirements.txt
+pip install -r requirements.txt
 ```
 > Installs the AWS CDK Command Line Interface globally in CloudShell.
 
