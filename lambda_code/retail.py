@@ -9956,7 +9956,7 @@ def generate_video_from_image(event):
 
         region = region_used
         s3_region = region_used
-        model_id = "amazon.nova-reel-v1:1"
+        model_id = "amazon.nova-reel-v1:0"
         bucket = S3_BUCKET
         if not bucket:
             return {
@@ -9993,7 +9993,7 @@ def generate_video_from_image(event):
         }
 
         # Call Bedrock async invoke
-        bedrock_runtime = boto3.client("bedrock-runtime", region_name=region)
+        bedrock_runtime = boto3.client("bedrock-runtime", region_name="us-east-1")
         invocation = bedrock_runtime.start_async_invoke(
             modelId=model_id,
             modelInput=model_input,
@@ -10068,7 +10068,7 @@ def generate_video_from_text(event):
         session_id = event["session_id"]
 
         region = region_used
-        model_id = "amazon.nova-reel-v1:1"
+        model_id = "amazon.nova-reel-v1:0"
         bucket = S3_BUCKET
         if not bucket:
             return {
@@ -10094,7 +10094,7 @@ def generate_video_from_text(event):
         }
 
         # Call Bedrock async invoke
-        bedrock_runtime = boto3.client("bedrock-runtime", region_name=region)
+        bedrock_runtime = boto3.client("bedrock-runtime", region_name="us-east-1")
         invocation = bedrock_runtime.start_async_invoke(
             modelId=model_id,
             modelInput=model_input,
