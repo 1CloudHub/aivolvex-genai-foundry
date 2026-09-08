@@ -960,6 +960,7 @@ class ManufacturingCdkStack(Stack):
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3ReadOnlyAccess"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonPollyFullAccess"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess")
             ],
                 inline_policies={
