@@ -52,6 +52,7 @@ schema = os.environ['schema']
 chat_history_table = os.environ['chat_history_table']
 prompt_metadata_table = os.environ['prompt_metadata_table']
 model_id = os.environ['model_id']
+validate_llm_model_id = os.environ.get("validate_llm_model_id", "us.amazon.nova-pro-v1:0")
 KB_ID = os.environ['KB_ID']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
@@ -3002,72 +3003,29 @@ Return only the following JSON format (no markdown, no extra commentary):
 """
 
 
-    selected_model = chat_tool_model
-    # selected_model = claude_model_name
-    is_nova_model = (
-        selected_model == 'nova' or  # Exact match
-        selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
-        selected_model.startswith('nova-') or  # Nova variant pattern
-        ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
-    )
-    
-    # Use appropriate API based on model type
-    if is_nova_model:
-        print(f"Using Nova model for summary generation: {selected_model}")
-        # Use Nova Converse API
-        response = bedrock_client.converse(
-            modelId=selected_model,
-            system=[
-                {"text": prompt}
-            ],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"text": "Follow the system instructions."}
-                    ]
-                }
-            ],
-            inferenceConfig={
-                "maxTokens": 4000,
-                "temperature": 0.7
+    print(f"Using validate_llm_model_id from env: {validate_llm_model_id}")
+    response = bedrock_client.converse(
+        modelId=validate_llm_model_id,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"text": prompt}
+                ]
             }
-        )
-        # Extract Nova output
-        try:
-            assistant_msg = response["output"]["message"]["content"][0]["text"]
-        except Exception as e:
-            print("Error extracting Nova output:", e)
-            raise
+        ],
+        inferenceConfig={
+            "maxTokens": 4000,
+            "temperature": 0.7
+        }
+    )
+    assistant_msg = response.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
+    print("LLM OUTPUT:", assistant_msg)
 
-        print("NOVA OUTPUT:", assistant_msg)
-
-        # In case Nova adds extra narration, strip to JSON
-        match = re.search(r'({.*})', assistant_msg, re.DOTALL)
-        json_str = match.group(1) if match else assistant_msg
-
-        return json.loads(json_str)
-
-    else:
-        print(f"Using Claude model for summary generation: {selected_model}")
-
-        body = json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 2048,
-            "messages": [{"role": "user", "content": prompt}]
-        })
-
-        response = bedrock.invoke_model(
-            modelId=chat_tool_model,
-            body=body,
-        )
-
-        final_text = json.loads(response.get("body").read())["content"][0]["text"]
-        print("LLM OUTPUT:", final_text)
-
-        match = re.search(r'({.*})', final_text, re.DOTALL)
-        json_str = match.group(1) if match else final_text
-        return json.loads(json_str)
+    start = assistant_msg.find('{')
+    end = assistant_msg.rfind('}')
+    json_str = assistant_msg[start:end + 1] if start != -1 and end != -1 else assistant_msg
+    return json.loads(json_str)
 
 def kyc_extraction_api(event):
 

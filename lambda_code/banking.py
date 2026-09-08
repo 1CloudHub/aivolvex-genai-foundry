@@ -57,6 +57,7 @@ chat_history = os.environ['chat_history']
 banking_chat_history=os.environ['banking_chat_history']
 prompt_metadata_table = os.environ['prompt_metadata_table']
 model_id = os.environ['model_id']
+validate_llm_model_id = os.environ.get("validate_llm_model_id", "us.amazon.nova-pro-v1:0")
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
 # Use environment region instead of hardcoded regions
@@ -3042,12 +3043,6 @@ these are the keys to be always used while returning response. Strictly do not a
                 email_creation = email_creation.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
         except:
             email_creation = ""
-        detailed_summary = detailed_summary.replace("'", "''")
-        email_creation = email_creation.replace("'", "''")
-        action_to_be_taken = action_to_be_taken.replace("'", "''")
-        leads_generated_details = leads_generated_details.replace("'", "''")
-        conversation_sentiment_generated_details = conversation_sentiment_generated_details.replace("'", "''")        
-        
         print("LEAD : ",lead)
         print("ENQUIRY : ",enquiry)
         print("COMPLAINT : ",complaint)
@@ -3062,23 +3057,54 @@ these are the keys to be always used while returning response. Strictly do not a
         print("next_best_action:",action_to_be_taken)
         print("email_content:",email_creation)
         session_time = datetime.now()
-        update_query = f'''UPDATE {schema}.{CHAT_LOG_TABLE}
-        SET 
-            lead = {lead},
-            lead_explanation = '{leads_generated_details}',
-            sentiment = '{conversation_sentiment}',
-            sentiment_explanation = '{conversation_sentiment_generated_details}',
-            session_time = '{session_time}',
-            enquiry = {enquiry},
-            complaint = {complaint},
-            summary = '{detailed_summary}',
-            whatsapp_content = '{email_creation}',
-            next_best_action = '{action_to_be_taken}',
-            topic = '{topic}'
-        WHERE 
-            session_id = '{session_id}' 
-            '''
-        update_db(update_query)
+        existing_log = select_db(
+            f"SELECT 1 FROM {schema}.{CHAT_LOG_TABLE} WHERE session_id = '{session_id}' LIMIT 1;"
+        )
+        if existing_log:
+            detailed_summary_sql = detailed_summary.replace("'", "''")
+            email_creation_sql = email_creation.replace("'", "''")
+            action_to_be_taken_sql = action_to_be_taken.replace("'", "''")
+            leads_generated_details_sql = leads_generated_details.replace("'", "''")
+            conversation_sentiment_generated_details_sql = conversation_sentiment_generated_details.replace("'", "''")
+            update_query = f'''UPDATE {schema}.{CHAT_LOG_TABLE}
+            SET 
+                lead = {lead},
+                lead_explanation = '{leads_generated_details_sql}',
+                sentiment = '{conversation_sentiment}',
+                sentiment_explanation = '{conversation_sentiment_generated_details_sql}',
+                session_time = '{session_time}',
+                enquiry = {enquiry},
+                complaint = {complaint},
+                summary = '{detailed_summary_sql}',
+                whatsapp_content = '{email_creation_sql}',
+                next_best_action = '{action_to_be_taken_sql}',
+                topic = '{topic}'
+            WHERE 
+                session_id = '{session_id}' 
+                '''
+            update_db(update_query)
+            print(f"BANKING SUMMARY UPDATED session_id={session_id}")
+        else:
+            insert_query = f'''INSERT INTO {schema}.{CHAT_LOG_TABLE}
+                (created_on, environment, session_time, "lead", enquiry, complaint, summary, whatsapp_content, next_best_action, session_id, lead_explanation, sentiment, sentiment_explanation, connectionid, input_token, output_token, topic)
+                VALUES(CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s);'''
+            insert_db(insert_query, (
+                '',
+                session_time,
+                lead,
+                enquiry,
+                complaint,
+                detailed_summary,
+                email_creation,
+                action_to_be_taken,
+                str(session_id),
+                leads_generated_details,
+                conversation_sentiment,
+                conversation_sentiment_generated_details,
+                '',
+                topic,
+            ))
+            print(f"BANKING SUMMARY INSERTED session_id={session_id}")
         return {
                 "statusCode" : 200,
                 "message" : "Banking Summary Successfully Generated"
