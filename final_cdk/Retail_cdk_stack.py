@@ -848,7 +848,6 @@ class RetailCdkStack(Stack):
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("AmazonS3ReadOnlyAccess"),
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonPollyFullAccess"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess"),
                 iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess")
             ],
@@ -1378,8 +1377,7 @@ class RetailCdkStack(Stack):
             "rds_port": str(db_instance.instance_endpoint.port),
             "rds_database": rds_name_key,
             "rds_username": "postgres",
-            "chat_tool_model": self.chat_tool_model,
-            "validate_llm_model_id": "us.amazon.nova-pro-v1:0"
+            "chat_tool_model": self.chat_tool_model
         }
 
         # Dependencies will be added after Lambda functions are defined

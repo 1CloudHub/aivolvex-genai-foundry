@@ -14,9 +14,8 @@ from uuid import uuid4
 import uuid
 import soundfile as sf
 from pathlib import Path
-from contextlib import closing
+from openai import OpenAI
 from pydub import AudioSegment
-import wave
 from langchain_aws import ChatBedrock 
 from langchain.memory import ConversationBufferMemory  # Import the required memory class
 from langgraph.checkpoint.memory import MemorySaver
@@ -42,6 +41,7 @@ mms_model = VitsModel.from_pretrained("facebook/mms-tts-eng").to(device)
 mms_tokenizer = AutoTokenizer.from_pretrained("facebook/mms-tts-eng")
 app = Flask(__name__)
 asgi_app = WsgiToAsgi(app)
+# client_openai = OpenAI()
 CORS(app)
 # model_size = "medium"
 # model = WhisperModel(model_size, device="cuda", compute_type="float16")
@@ -468,52 +468,37 @@ def get_or_create_memory(session_id):
     return sessions[session_id]
 
 
-def _chunk_text_for_polly(text, max_chars=3000):
-    text = (text or "").strip()
-    if not text:
-        return [""]
-    if len(text) <= max_chars:
-        return [text]
-    chunks = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= max_chars:
-            chunks.append(remaining)
-            break
-        cut = remaining.rfind(". ", 0, max_chars)
-        if cut < max_chars // 2:
-            cut = remaining.rfind(" ", 0, max_chars)
-        if cut < 1:
-            cut = max_chars
-        else:
-            cut += 1
-        chunks.append(remaining[:cut].strip())
-        remaining = remaining[cut:].strip()
-    return [chunk for chunk in chunks if chunk]
+def tts_polly(region_name, file_name, text):
+    polly_client = boto3.client('polly', region_name = region_name)
 
 
-def tts_polly(text, pathh, voice_id="Joanna", engine="neural", region_name=None, sample_rate="16000"):
-    """Synthesize speech with Amazon Polly and write a WAV file."""
-    polly = boto3.client("polly", region_name=region_name or region)
-    pcm_parts = []
-    for chunk in _chunk_text_for_polly(text):
-        response = polly.synthesize_speech(
-            Text=chunk,
-            OutputFormat="pcm",
-            VoiceId=voice_id,
-            Engine=engine,
-            SampleRate=sample_rate,
-        )
-        if "AudioStream" not in response:
-            raise RuntimeError("No AudioStream returned from Polly")
-        with closing(response["AudioStream"]) as stream:
-            pcm_parts.append(stream.read())
 
-    with wave.open(pathh, "wb") as wav_file:
-        wav_file.setnchannels(1)
-        wav_file.setsampwidth(2)
-        wav_file.setframerate(int(sample_rate))
-        wav_file.writeframes(b"".join(pcm_parts))
+
+    # Synthesize speech
+    response = polly_client.synthesize_speech(
+        Text=text,
+        TextType='text',
+        VoiceId='Joanna',  # English US voice (you can also use 'Matthew', 'Salli', etc.)
+        OutputFormat='pcm',  # PCM format for WAV conversion
+        SampleRate='16000',
+        Engine='neural'  # Optional: use neural engine for better quality
+    )
+
+    # Get the audio stream
+    audio_stream = response['AudioStream']
+
+    # Save as WAV file
+    import wave
+
+    with wave.open(file_name, 'wb') as wav_file:
+        wav_file.setnchannels(1)  # Mono
+        wav_file.setsampwidth(2)  # 16-bit
+        wav_file.setframerate(16000)  # Sample rate
+        wav_file.writeframes(audio_stream.read())
+
+    print("Audio saved as sample.wav")
+
+    return 200
 
 prompt_template_tagalog ="""
 "You are an AI-powered bilingual casino front desk agent. Your task is to accurately translate text while maintaining a warm, professional, and hospitality-focused tone.
@@ -738,6 +723,8 @@ def transcribe_audio():
         kb_id = data_aud.get("kb_id")
         prompt_template_front = data_aud.get("prompt_template")
         db_cred = data_aud.get("db_cred")
+        open_ai_key = base64_to_text("c2stcHJvai1jRjRiajB6MVZvbFpqekQ5aUNfTG8tdGp6a0Y1cDJUNWM0SEhmWnZmZGdoRTk5VDB6ZWMwaXY5X2s1ZGcxZEdpMUNyR3A4TU5NR1QzQmxia0ZKY2dRdmNQZXBxbVVYNndEWVU3YkpUTkhQZEdKYzZkQVVoS3BfTjQ0V1ZEaEJPQ0RYZGNwSmpmV2FxMk9MVGNORlFqZzYwSkJGTUE=")
+        print("KEYYYYYYYYYY", open_ai_key)
         # region = data_aud.get("region")
         # status_flag = request.form.get('status_flag')
         # t_language = request.form.get('language')
@@ -806,7 +793,8 @@ def transcribe_audio():
         temp_speech_path = "placeholder.wav"
         print(f"🎵 Creating TTS response file at: {temp_speech_path}")
         print(f"🎵 Synthesizing TTS to {temp_speech_path} ...")
-        tts_polly(answer, temp_speech_path, region_name=total_region)
+        # tts_openAi(answer, temp_speech_path, open_ai_key)
+        tts_polly(total_region, temp_speech_path, answer)
         print(f"✅ Successfully created TTS response file: {temp_speech_path}")
 
         upload_to_s3(temp_speech_path, bucket_name, temp_speech_path, total_region)
@@ -1128,6 +1116,21 @@ def knowledge_base_retrieve_and_generate(query, session_id, kb_id, box_type, pro
     except Exception as e:
         print("An exception occurred while using retrieve and generate:", e)
         return "I'm having trouble accessing that information right now. Please try again in a moment, or contact our customer service team for assistance."
+def tts_openAi(text, pathh, open_ai_key):
+
+    temp_file_path = Path(pathh)
+        
+    with open(temp_file_path, "wb") as file:
+        client_openai = OpenAI(api_key=open_ai_key)
+
+        response = client_openai.audio.speech.create(
+            model="tts-1",
+            voice="sage",
+            input=text,
+            response_format="wav"
+        )
+        for chunk in response.iter_bytes():
+            file.write(chunk)
 def tts_mms(text, pathh, pitch_factor=1.0):
     global mms_model, mms_tokenizer, device
     

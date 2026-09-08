@@ -60,7 +60,6 @@ schema = os.environ['schema']
 chat_history_table = os.environ['chat_history_table']
 prompt_metadata_table = os.environ['prompt_metadata_table']
 model_id = os.environ['model_id']
-validate_llm_model_id = os.environ.get("validate_llm_model_id", "us.amazon.nova-pro-v1:0")
 KB_ID = os.environ['KB_ID']
 CHAT_LOG_TABLE = os.environ['CHAT_LOG_TABLE']   
 socket_endpoint = os.environ["socket_endpoint"]
@@ -1546,28 +1545,70 @@ Return only the following JSON format (no markdown, no extra commentary):
 
     # return json.loads(json_str)
 
-    print(f"Using validate_llm_model_id from env: {validate_llm_model_id}")
-    response = bedrock_client.converse(
-        modelId=validate_llm_model_id,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"text": prompt}
-                ]
-            }
-        ],
-        inferenceConfig={
-            "maxTokens": 4000,
-            "temperature": 0.7
-        }
+    selected_model = chat_tool_model
+    is_nova_model = (
+        selected_model == 'nova' or  # Exact match
+        selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+        selected_model.startswith('nova-') or  # Nova variant pattern
+        ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
     )
-    assistant_msg = response.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "")
-    print("LLM OUTPUT:", assistant_msg)
+    
+    # Use appropriate API based on model type
+    if is_nova_model:
+        print(f"Using Nova model for summary generation: {selected_model}")
+        # Use Nova Converse API
+        response = bedrock_client.converse(
+            modelId=selected_model,
+            system=[
+                {"text": prompt}
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "Follow the system instructions."}
+                    ]
+                }
+            ],
+            inferenceConfig={
+                "maxTokens": 4000,
+                "temperature": 0.7
+            }
+        )
+        # Extract Nova output
+        try:
+            assistant_msg = response["output"]["message"]["content"][0]["text"]
+        except Exception as e:
+            print("Error extracting Nova output:", e)
+            raise
 
-    start = assistant_msg.find('{')
-    end = assistant_msg.rfind('}')
-    json_str = assistant_msg[start:end + 1] if start != -1 and end != -1 else assistant_msg
+        print("NOVA OUTPUT:", assistant_msg)
+
+        # In case Nova adds extra narration, strip to JSON
+        match = re.search(r'({.*})', assistant_msg, re.DOTALL)
+        json_str = match.group(1) if match else assistant_msg
+
+        return json.loads(json_str)
+
+    else:
+        print(f"Using Claude model for summary generation: {selected_model}")
+
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 2048,
+        "messages": [{"role": "user", "content": prompt}]
+    })
+
+    response = bedrock.invoke_model(
+        modelId=chat_tool_model,
+        body=body,
+    )
+
+    final_text = json.loads(response.get("body").read())["content"][0]["text"]
+    print("LLM OUTPUT:", final_text)
+
+    match = re.search(r'({.*})', final_text, re.DOTALL)
+    json_str = match.group(1) if match else final_text
     return json.loads(json_str)
 
 
@@ -5871,7 +5912,17 @@ def lambda_handler(event, context):
         print(f"🔍 DEBUG: search_results type = {type(search_results)}")
         print(f"🔍 DEBUG: search_results = {search_results}")
         
-        print(f"Using validate_llm_model_id from env: {validate_llm_model_id}")
+        # Determine model based on chat_model parameter or default to chat_tool_model
+        selected_model = chat_model if chat_model else chat_tool_model
+        print(f"Using model: {selected_model}")
+        
+        # Check if Nova model should be used (same logic as other functions)
+        is_nova_model = (
+            selected_model == 'nova' or  # Exact match
+            selected_model.startswith('us.amazon.nova') or  # Nova model ID pattern
+            selected_model.startswith('nova-') or  # Nova variant pattern
+            ('.nova' in selected_model and 'claude' not in selected_model)  # Contains .nova but not claude
+        )
         
         try:
             print(f"🔍 DEBUG: Entering try block")
@@ -5978,23 +6029,54 @@ def lambda_handler(event, context):
             
             print(f"🔍 DEBUG: About to invoke LLM model")
             
-            # Use validate_llm_model_id from env (Nova Pro)
-            response = bedrock_client.converse(
-                modelId=validate_llm_model_id,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [{"text": prompt}]
+            # Invoke LLM for validation based on model type
+            if is_nova_model:
+                print(f"Using Nova model: {selected_model}")
+                # Get Nova model name
+                nova_model_name = selected_model if (selected_model.startswith('us.amazon.nova') or selected_model.startswith('nova-')) else chat_tool_model
+                
+                # Use Nova Converse API
+                response = bedrock_client.converse(
+                    modelId=nova_model_name,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [{"text": prompt}]
+                        }
+                    ],
+                    inferenceConfig={
+                        "temperature": 0.1,
+                        "topP": 0.9,
+                        "maxTokens": 1000
                     }
-                ],
-                inferenceConfig={
-                    "temperature": 0.1,
-                    "topP": 0.9,
-                    "maxTokens": 1000
-                }
-            )
-            
-            llm_response = response.get('output', {}).get('message', {}).get('content', [{}])[0].get('text', '')
+                )
+                
+                # Extract response from Nova format
+                llm_response = response.get('output', {}).get('message', {}).get('content', [{}])[0].get('text', '')
+            else:
+                print(f"Using Claude model: {selected_model}")
+                # Use Claude API
+                response = bedrock_client.invoke_model(
+                    contentType='application/json',
+                    body=json.dumps({
+                        "anthropic_version": "bedrock-2023-05-31",
+                        "max_tokens": 1000,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": prompt}
+                                ]
+                            }
+                        ],
+                    }),
+                    modelId=chat_tool_model
+                )
+                
+                # Parse Claude response
+                inference_result = response['body'].read().decode('utf-8')
+                final = json.loads(inference_result)
+                llm_response = final['content'][0]['text']
             
             print(f"🔍 DEBUG: LLM model invoked successfully")
             print(f"🔍 DEBUG: llm_response extracted = {llm_response}")
@@ -6003,10 +6085,7 @@ def lambda_handler(event, context):
             # Parse JSON response from LLM
             print(f"🔍 DEBUG: About to parse JSON from LLM response")
             try:
-                start = llm_response.find('{')
-                end = llm_response.rfind('}')
-                payload = llm_response[start:end + 1] if start != -1 and end != -1 else llm_response
-                validation_result = json.loads(payload)
+                validation_result = json.loads(llm_response)
                 print(f"🔍 DEBUG: JSON parsed successfully, returning validation_result")
                 return validation_result
             except json.JSONDecodeError as json_error:
@@ -7343,6 +7422,12 @@ these are the keys to be always used while returning response. Strictly do not a
                 email_creation = email_creation.replace('\\n', '\n').replace('\\r', '\r').replace('\\t', '\t')
         except:
             email_creation = ""
+        detailed_summary = detailed_summary.replace("'", "''")
+        email_creation = email_creation.replace("'", "''")
+        action_to_be_taken = action_to_be_taken.replace("'", "''")
+        leads_generated_details = leads_generated_details.replace("'", "''")
+        conversation_sentiment_generated_details = conversation_sentiment_generated_details.replace("'", "''")        
+        
         print("LEAD : ",lead)
         print("ENQUIRY : ",enquiry)
         print("COMPLAINT : ",complaint)
@@ -7357,54 +7442,23 @@ these are the keys to be always used while returning response. Strictly do not a
         print("next_best_action:",action_to_be_taken)
         print("email_content:",email_creation)
         session_time = datetime.now()
-        existing_log = select_db(
-            f"SELECT 1 FROM {schema}.{CHAT_LOG_TABLE} WHERE session_id = '{session_id}' LIMIT 1;"
-        )
-        if existing_log:
-            detailed_summary_sql = detailed_summary.replace("'", "''")
-            email_creation_sql = email_creation.replace("'", "''")
-            action_to_be_taken_sql = action_to_be_taken.replace("'", "''")
-            leads_generated_details_sql = leads_generated_details.replace("'", "''")
-            conversation_sentiment_generated_details_sql = conversation_sentiment_generated_details.replace("'", "''")
-            update_query = f'''UPDATE {schema}.{CHAT_LOG_TABLE}
-            SET 
-                lead = {lead},
-                lead_explanation = '{leads_generated_details_sql}',
-                sentiment = '{conversation_sentiment}',
-                sentiment_explanation = '{conversation_sentiment_generated_details_sql}',
-                session_time = '{session_time}',
-                enquiry = {enquiry},
-                complaint = {complaint},
-                summary = '{detailed_summary_sql}',
-                whatsapp_content = '{email_creation_sql}',
-                next_best_action = '{action_to_be_taken_sql}',
-                topic = '{topic}'
-            WHERE 
-                session_id = '{session_id}' 
-                '''
-            update_db(update_query)
-            print(f"BANKING SUMMARY UPDATED session_id={session_id}")
-        else:
-            insert_query = f'''INSERT INTO {schema}.{CHAT_LOG_TABLE}
-                (created_on, environment, session_time, "lead", enquiry, complaint, summary, whatsapp_content, next_best_action, session_id, lead_explanation, sentiment, sentiment_explanation, connectionid, input_token, output_token, topic)
-                VALUES(CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0, %s);'''
-            insert_db(insert_query, (
-                '',
-                session_time,
-                lead,
-                enquiry,
-                complaint,
-                detailed_summary,
-                email_creation,
-                action_to_be_taken,
-                str(session_id),
-                leads_generated_details,
-                conversation_sentiment,
-                conversation_sentiment_generated_details,
-                '',
-                topic,
-            ))
-            print(f"BANKING SUMMARY INSERTED session_id={session_id}")
+        update_query = f'''UPDATE {schema}.{CHAT_LOG_TABLE}
+        SET 
+            lead = {lead},
+            lead_explanation = '{leads_generated_details}',
+            sentiment = '{conversation_sentiment}',
+            sentiment_explanation = '{conversation_sentiment_generated_details}',
+            session_time = '{session_time}',
+            enquiry = {enquiry},
+            complaint = {complaint},
+            summary = '{detailed_summary}',
+            whatsapp_content = '{email_creation}',
+            next_best_action = '{action_to_be_taken}',
+            topic = '{topic}'
+        WHERE 
+            session_id = '{session_id}' 
+            '''
+        update_db(update_query)
         return {
                 "statusCode" : 200,
                 "message" : "Banking Summary Successfully Generated"
@@ -10191,28 +10245,53 @@ Below is the tabular data:
 Only return the JSON. No markdown, no explanations, no code blocks.
 """
 
-    bedrock = boto3.client("bedrock-runtime", region_name=region_used)
+    bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
     
-    print(f"Using validate_llm_model_id from env: {validate_llm_model_id}")
-    response = bedrock.converse(
-        modelId=validate_llm_model_id,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "text": prompt
-                    }
-                ]
+    # Get the selected model from environment variable
+    selected_model = chat_tool_model
+    
+    # Check if the model is a Nova model
+    is_nova_model = (selected_model == 'nova' or 
+                     selected_model.startswith('us.amazon.nova') or 
+                     selected_model.startswith('nova-') or 
+                     ('.nova' in selected_model and 'claude' not in selected_model))
+    
+    if is_nova_model:
+        # Use converse API for Nova models
+        response = bedrock.converse(
+            modelId=selected_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "text": prompt
+                        }
+                    ]
+                }
+            ],
+            inferenceConfig={
+                "maxTokens": 2048,
+                "temperature": 0.7
             }
-        ],
-        inferenceConfig={
-            "maxTokens": 2048,
-            "temperature": 0.7
-        }
-    )
-    
-    output_text = response.get("output", {}).get("message", {}).get("content", [])[0].get("text", "")
+        )
+        
+        output_text = response.get("output", {}).get("message", {}).get("content", [])[0].get("text", "")
+    else:
+        # Use invoke_model for Claude models
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 2048,
+            "messages": [{"role": "user", "content": prompt}]
+        })
+
+        response = bedrock.invoke_model(
+            modelId=chat_tool_model, 
+            body=body,
+        )
+
+        result = json.loads(response.get("body").read())
+        output_text = result["content"][0]["text"]
     
     print("LLM OUTPUT:", output_text)
 
