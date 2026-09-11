@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 
 # ── Media streaming config ──────────────────────────────────────────────────
 MEDIA_STREAMING_BUCKET = os.environ.get("MEDIA_BUCKET_NAME", "public-media-sandbox")
-MEDIA_STREAMING_REGION = os.environ.get("AWS_REGION", "us-west-2")
+MEDIA_STREAMING_REGION = os.environ.get("MEDIA_BUCKET_REGION", "us-west-2")
 MEDIA_PRESIGN_EXPIRES = int(os.environ.get("PRESIGNED_URL_EXPIRY", 3600))
 
 # ── Customer feedback config ────────────────────────────────────────────────

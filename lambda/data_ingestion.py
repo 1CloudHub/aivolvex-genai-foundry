@@ -12,7 +12,7 @@ HOST = os.environ["OPENSEARCH_ENDPOINT"].replace("https://", "").replace("http:/
 index_name = os.environ["INDEX_NAME"]
 bucket_name = os.environ["BUCKET_NAME"]
 prefix = os.environ["S3_PREFIX"]
-claude_model_id = os.environ.get("CLAUDE_MODEL_ID", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+validate_llm_model_id = os.environ.get("validate_llm_model_id", "us.amazon.nova-pro-v1:0")
 
 # Configuration for retries
 config = Config(
@@ -103,8 +103,25 @@ def create_image_embedding(image_base64):
         print(f"Error creating image embedding: {e}")
         return None
 
+def _detect_image_format(img_bytes, image_key=""):
+    if img_bytes.startswith(b'\xff\xd8\xff'):
+        return "jpeg"
+    if img_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
+        return "png"
+    if img_bytes.startswith(b'GIF87a') or img_bytes.startswith(b'GIF89a'):
+        return "gif"
+    if img_bytes.startswith(b'WEBP', 8):
+        return "webp"
+    key = (image_key or "").lower()
+    if key.endswith(".png"):
+        return "png"
+    if key.endswith(".webp"):
+        return "webp"
+    return "jpeg"
+
+
 def get_image_description(image_base64, image_key):
-    """Generate product description using Claude"""
+    """Generate product description using Nova Pro (validate_llm_model_id)."""
     system_prompt = '''
     You are an image analysis agent for a retail store.
     You will be given a product image and need to generate an accurate 3-line product description.
@@ -127,35 +144,41 @@ def get_image_description(image_base64, image_key):
     - Maintain a neutral and factual tone
     - Focus on the product present in the image rather than the whole image
     '''
-    
+
     try:
-        response = bedrock.invoke_model(
-            contentType='application/json',
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 1000,
+        print(f"Using validate_llm_model_id from env: {validate_llm_model_id}")
+        image_bytes = base64.b64decode(image_base64)
+        image_format = _detect_image_format(image_bytes, image_key)
+        response = bedrock.converse(
+            modelId=validate_llm_model_id,
+            system=[{"text": system_prompt}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "image": {
+                                "format": image_format,
+                                "source": {"bytes": image_bytes},
+                            }
+                        },
+                        {"text": "Describe this product image."},
+                    ],
+                }
+            ],
+            inferenceConfig={
+                "maxTokens": 1000,
                 "temperature": 0,
-                "top_p": 0.999,
-                "top_k": 250,
-                "system": system_prompt,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_base64}}
-                        ]
-                    }
-                ],
-            }),
-            modelId=claude_model_id
+            },
         )
-        
-        response_body = json.loads(response['body'].read().decode('utf-8'))
-        description_output = response_body['content'][0]['text']
-        
+        description_output = (
+            response.get("output", {})
+            .get("message", {})
+            .get("content", [{}])[0]
+            .get("text", "")
+        )
         print(f"Generated description for {image_key}: {description_output[:100]}...")
-        return description_output
-        
+        return description_output or f"Product image: {os.path.basename(image_key)}"
     except Exception as e:
         print(f"Error generating description for {image_key}: {e}")
         return f"Product image: {os.path.basename(image_key)}"
@@ -306,7 +329,7 @@ def process_image_files(image_files):
                 print(f"Skipping {image_file} due to image embedding creation failure")
                 continue
             
-            # Generate product description using Claude
+            # Generate product description using Nova Pro
             product_description = get_image_description(base64_encoded_image, image_file)
             
             # Prepare document for OpenSearch
@@ -410,26 +433,12 @@ def lambda_handler(event, context):
         # For Create/Update, perform data ingestion
         print("Create/Update request - performing data ingestion")
         result = perform_data_ingestion()
-        
-        # Return proper CloudFormation response format
-        if result['status'] == 'success':
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'message': 'Data ingestion completed successfully',
-                    'indexed_count': result.get('indexed_count', 0),
-                    'details': result
-                })
-            }
-        else:
-            return {
-                'statusCode': 500,
-                'body': json.dumps({
-                    'message': 'Data ingestion failed',
-                    'error': result.get('message', 'Unknown error'),
-                    'details': result
-                })
-            }
+        if result.get("status") != "success" or result.get("indexed_count", 0) < 1:
+            raise RuntimeError(result.get("message", "Data ingestion wrote 0 documents"))
+        return {
+            "PhysicalResourceId": f"data-ingestion-{index_name}",
+            "Data": result,
+        }
     
     # Default: perform data ingestion (backward compatibility)
     print("No CloudFormation event detected, performing default data ingestion")

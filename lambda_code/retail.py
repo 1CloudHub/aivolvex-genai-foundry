@@ -6134,27 +6134,18 @@ def lambda_handler(event, context):
                                 # Use current S3 bucket from environment instead of old bucket from URI
                                 if not S3_BUCKET:
                                     return {
-                                        'statusCode': 400,
-                                        'body': json.dumps({
-                                            'error': 'S3_BUCKET environment variable is not set'
-                                        })
+                                        'error': 'S3_BUCKET environment variable is not set'
                                     }
                                 bucket_name = S3_BUCKET
                                 # Extract the key part (everything after the first '/')
                                 image_key = path_parts[1]
                             else:
                                 return {
-                                    'statusCode': 400,
-                                    'body': json.dumps({
-                                        'error': 'Invalid S3 URI format. Expected: s3://bucket-name/key'
-                                    })
+                                    'error': 'Invalid S3 URI format. Expected: s3://bucket-name/key'
                                 }
                         else:
                             return {
-                                'statusCode': 400,
-                                'body': json.dumps({
-                                    'error': 'Invalid S3 URI. Must start with s3://'
-                                })
+                                'error': 'Invalid S3 URI. Must start with s3://'
                             }
                         
                         print(f"Downloading from bucket: {bucket_name}, key: {image_key}")
@@ -6173,30 +6164,21 @@ def lambda_handler(event, context):
                                 print(f"❌ Access denied to S3 bucket: {e}")
                                 print(f"Bucket: {bucket_name}, Key: {image_key}")
                                 return {
-                                    'statusCode': 403,
-                                    'body': json.dumps({
-                                        'error': f'Access denied to S3 bucket. Please check IAM permissions for bucket: {bucket_name}. The Lambda execution role needs s3:GetObject permission.',
-                                        'bucket': bucket_name,
-                                        'key': image_key
-                                    })
+                                    'error': f'Access denied to S3 bucket. Please check IAM permissions for bucket: {bucket_name}. The Lambda execution role needs s3:GetObject permission.',
+                                    'bucket': bucket_name,
+                                    'key': image_key
                                 }
                             elif error_code == 'NoSuchKey':
                                 print(f"❌ Image not found in S3: {e}")
                                 return {
-                                    'statusCode': 404,
-                                    'body': json.dumps({
-                                        'error': f'Image not found in S3 bucket. Bucket: {bucket_name}, Key: {image_key}'
-                                    })
+                                    'error': f'Image not found in S3 bucket. Bucket: {bucket_name}, Key: {image_key}'
                                 }
                             else:
                                 print(f"❌ S3 ClientError: {e}")
                                 return {
-                                    'statusCode': 400,
-                                    'body': json.dumps({
-                                        'error': f'S3 error ({error_code}): {str(e)}',
-                                        'bucket': bucket_name,
-                                        'key': image_key
-                                    })
+                                    'error': f'S3 error ({error_code}): {str(e)}',
+                                    'bucket': bucket_name,
+                                    'key': image_key
                                 }
                         
                     except Exception as e:
@@ -6204,11 +6186,8 @@ def lambda_handler(event, context):
                         import traceback
                         print(f"Full traceback: {traceback.format_exc()}")
                         return {
-                            'statusCode': 400,
-                            'body': json.dumps({
-                                'error': f'Error downloading image from S3: {str(e)}',
-                                'details': 'Please check S3 URI format and IAM permissions'
-                            })
+                            'error': f'Error downloading image from S3: {str(e)}',
+                            'details': 'Please check S3 URI format and IAM permissions'
                         }
                     
                     # Validate base64 format and image
@@ -6221,10 +6200,7 @@ def lambda_handler(event, context):
                         if len(decoded) > 5 * 1024 * 1024:  # 5MB limit
                             print(f"❌ Image too large: {len(decoded)} bytes (max 5MB)")
                             return {
-                                'statusCode': 400,
-                                'body': json.dumps({
-                                    'error': 'Image too large. Please use an image smaller than 5MB.'
-                                })
+                                'error': 'Image too large. Please use an image smaller than 5MB.'
                             }
                         
                         # Enhanced image validation and resizing using PIL
@@ -6270,17 +6246,11 @@ def lambda_handler(event, context):
                     except Exception as e:
                         print(f"❌ Invalid base64 format: {e}")
                         return {
-                            'statusCode': 400,
-                            'body': json.dumps({
-                                'error': 'Invalid image format. Please provide a valid image file.'
-                            })
+                            'error': 'Invalid image format. Please provide a valid image file.'
                         }
                 else:
                     return {
-                        'statusCode': 400,
-                        'body': json.dumps({
-                            'error': 'No image data provided. Please provide image file in form-data.'
-                        })
+                        'error': 'No image data provided. Please provide image file in form-data.'
                     }
                 
                 print(f"Image base64 length: {len(image_base64)} characters")
@@ -6375,23 +6345,18 @@ def lambda_handler(event, context):
             else:
                 response_text = "Invalid search parameters. Please provide either 'search_type': 'text' with 'search_query' or 'search_type': 'image' with image file"
             
+            # chat_api is a non-proxy integration — return the payload directly
             return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'message': 'Search completed successfully',
-                    'results': results if 'results' in locals() else [],
-                    'response_text': response_text,
-                    'validation': validation_result if 'validation_result' in locals() else None
-                })
+                'message': 'Search completed successfully',
+                'results': results if 'results' in locals() else [],
+                'response_text': response_text,
+                'validation': validation_result if 'validation_result' in locals() else None
             }
             
         except Exception as e:
             print(f"Error in visual product search API: {e}")
             return {
-                'statusCode': 500,
-                'body': json.dumps({
-                    'error': f'Search failed: {str(e)}'
-                })
+                'error': f'Search failed: {str(e)}'
             }
   #insurance event_type code starts here
     if event_type == "get_pw":

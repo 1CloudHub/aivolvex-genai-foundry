@@ -27,7 +27,7 @@ db_port = os.environ['db_port']
 db_database = os.environ['db_database']
 region_used = os.environ["region_used"]
 bank_kb_id = os.environ['bank_kb_id']
-# KB_ID = os.environ['KB_ID']
+KB_ID = os.environ.get("KB_ID", bank_kb_id)
 chat_tool_model = os.environ.get("chat_tool_model", "claude").lower()
 nova_model_name = os.environ.get("nova_model_name")
 # Get new environment variables for voice operations
@@ -2744,10 +2744,12 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
             headers = {
             'Content-Type': 'application/json'
             }
-            print(payload)
+            print("payload is printed here", payload)
             response = requests.request("POST", url, headers=headers, data=payload)
-
-            return response.text
+            try:
+                return response.json()
+            except Exception:
+                return response.text
 
         except Exception as e:
             return {

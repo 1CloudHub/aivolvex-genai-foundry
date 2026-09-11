@@ -1534,8 +1534,8 @@ class RetailCdkStack(Stack):
         data_ingestion_function.add_environment("INDEX_NAME", f"visualproductsearchmod-{name_key}")
         data_ingestion_function.add_environment("BUCKET_NAME", s3_bucket_name)
         data_ingestion_function.add_environment("S3_PREFIX", "visualproductsearch")
-        data_ingestion_function.add_environment("CLAUDE_MODEL_ID", "us.anthropic.claude-3-7-sonnet-20250219-v1:0")
         data_ingestion_function.add_environment("chat_tool_model", self.chat_tool_model)
+        data_ingestion_function.add_environment("validate_llm_model_id", "us.amazon.nova-pro-v1:0")
 
 
         bucket.grant_read(data_ingestion_function)
@@ -1857,13 +1857,14 @@ class RetailCdkStack(Stack):
             "    echo \"✅ curl already installed\"",
             "fi",
             "",
-            "# Install Node.js and npm if not present",
-            "if ! command_exists node || ! command_exists npm; then",
-            "    echo \"📦 Installing Node.js and npm...\"",
-            "    curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -",
+            "# Install Node.js 22+ (upgrade if an older version like 20 is already present)",
+            "NODE_MAJOR=$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)",
+            "if ! command_exists node || ! command_exists npm || [ \"${NODE_MAJOR:-0}\" -lt 22 ]; then",
+            "    echo \"📦 Installing Node.js 22...\"",
+            "    curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -",
             "    sudo yum install -y nodejs --allowerasing",
             "else",
-            "    echo \"✅ Node.js and npm already installed\"",
+            "    echo \"✅ Node.js $(node -v) already installed\"",
             "fi",
             "",
             "# Install AWS CLI v2 if not present",

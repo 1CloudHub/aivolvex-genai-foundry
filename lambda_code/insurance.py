@@ -3699,10 +3699,12 @@ VALUES(CURRENT_TIMESTAMP, %s, CURRENT_TIMESTAMP, %s, 0, 0, %s, %s, %s, %s, %s, %
             headers = {
             'Content-Type': 'application/json'
             }
-            print(payload)
+            print("payload is printed here", payload)
             response = requests.request("POST", url, headers=headers, data=payload)
-
-            return response.text
+            try:
+                return response.json()
+            except Exception:
+                return response.text
 
         except Exception as e:
             return {

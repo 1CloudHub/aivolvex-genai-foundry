@@ -5,6 +5,8 @@ from flask_cors import CORS
 from asgiref.wsgi import WsgiToAsgi
 from botocore.exceptions import ClientError
 import base64
+from contextlib import closing
+import wave
 
 import tempfile
 import boto3
@@ -109,8 +111,9 @@ def transcribe_audio_with_aws(audio_data, bucket_name, session, sample_rate=1600
     transcribe_client = session.client('transcribe')
     s3_client = session.client('s3')
     
-    # Configuration
-    job_name = f'transcription-job-{int(time.time())}'
+    # Configuration — unique job name so concurrent requests do not collide
+    job_name = f'transcription-job-{uuid.uuid4()}'
+    transcript_key = f'transcripts/{job_name}.json'
     
     try:
         # Step 1: Save audio data to temporary WAV file
@@ -123,13 +126,15 @@ def transcribe_audio_with_aws(audio_data, bucket_name, session, sample_rate=1600
         s3_client.upload_file(temp_audio_path, bucket_name, s3_key)
         audio_s3_uri = f's3://{bucket_name}/{s3_key}'
         
-        # Step 3: Start transcription job - FIXED SETTINGS
+        # Step 3: Start transcription job and write the result into the same bucket
         transcribe_client.start_transcription_job(
             TranscriptionJobName=job_name,
             Media={'MediaFileUri': audio_s3_uri},
             MediaFormat='wav',
             LanguageCode='en-US',
             MediaSampleRateHertz=sample_rate,
+            OutputBucketName=bucket_name,
+            OutputKey=transcript_key,
             Settings={
                 'ShowSpeakerLabels': False  # Removed MaxSpeakerLabels since ShowSpeakerLabels is False
             }
@@ -151,20 +156,20 @@ def transcribe_audio_with_aws(audio_data, bucket_name, session, sample_rate=1600
                 print(f"Status: {status}... waiting")
                 time.sleep(5)
         
-        # Step 5: Get transcription result
-        transcript_uri = response['TranscriptionJob']['Transcript']['TranscriptFileUri']
-        
-        # Download and parse the transcript
-        import urllib.request
-        with urllib.request.urlopen(transcript_uri) as response_data:
-            transcript_json = json.loads(response_data.read().decode())
+        # Step 5: Read the transcript from S3 (avoids unsigned TranscriptFileUri 403s)
+        transcript_obj = s3_client.get_object(Bucket=bucket_name, Key=transcript_key)
+        transcript_json = json.loads(transcript_obj['Body'].read().decode('utf-8'))
         
         # Extract the transcribed text
         transcript_text = transcript_json['results']['transcripts'][0]['transcript']
         
-        # Cleanup: Delete the transcription job and S3 file
+        # Cleanup: Delete the transcription job and S3 files
         transcribe_client.delete_transcription_job(TranscriptionJobName=job_name)
         s3_client.delete_object(Bucket=bucket_name, Key=s3_key)
+        try:
+            s3_client.delete_object(Bucket=bucket_name, Key=transcript_key)
+        except Exception:
+            pass
         
         # Clean up temporary file
         os.unlink(temp_audio_path)
@@ -468,36 +473,53 @@ def get_or_create_memory(session_id):
     return sessions[session_id]
 
 
-def tts_polly(region_name, file_name, text):
-    polly_client = boto3.client('polly', region_name = region_name)
+def _chunk_text_for_polly(text, max_chars=3000):
+    text = (text or "").strip()
+    if not text:
+        return [""]
+    if len(text) <= max_chars:
+        return [text]
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_chars:
+            chunks.append(remaining)
+            break
+        cut = remaining.rfind(". ", 0, max_chars)
+        if cut < max_chars // 2:
+            cut = remaining.rfind(" ", 0, max_chars)
+        if cut < 1:
+            cut = max_chars
+        else:
+            cut += 1
+        chunks.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    return [chunk for chunk in chunks if chunk]
 
 
+def tts_polly(text, pathh, voice_id="Joanna", engine="neural", region_name=None, sample_rate="16000"):
+    """Synthesize speech with Amazon Polly and write a WAV file."""
+    polly = boto3.client("polly", region_name=region_name or region)
+    pcm_parts = []
+    for chunk in _chunk_text_for_polly(text):
+        response = polly.synthesize_speech(
+            Text=chunk,
+            OutputFormat="pcm",
+            VoiceId=voice_id,
+            Engine=engine,
+            SampleRate=sample_rate,
+        )
+        if "AudioStream" not in response:
+            raise RuntimeError("No AudioStream returned from Polly")
+        with closing(response["AudioStream"]) as stream:
+            pcm_parts.append(stream.read())
 
-
-    # Synthesize speech
-    response = polly_client.synthesize_speech(
-        Text=text,
-        TextType='text',
-        VoiceId='Joanna',  # English US voice (you can also use 'Matthew', 'Salli', etc.)
-        OutputFormat='pcm',  # PCM format for WAV conversion
-        SampleRate='16000',
-        Engine='neural'  # Optional: use neural engine for better quality
-    )
-
-    # Get the audio stream
-    audio_stream = response['AudioStream']
-
-    # Save as WAV file
-    import wave
-
-    with wave.open(file_name, 'wb') as wav_file:
-        wav_file.setnchannels(1)  # Mono
-        wav_file.setsampwidth(2)  # 16-bit
-        wav_file.setframerate(16000)  # Sample rate
-        wav_file.writeframes(audio_stream.read())
-
-    print("Audio saved as sample.wav")
-
+    with wave.open(pathh, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(int(sample_rate))
+        wav_file.writeframes(b"".join(pcm_parts))
+    print(f"Audio saved as {pathh}")
     return 200
 
 prompt_template_tagalog ="""
@@ -723,8 +745,6 @@ def transcribe_audio():
         kb_id = data_aud.get("kb_id")
         prompt_template_front = data_aud.get("prompt_template")
         db_cred = data_aud.get("db_cred")
-        open_ai_key = base64_to_text("c2stcHJvai1jRjRiajB6MVZvbFpqekQ5aUNfTG8tdGp6a0Y1cDJUNWM0SEhmWnZmZGdoRTk5VDB6ZWMwaXY5X2s1ZGcxZEdpMUNyR3A4TU5NR1QzQmxia0ZKY2dRdmNQZXBxbVVYNndEWVU3YkpUTkhQZEdKYzZkQVVoS3BfTjQ0V1ZEaEJPQ0RYZGNwSmpmV2FxMk9MVGNORlFqZzYwSkJGTUE=")
-        print("KEYYYYYYYYYY", open_ai_key)
         # region = data_aud.get("region")
         # status_flag = request.form.get('status_flag')
         # t_language = request.form.get('language')
@@ -769,6 +789,8 @@ def transcribe_audio():
         # result = result_obj['text']
         result = transcribe_audio_with_aws(audio_data, bucket_name, session_awsss)
         print("Whisper transcription result:", result)
+        if not result:
+            raise ValueError("Transcription returned no text")
         chat = result
         connectionId = request.form.get('connectionId', 'default-conn-id')
         print("Calling knowledge_base_retrieve_and_generate with transcription...")
@@ -788,18 +810,16 @@ def transcribe_audio():
         #     print(f"🔍 Upload cleanup error type: {type(e).__name__}")
         
         # Create TTS response file in the unique folder
-        # ww = sanitize_filename(f"tts_response_{uuid4()}.wav")
-        # temp_speech_path = os.path.join(request_folder, ww)
-        temp_speech_path = "placeholder.wav"
+        ww = f"tts_response_{uuid4()}.wav"
+        temp_speech_path = os.path.join(request_folder, ww)
         print(f"🎵 Creating TTS response file at: {temp_speech_path}")
         print(f"🎵 Synthesizing TTS to {temp_speech_path} ...")
-        # tts_openAi(answer, temp_speech_path, open_ai_key)
-        tts_polly(total_region, temp_speech_path, answer)
+        tts_polly(answer, temp_speech_path, region_name=total_region)
         print(f"✅ Successfully created TTS response file: {temp_speech_path}")
 
-        upload_to_s3(temp_speech_path, bucket_name, temp_speech_path, total_region)
+        upload_to_s3(temp_speech_path, bucket_name, f"audio/{ww}", total_region)
 
-        hh = generate_presigned_url(bucket_name, temp_speech_path, total_region) 
+        hh = generate_presigned_url(bucket_name, f"audio/{ww}", total_region)
 
         print("QQQQQQQQQQQQQQQQQQQQQQQQQ", hh)
         
@@ -808,9 +828,11 @@ def transcribe_audio():
             audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
         
         
-        # Create JSON response with base64 audio
+        # Create JSON response: text = bot reply, transcript = user speech
         response = {
             'audio': hh,
+            'text': answer,
+            'transcript': chat,
             'session_id': session_id,
             'message': 'TTS response generated successfully',
             'audio_format': 'wav'
@@ -848,7 +870,7 @@ def transcribe_audio():
         #     print(f"❌ Error cleaning up files: {e}")
         #     print(f"🔍 File cleanup error type: {type(e).__name__}")
         
-        return {"status": 200}
+        return jsonify(response)
     except Exception as e:
 
         print("❌ Error in /transcribe:", e)
