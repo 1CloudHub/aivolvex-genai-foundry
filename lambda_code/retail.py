@@ -81,6 +81,27 @@ bedrock_client = boto3.client('bedrock-runtime', region_name=region_used)
 api_gateway_client = boto3.client('apigatewaymanagementapi', endpoint_url=socket_endpoint)
 bedrock = boto3.client('bedrock-runtime', region_name=region_used)
 
+def is_model_unavailable_error(e):
+    """Return True when a Bedrock model can't be used in this account."""
+    text_parts = [str(e)]
+    if isinstance(e, ClientError):
+        err = e.response.get("Error", {})
+        text_parts.append(err.get("Code", "") or "")
+        text_parts.append(err.get("Message", "") or "")
+    combined = " ".join(text_parts).lower()
+    indicators = (
+        "accessdeniedexception",
+        "access denied",
+        "legacy",
+        "not authorized",
+        "resourcenotfoundexception",
+        "provided model identifier is invalid",
+        "doesn't have access to the model",
+        "not available",
+    )
+    return any(indicator in combined for indicator in indicators)
+
+
 # Helper function to generate dynamic dates
 def get_dynamic_date(days_ahead=2):
     """Generate a date that is 'days_ahead' days from current date"""
@@ -8337,8 +8358,13 @@ these are the keys to be always used while returning response. Strictly do not a
                     }
 
             except ClientError as err:
+                print(f"A client error occurred: {err}")
+                if is_model_unavailable_error(err):
+                    return {
+                        "statusCode": 403,
+                        "message": "This model is not available in this account. Please contact your account administrator regarding model access."
+                    }
                 message = err.response["Error"]["Message"]
-                print(f"A client error occurred: {message}")
                 return {
                     "statusCode": 500,
                     "message": f"Client error: {message}"
@@ -8353,6 +8379,11 @@ these are the keys to be always used while returning response. Strictly do not a
 
         except Exception as e:
             print(f"Error in generate_image: {e}")
+            if is_model_unavailable_error(e):
+                return {
+                    "statusCode": 403,
+                    "message": "This model is not available in this account. Please contact your account administrator regarding model access."
+                }
             return {
                 "statusCode": 500,
                 "message": f"Internal server error: {str(e)}"
@@ -9905,15 +9936,24 @@ def generate_video_from_image(event):
 
         # Call Bedrock async invoke
         bedrock_runtime = boto3.client("bedrock-runtime", region_name="us-east-1")
-        invocation = bedrock_runtime.start_async_invoke(
-            modelId=model_id,
-            modelInput=model_input,
-            outputDataConfig={
-                "s3OutputDataConfig": {
-                    "s3Uri": s3_uri
+        try:
+            invocation = bedrock_runtime.start_async_invoke(
+                modelId=model_id,
+                modelInput=model_input,
+                outputDataConfig={
+                    "s3OutputDataConfig": {
+                        "s3Uri": s3_uri
+                    }
+                },
+            )
+        except Exception as e:
+            print(f"Error in vid_generation Bedrock invoke: {e}")
+            if is_model_unavailable_error(e):
+                return {
+                    "statusCode": 403,
+                    "message": "This model is not available in this account. Please contact your account administrator regarding model access."
                 }
-            },
-        )
+            raise
 
         # Wait for video in S3
         s3 = boto3.client("s3", region_name=s3_region)

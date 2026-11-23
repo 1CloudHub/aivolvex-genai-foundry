@@ -790,7 +790,7 @@ class LogisticsCdkStack(Stack):
         db_instance = rds.DatabaseInstance(
             self, "MyPostgreSQLDB",
             engine=rds.DatabaseInstanceEngine.postgres(
-                version=rds.PostgresEngineVersion.VER_17_5
+                version=rds.PostgresEngineVersion.of("17.11", "17")
             ),
             instance_type=ec2.InstanceType.of(
                 ec2.InstanceClass.T3,
