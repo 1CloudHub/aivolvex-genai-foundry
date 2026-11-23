@@ -62,6 +62,11 @@ sudo npm install -g aws-cdk
 ```bash
 cdk bootstrap
 ```
+```
+If you face a `jsii` error such as `Cannot use the jsii package cache ... writable by group or others`, run this command and then retry the step:
+```bash
+chmod 755 /home/cloudshell-user
+```
 If you face a `No storage available` error then run this command
 ```bash
 rm -rf ~/.local/bin/qchat ~/.local/bin/q ~/.local/bin/qterm
